@@ -6,15 +6,12 @@ Ethereum utility CLIs for validator operations — building, signing, and broadc
 
 | Tool | Language | Description |
 |------|----------|-------------|
-| [eth-deposit-gen](go/cmd/eth-deposit-gen/README.md) | Go | Generate Launchpad-compatible `deposit_data` JSON for existing BLS validator keys |
-| [eth-deposit-tx](go/cmd/eth-deposit-tx/README.md) | Go | Build, sign, and broadcast Ethereum Beacon Chain deposit transactions |
+| `eth-deposit-gen` | Go | Generate Launchpad-compatible `deposit_data` JSON for existing BLS validator keys |
+| `eth-deposit-tx` | Go | Build, sign, and broadcast Ethereum Beacon Chain deposit transactions |
+
+See the [User Guide](go/docs/USER-GUIDE.md) for installation, command reference, security guidance, recipes, and troubleshooting covering both binaries.
 
 ## Quickstart
-
-See each tool's README for installation and usage:
-
-- **eth-deposit-gen** — [Quickstart](go/cmd/eth-deposit-gen/README.md#quickstart)
-- **eth-deposit-tx** — [Quickstart](go/cmd/eth-deposit-tx/README.md#quick-start)
 
 Typical end-to-end flow:
 
@@ -40,7 +37,7 @@ eth-utils/
 │   │   ├── eth-deposit-gen/   # BLS deposit data generator
 │   │   └── eth-deposit-tx/    # Deposit transaction builder + signer + broadcaster
 │   ├── internal/              # Shared Go packages (tx, signer, network)
-│   └── docs/deposit-tx/       # Architecture, PRD, security review, validation
+│   └── docs/USER-GUIDE.md     # Comprehensive user guide for both binaries
 ├── python/                    # Python utilities (in development)
 ├── rust/                      # Rust utilities (in development)
 ├── scripts/                   # Build and E2E scripts

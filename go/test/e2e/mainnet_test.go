@@ -22,8 +22,6 @@
 // - network_name == "mainnet" in the output JSON
 // These differ from hoodi ([0x10,0x00,0x09,0x10] / "10000910" / "hoodi"),
 // proving that the mainnet path through the deposit pipeline is exercised.
-//
-// See docs/validation/mainnet-golden.md for full provenance details.
 package e2e
 
 import (

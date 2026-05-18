@@ -8,8 +8,6 @@
 // → SSZ hash → JSON marshal. They do NOT prove byte-for-byte compatibility with
 // the staking-deposit-cli v2.7.0 Python tool (that tool was not available at the
 // time of Phase 1; re-validation against the real CLI is a Phase 2 follow-up).
-//
-// See docs/validation/hoodi-golden.md for full provenance details.
 package e2e
 
 import (

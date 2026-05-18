@@ -27,7 +27,7 @@ Generate Launchpad-compatible `deposit_data` JSON for existing BLS validator key
 - `TestNoSlogImportInSigningPackages` — source-level lint asserting that `log/slog` is never imported by signing-critical packages
 - `TestRunWithDeps_NoSecretInLogs` — asserts that no passphrase or secret key byte appears in any log line at any level
 - Fuzz targets for `merkleize`, `uint64Chunk`, and pubkey parsing
-- Internal audit (`docs/validation/audit-v1.md`) covering SSZ chunk tables, BLS boundary sizes, 10-step pipeline, zeroization paths, and output atomicity; signed off as of 2026-05-17
+- Internal audit covering SSZ chunk tables, BLS boundary sizes, 10-step pipeline, zeroization paths, and output atomicity; signed off as of 2026-05-17
 
 ### Distribution
 
@@ -63,8 +63,7 @@ shasum -a 256 -c checksums.txt  # verify before running
 
 ## Links
 
-- [Architecture overview](docs/architecture.md)
-- [v1.0 audit sign-off](docs/validation/audit-v1.md)
+- [User Guide](go/docs/USER-GUIDE.md)
 - [Changelog](CHANGELOG.md)
 
 ---

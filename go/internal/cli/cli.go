@@ -87,7 +87,6 @@ func NewApp(run func(context.Context, Config) error) *ucli.App {
 signing each deposit message with the BLS key loaded from an EIP-2335 keystore.
 Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.`
 
-	// UX examples from docs/prd.md §UX
 	app.CustomAppHelpTemplate = `NAME:
    {{.Name}} - {{.Usage}}
 

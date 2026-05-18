@@ -11,12 +11,11 @@
 // root replaces them as a leaf in the container tree — this is distinct from a
 // flat concatenation of all chunks at once.
 //
-// Note: docs/research/bls-ssz-libraries.md contains per-field chunk tables that
-// were written before the container-merkleize pattern was confirmed. The tables
-// describe the leaf chunks correctly but do not reflect that each multi-chunk
+// Note: earlier research notes (since removed) contained per-field chunk tables
+// written before the container-merkleize pattern was confirmed. Those tables
+// described leaf chunks correctly but did not reflect that each multi-chunk
 // field is first reduced to a subtree root before the top-level merkleize step.
-// This implementation is authoritative; the research doc will be corrected in a
-// follow-up.
+// This implementation is authoritative.
 package ssz
 
 import (

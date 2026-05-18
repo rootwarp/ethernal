@@ -39,13 +39,7 @@ against real hardware are not yet refined — that refinement is tracked for v0.
 
 #### Documentation
 
-- `go/cmd/eth-deposit-tx/USAGE.md` — full command reference for all four subcommands.
-- `go/cmd/eth-deposit-tx/SECURITY.md` — threat model, key-handling contract, Ledger vs. local guidance.
-- `go/cmd/eth-deposit-tx/INSTALL.md` — build instructions, CGO requirement, dependency notes.
-- `go/cmd/eth-deposit-tx/EXAMPLES.md` — end-to-end recipes covering solo Ledger, air-gapped operator batch, pipe-friendly, and CI/testing flows.
-- `go/cmd/eth-deposit-tx/README.md` — quick-start, subcommand overview, and links to all docs.
-- `go/docs/deposit-tx/security/phase-3-signer.md` — Phase 3 signer security audit.
-- `go/docs/deposit-tx/security/phase-4-final-checklist.md` — v0.1.0 sign-off security checklist.
+- `go/docs/USER-GUIDE.md` — single comprehensive user guide for both `eth-deposit-gen` and `eth-deposit-tx`: install, quickstart, full command reference, networks, exit codes, security, recipes, troubleshooting.
 - Repo-level `README.md` updated to list both tools and the end-to-end flow.
 
 #### Known Limitations
@@ -75,7 +69,7 @@ against real hardware are not yet refined — that refinement is tracked for v0.
 
 #### Security
 
-- Internal audit (`docs/validation/audit-v1.md`) signed off 2026-05-17: SSZ chunk tables, BLS boundary sizes (pubkey 48 bytes, signature 96 bytes, secret 32 bytes), 10-step deposit pipeline, zeroization on every error path, atomic output write (temp + fsync + rename).
+- Internal audit signed off 2026-05-17: SSZ chunk tables, BLS boundary sizes (pubkey 48 bytes, signature 96 bytes, secret 32 bytes), 10-step deposit pipeline, zeroization on every error path, atomic output write (temp + fsync + rename). (Audit document removed in subsequent docs cleanup; commit history preserves it.)
 - `GOFLAGS=-mod=readonly` enforced in all CI jobs (both `eth-deposit-gen.yml` and `release.yml`).
 - Atomic file write: `.tmp` file + `f.Sync()` + `os.Rename` — no partial file is ever visible to the OS.
 - BLS secret key zeroized immediately after signing via `key.Zeroize()`; passphrase bytes zeroized via `defer zeroizeBytes` with `runtime.KeepAlive` guard.
