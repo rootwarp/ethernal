@@ -2,6 +2,8 @@ module github.com/rootwarp/eth-utils/go
 
 go 1.26.0
 
+toolchain go1.26.4
+
 require (
 	github.com/ethereum/go-ethereum v1.14.12
 	github.com/herumi/bls-eth-go-binary v1.37.0
