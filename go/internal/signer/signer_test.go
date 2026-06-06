@@ -27,9 +27,9 @@ func (f *fakeSigner) Sign(_ context.Context, unsigned tx.UnsignedTx) (*signer.Si
 	}, nil
 }
 
-func (f *fakeSigner) Name() string                    { return f.name }
-func (f *fakeSigner) RequiresUserInteraction() bool   { return false }
-func (f *fakeSigner) Close() error                    { return nil }
+func (f *fakeSigner) Name() string                  { return f.name }
+func (f *fakeSigner) RequiresUserInteraction() bool { return false }
+func (f *fakeSigner) Close() error                  { return nil }
 
 func TestFakeSignerName(t *testing.T) {
 	s := &fakeSigner{name: "test-signer"}

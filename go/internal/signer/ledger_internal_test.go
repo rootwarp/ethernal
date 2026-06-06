@@ -767,4 +767,3 @@ func TestLedgerSigner_Sign_ConfirmationPrompt(t *testing.T) {
 		t.Errorf("confirmation prompt %q does not contain 'ledger' or 'confirm'", prompt)
 	}
 }
-

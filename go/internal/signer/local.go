@@ -136,8 +136,8 @@ func (s *LocalSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx) 
 	}, nil
 }
 
-func (s *LocalSigner) Name() string                    { return localSignerName }
-func (s *LocalSigner) RequiresUserInteraction() bool   { return false }
+func (s *LocalSigner) Name() string                  { return localSignerName }
+func (s *LocalSigner) RequiresUserInteraction() bool { return false }
 
 // Close zeroizes the in-memory key bytes. Subsequent Sign calls return
 // ErrSignerClosed. Idempotent.

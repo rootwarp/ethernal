@@ -3,7 +3,7 @@ package tx
 import "errors"
 
 var (
-	ErrZeroPubkey = errors.New("pubkey is all zeros")
+	ErrZeroPubkey          = errors.New("pubkey is all zeros")
 	ErrZeroSignature       = errors.New("signature is all zeros")
 	ErrZeroDepositRoot     = errors.New("deposit_data_root is all zeros")
 	ErrInvalidWCPrefix     = errors.New("withdrawal credentials prefix must be 0x00, 0x01, or 0x02")

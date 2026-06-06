@@ -37,10 +37,10 @@ const ledgerSignerName = "ledger"
 //
 // Construct with NewLedgerSigner. Close must be called to release the HID handle.
 type LedgerSigner struct {
-	wallet              ledgerWallet
-	account             accounts.Account
-	closed              atomic.Bool
-	confirmationPrompt  io.Writer
+	wallet             ledgerWallet
+	account            accounts.Account
+	closed             atomic.Bool
+	confirmationPrompt io.Writer
 }
 
 // NewLedgerSigner discovers the first connected Ledger, opens the Ethereum app,

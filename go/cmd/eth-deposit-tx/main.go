@@ -253,4 +253,3 @@ func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte) (*interna
 	}
 	return unsignedTx, nil
 }
-

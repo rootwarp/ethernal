@@ -33,8 +33,8 @@ func holeskyUnsignedTx() internaltx.UnsignedTx {
 		Value:                "0x1BC16D674EC80000", // 2 ETH in wei
 		Data:                 "0xabcd",
 		Gas:                  21000,
-		MaxFeePerGas:         "0x3B9ACA00",  // 1 gwei
-		MaxPriorityFeePerGas: "0x3B9ACA00",  // 1 gwei
+		MaxFeePerGas:         "0x3B9ACA00", // 1 gwei
+		MaxPriorityFeePerGas: "0x3B9ACA00", // 1 gwei
 		Nonce:                0,
 		Type:                 "0x2",
 	}

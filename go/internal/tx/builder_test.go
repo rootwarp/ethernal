@@ -358,8 +358,8 @@ func TestBuilder_BuildUnsigned_StaticMode_MissingGasLimit(t *testing.T) {
 
 // makeMockRPC returns a mockRPC pre-configured with typical happy-path values.
 func makeMockRPC(chainID uint64) *mockRPC {
-	tip := big.NewInt(2_000_000_000)       // 2 gwei
-	baseFee := big.NewInt(10_000_000_000)  // 10 gwei
+	tip := big.NewInt(2_000_000_000)      // 2 gwei
+	baseFee := big.NewInt(10_000_000_000) // 10 gwei
 	return &mockRPC{
 		SuggestGasTipCapFn: func(_ context.Context) (*big.Int, error) {
 			return new(big.Int).Set(tip), nil

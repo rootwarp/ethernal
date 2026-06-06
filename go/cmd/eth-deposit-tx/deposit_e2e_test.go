@@ -279,4 +279,3 @@ func TestE2E_SendMock_ReceiptPolling(t *testing.T) {
 		t.Errorf("output missing receipt status; got: %s", out.String())
 	}
 }
-

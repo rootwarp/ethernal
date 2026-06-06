@@ -26,8 +26,9 @@ coverage:
 	go tool cover -func=coverage.out | grep -E "(total|100\.0%)" | sort
 	@echo "\nFull HTML report: go tool cover -html=coverage.out"
 
-## lint: run go vet and staticcheck
+## lint: run gofmt gate + go vet + staticcheck
 lint:
+	@test -z "$$(gofmt -l .)" || (gofmt -l . && false)
 	go vet ./...
 	staticcheck ./...
 
