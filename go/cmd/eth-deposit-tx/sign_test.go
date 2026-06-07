@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	ucli "github.com/urfave/cli/v2"
 
 	"github.com/rootwarp/eth-utils/go/internal/signer"
+	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
 // generateTestPrivKey returns a fresh random secp256k1 private key as hex (no 0x prefix).
@@ -678,5 +680,22 @@ func TestLoadSignConfig_RejectKeyValueNoLeak(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "treated as compromised") {
 		t.Errorf("warning not visible on stderr: %s", buf.String())
+	}
+}
+
+// TestSignUnsignedTx_UnsupportedSigner_ErrInvalidInput (equivalent to
+// TestSignUnsignedTx_UnknownSigner_NoPanic_ErrInvalidInput per issue AC in
+// m1.5-cli-contract-exit-codes.md:115) covers the switch default in
+// signUnsignedTx (M1.5-5 / FR-P1-F5 / GO-051): unknown cfg.Signer yields
+// ErrInvalidInput (so ExitCodeFor gives 2) with no nil-interface panic on the
+// deferred Close or later uses. Happy paths for "local"/"ledger" are unchanged
+// (existing tests). Direct call to the extracted func per M1.5 patterns.
+func TestSignUnsignedTx_UnsupportedSigner_ErrInvalidInput(t *testing.T) {
+	_, err := signUnsignedTx(context.Background(), &SignConfig{Signer: "unsupported"}, nil, internaltx.UnsignedTx{})
+	if err == nil {
+		t.Fatal("expected error for unsupported signer, got nil")
+	}
+	if got := errors.Is(err, ErrInvalidInput); !got {
+		t.Fatalf("errors.Is(err, ErrInvalidInput) = %v, want true (err=%v)", got, err)
 	}
 }

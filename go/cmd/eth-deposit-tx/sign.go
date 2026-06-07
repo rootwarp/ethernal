@@ -197,6 +197,9 @@ func signAction(c *ucli.Context, cfg *SignConfig) error {
 // errWriter is used for interactive device prompts (may be nil for tests that suppress output).
 // It is extracted so runAction can call it without serializing to disk between build and sign.
 func signUnsignedTx(ctx context.Context, cfg *SignConfig, errWriter io.Writer, unsigned internaltx.UnsignedTx) (*signer.SignedTx, error) {
+	if cfg == nil {
+		return nil, ErrInvalidInput
+	}
 	// 1. Construct signer.
 	var s signer.Signer
 	var err error
@@ -211,6 +214,8 @@ func signUnsignedTx(ctx context.Context, cfg *SignConfig, errWriter io.Writer, u
 		if err != nil {
 			return nil, fmt.Errorf("ledger signer: %w", err)
 		}
+	default:
+		return nil, fmt.Errorf("signer: unsupported value %q: must be \"local\" or \"ledger\": %w", cfg.Signer, ErrInvalidInput)
 	}
 	defer func() { _ = s.Close() }()
 
