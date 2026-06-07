@@ -10,12 +10,6 @@
 // are split into 32-byte chunks, padded right with zeros, and their own subtree
 // root replaces them as a leaf in the container tree — this is distinct from a
 // flat concatenation of all chunks at once.
-//
-// Note: earlier research notes (since removed) contained per-field chunk tables
-// written before the container-merkleize pattern was confirmed. Those tables
-// described leaf chunks correctly but did not reflect that each multi-chunk
-// field is first reduced to a subtree root before the top-level merkleize step.
-// This implementation is authoritative.
 package ssz
 
 import (

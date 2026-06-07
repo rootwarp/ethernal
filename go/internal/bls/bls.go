@@ -3,7 +3,7 @@
 // initialisation of the herumi library and exposes the Signer and Verifier
 // interfaces used by the deposit pipeline.
 //
-// Zeroize on Signer (M1.1-6) wipes only the Go-side struct: s.sk = bls.SecretKey{}.
+// Zeroize on Signer (M1.1-6) wipes only the Go-side struct: s.sk = herumi.SecretKey{}.
 // Per ADR-006: no process exit leaves secret material in **Go-managed** memory
 // but herumi's C-side `mcl` scalar persists until process exit. Honest framing
 // per PRD §3.2 metric 12 and architecture §15 / §6.2 (see research/03 §4).
@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"sync"
 
-	bls "github.com/herumi/bls-eth-go-binary/bls"
+	herumi "github.com/herumi/bls-eth-go-binary/bls"
 )
 
 var (
@@ -33,11 +33,11 @@ var ErrSecretZero = errors.New("bls: secret key is zero")
 // returns the result of the first call.
 func Init() error {
 	initOnce.Do(func() {
-		if err := bls.Init(bls.BLS12_381); err != nil {
+		if err := herumi.Init(herumi.BLS12_381); err != nil {
 			initErr = fmt.Errorf("bls: herumi Init: %w", err)
 			return
 		}
-		if err := bls.SetETHmode(bls.EthModeDraft07); err != nil {
+		if err := herumi.SetETHmode(herumi.EthModeDraft07); err != nil {
 			initErr = fmt.Errorf("bls: herumi SetETHmode: %w", err)
 		}
 	})
@@ -61,7 +61,7 @@ type Verifier interface {
 
 // signer is the unexported concrete implementation of Signer.
 type signer struct {
-	sk bls.SecretKey
+	sk herumi.SecretKey
 }
 
 // NewSigner constructs a Signer from a 32-byte BLS secret.
@@ -97,7 +97,7 @@ func NewSigner(secret []byte) (Signer, error) {
 
 	s := &signer{}
 	if err := s.sk.Deserialize(localCopy); err != nil {
-		return nil, fmt.Errorf("bls: Deserialize failed")
+		return nil, fmt.Errorf("bls: deserialize failed")
 	}
 	if s.sk.IsZero() {
 		return nil, ErrSecretZero
@@ -105,7 +105,7 @@ func NewSigner(secret []byte) (Signer, error) {
 	return s, nil
 }
 
-// Sign hashes msg via the ETH BLS ciphersuite and returns the 96-byte
+// Sign hashes signingRoot via the ETH BLS ciphersuite and returns the 96-byte
 // compressed G2 signature.
 func (s *signer) Sign(signingRoot [32]byte) ([96]byte, error) {
 	if s.sk.IsZero() {
@@ -113,7 +113,7 @@ func (s *signer) Sign(signingRoot [32]byte) ([96]byte, error) {
 	}
 	herSig := s.sk.SignByte(signingRoot[:])
 	if herSig == nil {
-		return [96]byte{}, errors.New("bls: SignByte returned nil")
+		return [96]byte{}, errors.New("bls: signbyte returned nil")
 	}
 	raw := herSig.Serialize()
 	if len(raw) != 96 {
@@ -131,7 +131,7 @@ func (s *signer) PublicKey() ([48]byte, error) {
 	}
 	pk := s.sk.GetPublicKey()
 	if pk == nil {
-		return [48]byte{}, errors.New("bls: GetPublicKey returned nil")
+		return [48]byte{}, errors.New("bls: getpublickey returned nil")
 	}
 	raw := pk.Serialize()
 	if len(raw) != 48 {
@@ -142,11 +142,11 @@ func (s *signer) PublicKey() ([48]byte, error) {
 	return out, nil
 }
 
-// Zeroize wipes the Go-side bls.SecretKey struct (per M1.1-6 / architecture §15).
+// Zeroize wipes the Go-side herumi.SecretKey struct (per M1.1-6 / architecture §15).
 // The C-side mcl scalar inside herumi persists until process exit (ADR-006;
 // documented honestly per PRD §3.2 metric 12; see research/03 §4).
 func (s *signer) Zeroize() {
-	s.sk = bls.SecretKey{}
+	s.sk = herumi.SecretKey{}
 }
 
 // verifier is the unexported concrete implementation of Verifier.
@@ -165,12 +165,12 @@ func (v *verifier) Verify(pub [48]byte, signingRoot [32]byte, sig [96]byte) (boo
 	if err := Init(); err != nil {
 		return false, fmt.Errorf("bls: not initialized: %w", err)
 	}
-	var hPub bls.PublicKey
+	var hPub herumi.PublicKey
 	if err := hPub.Deserialize(pub[:]); err != nil {
 		return false, fmt.Errorf("bls: deserialize pubkey: %w", err)
 	}
 
-	var hSig bls.Sign
+	var hSig herumi.Sign
 	if err := hSig.Deserialize(sig[:]); err != nil {
 		return false, fmt.Errorf("bls: deserialize signature: %w", err)
 	}
@@ -195,7 +195,7 @@ func ValidatePubkeyBytes(pub [48]byte) error {
 	if err := Init(); err != nil {
 		return fmt.Errorf("bls: not initialized: %w", err)
 	}
-	var hPub bls.PublicKey
+	var hPub herumi.PublicKey
 	if err := hPub.Deserialize(pub[:]); err != nil {
 		return fmt.Errorf("%w: %w", ErrPubkeyInvalid, err)
 	}
