@@ -7,21 +7,15 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"regexp"
 
 	ucli "github.com/urfave/cli/v2"
 
-	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
 const defaultPrivKeyEnvVar = "ETH_DEPOSIT_TX_PRIVATE_KEY"
-
-// posixEnvVarName matches valid POSIX env var names: uppercase letters, digits,
-// underscore; must start with letter or underscore.
-var posixEnvVarName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // SignConfig holds parsed, validated inputs for the sign subcommand.
 type SignConfig struct {
@@ -55,8 +49,10 @@ func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
 	if signerType == "" {
 		return nil, ucli.Exit("--signer: required flag not set", 2)
 	}
-	if signerType != "local" && signerType != "ledger" {
-		return nil, ucli.Exit(fmt.Sprintf("--signer: unsupported value %q: must be \"local\" or \"ledger\"", signerType), 2)
+	// Common signer+env validation (post-req) extracted to shared helper (M2.2-4).
+	envVar, err := validateSignerEnv(c, signerType)
+	if err != nil {
+		return nil, err
 	}
 
 	// Pre-validate required --input (pre-existing; kept for symmetry with signer block + other Loads).
@@ -77,15 +73,6 @@ func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
 		}
 	}
 	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-
-	envVar := c.String("private-key-env")
-	if !posixEnvVarName.MatchString(envVar) {
-		_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: the rejected value should be treated as compromised\n")
-		return nil, ucli.Exit(fmt.Sprintf(
-			"--private-key-env: %q is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?",
-			cli.Redact(envVar, 4),
-		), 2)
-	}
 
 	allowNonDeposit := c.Bool("allow-non-deposit-recipient")
 

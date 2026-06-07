@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"math/big"
+	"regexp"
 	"strconv"
 
 	ucli "github.com/urfave/cli/v2"
 
+	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
@@ -172,4 +174,33 @@ func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 		IAcceptLocalSignerOnMainnet: acceptLocal,
 	}
 	return cfg, nil
+}
+
+// posixEnvVarName matches valid POSIX env var names: uppercase letters, digits,
+// underscore; must start with letter or underscore. (Moved here from sign.go
+// for M2.2-4 centralization of the signer/env-var validation shared by
+// Load*Config funcs.)
+var posixEnvVarName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+// validateSignerEnv performs the common post-required --signer value check
+// ("local" or "ledger") plus the full --private-key-env POSIX-name validation
+// with redaction and "treat as compromised" warning. Consumed by both
+// LoadSignConfig and LoadRunConfig (M2.2-4 / FR-P2-A15 signer/env-var dedup).
+// Preserves M0.8-2 redaction discipline exactly (cli.Redact + ErrWriter
+// warning + identical error text). Caller must have already enforced
+// non-empty --signer (to preserve per-caller required-error wording).
+func validateSignerEnv(c *ucli.Context, signerType string) (envVar string, err error) {
+	if signerType != "local" && signerType != "ledger" {
+		return "", ucli.Exit(fmt.Sprintf("--signer: unsupported value %q: must be \"local\" or \"ledger\"", signerType), 2)
+	}
+
+	envVar = c.String("private-key-env")
+	if !posixEnvVarName.MatchString(envVar) {
+		_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: the rejected value should be treated as compromised\n")
+		return "", ucli.Exit(fmt.Sprintf(
+			"--private-key-env: %q is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?",
+			cli.Redact(envVar, 4),
+		), 2)
+	}
+	return envVar, nil
 }

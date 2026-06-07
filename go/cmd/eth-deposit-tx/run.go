@@ -55,17 +55,10 @@ func LoadRunConfig(c *ucli.Context) (*RunConfig, error) {
 	if signerType == "" {
 		return nil, ucli.Exit("--signer: required flag not set; must be \"local\" or \"ledger\"", 2)
 	}
-	if signerType != "local" && signerType != "ledger" {
-		return nil, ucli.Exit(fmt.Sprintf("--signer: unsupported value %q: must be \"local\" or \"ledger\"", signerType), 2)
-	}
-
-	envVar := c.String("private-key-env")
-	if !posixEnvVarName.MatchString(envVar) {
-		_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: the rejected value should be treated as compromised\n")
-		return nil, ucli.Exit(fmt.Sprintf(
-			"--private-key-env: %q is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?",
-			cli.Redact(envVar, 4),
-		), 2)
+	// Common signer+env validation (post-req) extracted to shared helper (M2.2-4).
+	envVar, err := validateSignerEnv(c, signerType)
+	if err != nil {
+		return nil, err
 	}
 
 	keepUnsigned := c.Bool("keep-unsigned")
