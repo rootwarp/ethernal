@@ -1,4 +1,4 @@
-.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet help
+.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet assert-no-zero-wc help
 
 BIN     := bin/eth-deposit-gen
 BIN_TX  := bin/eth-deposit-tx
@@ -74,6 +74,14 @@ e2e-testnet:
 ## clean: remove build artifacts
 clean:
 	rm -rf bin/ coverage.out
+
+## assert-no-zero-wc: fail if any testdata/ *.json has 64-zero withdrawal_credentials (FR-P0-A1 regression guard; activated in M0.10 PR)
+# Activated in M0.10 PR (current fixtures still have zero WC; see M0.4-9 / M0.4-10)
+assert-no-zero-wc:
+	@if grep -rE '"withdrawal_credentials"\s*:\s*"0{64}"' testdata/; then \
+	  echo "found zero WC (expected until M0.10)"; \
+	  false; \
+	fi
 
 ## help: list available targets
 help:
