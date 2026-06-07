@@ -179,7 +179,7 @@ func (l *loader) Load(ctx context.Context, path string, pw PassphraseSource) (Ke
 
 	var envelope keystoreEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return Key{}, fmt.Errorf("%w: %s: %v", ErrKeystoreMalformed, path, err)
+		return Key{}, fmt.Errorf("%w: %s: %w", ErrKeystoreMalformed, path, err)
 	}
 
 	// Version check first — gives the most diagnostic error for malformed v3 keystores.

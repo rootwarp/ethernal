@@ -269,7 +269,7 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 		if err != nil {
 			// EOF or any read error → abort
 			_, _ = fmt.Fprintf(c.App.ErrWriter, "\nAborted.\n") // ignore: best-effort to ErrWriter
-			return fmt.Errorf("%w: %v", ErrUserAborted, err)
+			return fmt.Errorf("%w: %w", ErrUserAborted, err)
 		}
 		input = strings.TrimSpace(input)
 		if !strings.EqualFold(input, string(netParams.Name)) {

@@ -283,7 +283,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 	log.Debug("bls: initialising library")
 	if err := d.initBLS(); err != nil {
 		log.Debug("bls: init failed", "error", err)
-		return fmt.Errorf("%w: %v", errBLSInit, err)
+		return fmt.Errorf("%w: %w", errBLSInit, err)
 	}
 	log.Debug("bls: library ready")
 
@@ -291,7 +291,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 	log.Debug("network: looking up params", "network", cfg.Network)
 	params, err := network.Lookup(cfg.Network)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve network params %q: %w", cfg.Network, err)
 	}
 	log.Debug("network: params resolved",
 		"network", params.Name,
@@ -318,7 +318,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 	index, err := d.scanner(cfg.KeystoreDir, log)
 	if err != nil {
 		log.Debug("keystore: scan failed", "error", err)
-		return err
+		return fmt.Errorf("scan keystore dir: %w", err)
 	}
 	log.Debug("keystore: directory scanned", "count", len(index))
 

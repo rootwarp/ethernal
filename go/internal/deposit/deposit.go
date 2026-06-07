@@ -108,13 +108,13 @@ func (g *Generator) Generate(ctx context.Context, req Request) ([]Entry, error) 
 	for i, pk := range req.Pubkeys {
 		// Step 0: honour context cancellation before each unit of work.
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generate deposit: %w", err)
 		}
 
 		// Step 1: assert that the signer's pubkey matches the requested pubkey.
 		signerPub, err := g.signer.PublicKey()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generate deposit: %w", err)
 		}
 		if signerPub != pk {
 			return nil, fmt.Errorf("%w: pubkey[%d]=0x%x", ErrPubkeyMismatch, i, pk[:])
@@ -134,13 +134,13 @@ func (g *Generator) Generate(ctx context.Context, req Request) ([]Entry, error) 
 		// Step 5: sign.
 		sig, err := g.signer.Sign(signingRoot)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generate deposit: %w", err)
 		}
 
 		// Step 6: self-verify.
 		ok, err := g.verifier.Verify(pk, signingRoot, sig)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generate deposit: %w", err)
 		}
 		if !ok {
 			return nil, fmt.Errorf("%w: pubkey[%d]=0x%x", ErrSelfVerifyFailed, i, pk[:])

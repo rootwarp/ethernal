@@ -2074,3 +2074,73 @@ func TestRunWithDeps_EndToEnd_HappyPath_Derived01WC(t *testing.T) {
 		t.Errorf("withdrawal_credentials starts %q, want prefix %q (0x01 + 22 zeros + addr)", wc, wantStart)
 	}
 }
+
+// testErrSigner is a local test helper (minimal; placed here for smallest addition
+// to cover the deposit %w site in TestErrors_Is_PreservesCause without touching
+// deposit_test.go fakes or other files).
+type testErrSigner struct {
+	err error
+}
+
+func (s testErrSigner) PublicKey() ([48]byte, error)    { return [48]byte{}, s.err }
+func (s testErrSigner) Sign([32]byte) ([96]byte, error) { return [96]byte{}, s.err }
+func (s testErrSigner) Zeroize()                        {}
+
+// TestErrors_Is_PreservesCause (M1.5-8 AC) table/subtest style for >=3 wrapped
+// REVIEW sites (scandir bare ReadDir, deposit bare returns in Generate, main
+// bare scanner return in runWithDeps). Asserts errors.Is on cause (got/want).
+// Covers keystore.ScanDir, deposit.NewGenerator+Generate, and runWithDeps
+// scanner wrap. Uses patterns from existing Is tests (e.g. ScannerError,
+// Generate_PublicKeyError, TestRunWithDeps_*).
+func TestErrors_Is_PreservesCause(t *testing.T) {
+	t.Run("keystore_scandir", func(t *testing.T) {
+		_, err := keystore.ScanDir("/nonexistent/dir/for/m15-8-audit", nil)
+		if err == nil {
+			t.Fatal("ScanDir(bad) error = nil, want wrapped cause")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("ScanDir err = %v, want errors.Is(..., os.ErrNotExist) (cause preserved via %%w)", err)
+		}
+	})
+
+	t.Run("deposit_generate", func(t *testing.T) {
+		want := fmt.Errorf("synthetic pubkey err for is-preserves test")
+		s := testErrSigner{err: want}
+		v := &fakeVerifier{ok: true}
+		p, lookupErr := network.Lookup(network.Hoodi)
+		if lookupErr != nil {
+			t.Fatalf("network.Lookup(hoodi): %v", lookupErr)
+		}
+		gen := deposit.NewGenerator(s, v, p)
+		req := deposit.Request{
+			Network:               network.Hoodi,
+			Pubkeys:               [][48]byte{{0x01}},
+			WithdrawalCredentials: [32]byte{},
+			AmountGwei:            network.MinDepositAmountGwei,
+			DepositCLIVersion:     "2.7.0",
+		}
+		_, err := gen.Generate(context.Background(), req)
+		if err == nil {
+			t.Fatal("Generate error = nil, want wrapped cause")
+		}
+		if !errors.Is(err, want) {
+			t.Errorf("Generate err = %v, want errors.Is(..., cause) (preserved via %%w)", err)
+		}
+	})
+
+	t.Run("main_runWithDeps_scanner_wrap", func(t *testing.T) {
+		var summaryBuf bytes.Buffer
+		d := makeTestDeps(&summaryBuf, nil)
+		want := errors.New("synthetic scanner err for is-preserves test")
+		d.scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
+			return nil, want
+		}
+		err := runWithDeps(context.Background(), makeCfg(), d)
+		if err == nil {
+			t.Fatal("runWithDeps(scanner) error = nil, want wrapped")
+		}
+		if !errors.Is(err, want) {
+			t.Errorf("runWithDeps err = %v, want errors.Is(..., scanner cause) (preserved via %%w at main site)", err)
+		}
+	})
+}

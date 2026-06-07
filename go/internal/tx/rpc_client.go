@@ -61,6 +61,7 @@ type ethClient struct {
 func NewEthClient(ctx context.Context, rpcURL string) (*ethClient, error) {
 	c, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
+		// %v intentional: contains secret material (redacted RPC URL); do not use %w per architecture §8.2 rule 1.
 		return nil, fmt.Errorf("%w: %s: %v", ErrRPCDial, cli.Redact(rpcURL, 16), err)
 	}
 	return &ethClient{client: c}, nil
@@ -71,7 +72,7 @@ func NewEthClient(ctx context.Context, rpcURL string) (*ethClient, error) {
 func (c *ethClient) SendRawTransaction(ctx context.Context, rawRLP string) (string, error) {
 	rawBytes, err := decodeHex(rawRLP)
 	if err != nil {
-		return "", fmt.Errorf("%w: decode rawRLP: %v", ErrBroadcastFailed, err)
+		return "", fmt.Errorf("%w: decode rawRLP: %w", ErrBroadcastFailed, err)
 	}
 
 	// UnmarshalBinary handles the EIP-2718 typed envelope (0x02 || rlp(...))
@@ -79,11 +80,11 @@ func (c *ethClient) SendRawTransaction(ctx context.Context, rawRLP string) (stri
 	// used here — it would reject the leading type byte.
 	var tx types.Transaction
 	if err := tx.UnmarshalBinary(rawBytes); err != nil {
-		return "", fmt.Errorf("%w: decode EIP-2718: %v", ErrBroadcastFailed, err)
+		return "", fmt.Errorf("%w: decode EIP-2718: %w", ErrBroadcastFailed, err)
 	}
 
 	if err := c.client.SendTransaction(ctx, &tx); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrBroadcastFailed, err)
+		return "", fmt.Errorf("%w: %w", ErrBroadcastFailed, err)
 	}
 	return tx.Hash().Hex(), nil
 }
@@ -96,7 +97,7 @@ func (c *ethClient) TransactionReceipt(ctx context.Context, txHash string) (*Rec
 func (c *ethClient) BroadcasterChainID(ctx context.Context) (uint64, error) {
 	id, err := c.client.ChainID(ctx)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("fetch chain ID: %w", err)
 	}
 	return id.Uint64(), nil
 }

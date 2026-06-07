@@ -197,7 +197,7 @@ func ValidatePubkeyBytes(pub [48]byte) error {
 	}
 	var hPub bls.PublicKey
 	if err := hPub.Deserialize(pub[:]); err != nil {
-		return fmt.Errorf("%w: %v", ErrPubkeyInvalid, err)
+		return fmt.Errorf("%w: %w", ErrPubkeyInvalid, err)
 	}
 	if hPub.IsZero() {
 		return ErrPubkeyZero

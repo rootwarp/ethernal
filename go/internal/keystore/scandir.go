@@ -3,6 +3,7 @@ package keystore
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -52,7 +53,7 @@ type pubkeyEnvelope struct {
 func ScanDir(dir string, logger *slog.Logger) (DirectoryIndex, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err // bare return (pre-existing; GO-046 / %w audit deferred to M1.5 per narrow M1.4-2 scope + no %w changes decision)
+		return nil, fmt.Errorf("scan keystore dir %s: %w", dir, err)
 	}
 
 	index := make(DirectoryIndex, len(entries))
