@@ -31,4 +31,5 @@ var (
 	ErrBroadcastChainIDMismatch = errors.New("signed tx chain ID does not match RPC chain ID; refusing to broadcast")
 	ErrReceiptReverted          = errors.New("on-chain deposit reverted (status=0)")
 	ErrReceiptTimeout           = errors.New("receipt unavailable before deadline")
+	ErrNoBaseFee                = errors.New("RPC block has no baseFee (non-EIP-1559 block)")
 )

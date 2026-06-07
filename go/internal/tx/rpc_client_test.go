@@ -1,7 +1,10 @@
 package tx
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,5 +81,38 @@ func TestDecodeRawRLP_RLPDecodeBytes_Breaks(t *testing.T) {
 	var tx types.Transaction
 	if err := rlp.DecodeBytes(rawBytes, &tx); err == nil {
 		t.Error("expected rlp.DecodeBytes to fail on EIP-2718 type-2 envelope, but it succeeded — this path is unsafe")
+	}
+}
+
+// TestBlockBaseFee_NilBaseFee_Reject (mock): header with nil BaseFee → ErrNoBaseFee.
+func TestBlockBaseFee_NilBaseFee_Reject(t *testing.T) {
+	rpc := &mockRPC{
+		BlockBaseFeeFn: func(ctx context.Context) (*big.Int, error) {
+			return nil, ErrNoBaseFee
+		},
+	}
+	fee, err := rpc.BlockBaseFee(context.Background())
+	if fee != nil {
+		t.Errorf("expected nil fee, got %v", fee)
+	}
+	if !errors.Is(err, ErrNoBaseFee) {
+		t.Errorf("expected ErrNoBaseFee, got: %v", err)
+	}
+}
+
+// TestBlockBaseFee_HappyPath (mock): non-nil → returns value.
+func TestBlockBaseFee_HappyPath(t *testing.T) {
+	want := big.NewInt(123456789012345)
+	rpc := &mockRPC{
+		BlockBaseFeeFn: func(ctx context.Context) (*big.Int, error) {
+			return new(big.Int).Set(want), nil
+		},
+	}
+	got, err := rpc.BlockBaseFee(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil || got.Cmp(want) != 0 {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }

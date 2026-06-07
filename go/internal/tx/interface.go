@@ -13,7 +13,7 @@ import (
 type EthRPC interface {
 	// SuggestGasTipCap returns the priority fee suggestion (eth_maxPriorityFeePerGas).
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
-	// BlockBaseFee returns the current pending block's baseFeePerGas in wei.
+	// BlockBaseFee returns the baseFeePerGas of the latest block in wei.
 	BlockBaseFee(ctx context.Context) (*big.Int, error)
 	// PendingNonceAt returns the next nonce for the given address.
 	PendingNonceAt(ctx context.Context, account [20]byte) (uint64, error)

@@ -118,11 +118,14 @@ func (c *ethClient) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 }
 
 func (c *ethClient) BlockBaseFee(ctx context.Context) (*big.Int, error) {
-	block, err := c.client.BlockByNumber(ctx, nil)
+	header, err := c.client.HeaderByNumber(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return block.BaseFee(), nil
+	if header.BaseFee == nil {
+		return nil, ErrNoBaseFee
+	}
+	return header.BaseFee, nil
 }
 
 func (c *ethClient) PendingNonceAt(ctx context.Context, account [20]byte) (uint64, error) {
