@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -24,7 +25,8 @@ const localSignerName = "local"
 // (Phase 3.3+). The key MUST come from a secure source (environment variable;
 // see NewLocalSignerFromEnv). It MUST NEVER appear in argv or shell history.
 type LocalSigner struct {
-	key    []byte // 32-byte secp256k1 scalar; zeroized on Close
+	mu     sync.Mutex // guards key and closed together (M1.1-3 / GO-021 / arch §9.3); write path under mu establishes "key non-nil iff !closed" invariant (ctor: non-nil + !closed; Close: zero then nil key then closed)
+	key    []byte     // 32-byte secp256k1 scalar; zeroized on Close; niled under mu on transition to closed
 	closed atomic.Bool
 }
 
@@ -102,7 +104,17 @@ func (s *LocalSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx) 
 
 	ethSigner := types.LatestSignerForChainID(p.chainID)
 
-	priv, err := gethcrypto.ToECDSA(s.key)
+	// Guarded copy of key under mu; signing work (SignTx etc) off-lock per M1.1-3 / arch §9.3.
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return nil, ErrSignerClosed
+	}
+	keyCopy := make([]byte, 32)
+	copy(keyCopy, s.key)
+	s.mu.Unlock()
+
+	priv, err := gethcrypto.ToECDSA(keyCopy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse signing key: %w", ErrInvalidKey)
 	}
@@ -147,12 +159,17 @@ func (s *LocalSigner) RequiresUserInteraction() bool { return false }
 // Close zeroizes the in-memory key bytes. Subsequent Sign calls return
 // ErrSignerClosed. Idempotent.
 func (s *LocalSigner) Close() error {
-	if s.closed.Swap(true) {
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
 		return nil
 	}
 	for i := range s.key {
 		s.key[i] = 0
 	}
+	s.key = nil
+	s.closed.Store(true)
+	s.mu.Unlock()
 	return nil
 }
 

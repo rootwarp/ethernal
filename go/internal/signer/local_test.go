@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
@@ -460,5 +461,39 @@ func TestNewLocalSignerFromEnv_NoLeak(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLocalSigner_RaceSignClose exercises 100 concurrent Sign+Close pairs under the
+// mutex (per M1.1-3 AC). Must be run with -race -count=100; asserts no data race and
+// post-close returns ErrSignerClosed. Existing happy paths (e.g. TestLocalSigner_Sign_RoundTrip)
+// remain green; TestLocalSigner_Sign_AfterClose (note name variant) covers the named AC.
+func TestLocalSigner_RaceSignClose(t *testing.T) {
+	keyHex, _ := validHexKey(t)
+	s, err := signer.NewLocalSignerFromHex(keyHex)
+	if err != nil {
+		t.Fatalf("NewLocalSignerFromHex: %v", err)
+	}
+	// no defer Close here; we race it
+
+	const pairs = 100
+	var wg sync.WaitGroup
+	for i := 0; i < pairs; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = s.Sign(context.Background(), holeskyUnsignedTx())
+		}()
+		go func() {
+			defer wg.Done()
+			_ = s.Close()
+		}()
+	}
+	wg.Wait()
+
+	// final state: closed
+	_, err = s.Sign(context.Background(), holeskyUnsignedTx())
+	if !errors.Is(err, signer.ErrSignerClosed) {
+		t.Errorf("after race, want ErrSignerClosed, got %v", err)
 	}
 }
