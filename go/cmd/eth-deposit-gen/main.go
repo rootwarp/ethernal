@@ -287,6 +287,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 	log.Debug("keystore: directory scanned", "count", len(index))
 
 	pwSrc := pickPassphraseSource(cfg)
+	defer pwSrc.Zeroize() // M1.1-6: at runWithDeps end (covers all returns post-pw creation)
 	passphraseSource := "tty"
 	if cfg.PassphraseEnv != "" {
 		passphraseSource = "env:" + cfg.PassphraseEnv
@@ -371,6 +372,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 					AmountGwei:            network.MinDepositAmountGwei,
 					DepositCLIVersion:     CLIVersion,
 				})
+				signer.Zeroize() // M1.1-6: after deposit-data generation step (and on gen err path); Go-side only per ADR-006
 				if err != nil {
 					log.Debug("deposit: generation failed", "pubkey", pkHex, "error", err)
 					results <- workerResult{idx: i, err: err}

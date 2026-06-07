@@ -63,6 +63,9 @@ type PassphraseSource interface {
 	// immediately after decryption. Implementations must not retain the
 	// returned slice.
 	Read() ([]byte, error)
+	// Zeroize is called at end of run (M1.1-6) for secret hygiene on pw
+	// sources (env/term); impls are no-op or best-effort (Go-side only).
+	Zeroize()
 }
 
 // KeyLoader loads and decrypts an EIP-2335 v4 keystore file.

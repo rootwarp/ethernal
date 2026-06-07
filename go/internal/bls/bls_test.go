@@ -191,3 +191,36 @@ func TestSignatureLength(t *testing.T) {
 		t.Error("Sign() returned all-zero signature, expected non-zero")
 	}
 }
+
+// TestSigner_Zeroize_GoSideOnly verifies that after Zeroize, exported pubkey
+// derivation fails (Go-side state wiped). Per M1.1-6 AC (C-side limitation
+// is in package doc, not tested here).
+func TestSigner_Zeroize_GoSideOnly(t *testing.T) {
+	if err := bls.Init(); err != nil {
+		t.Fatalf("Init() = %v", err)
+	}
+
+	secret := bytes.Repeat([]byte{0x01}, 32)
+	signer, err := bls.NewSigner(secret)
+	if err != nil {
+		t.Fatalf("NewSigner() = %v", err)
+	}
+
+	// Before Zeroize, PublicKey succeeds and is non-zero.
+	pub, err := signer.PublicKey()
+	if err != nil {
+		t.Fatalf("PublicKey() before Zeroize = %v", err)
+	}
+	var zero [48]byte
+	if pub == zero {
+		t.Error("PublicKey() before Zeroize returned zero key")
+	}
+
+	signer.Zeroize()
+
+	// After Zeroize, pubkey derivation fails (Go-side wiped).
+	_, err = signer.PublicKey()
+	if err == nil {
+		t.Error("PublicKey() after Zeroize succeeded, want error (Go-side state wiped per M1.1-6)")
+	}
+}

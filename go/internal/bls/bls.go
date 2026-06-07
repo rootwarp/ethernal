@@ -2,6 +2,11 @@
 // github.com/herumi/bls-eth-go-binary. It owns the one-time process-global
 // initialisation of the herumi library and exposes the Signer and Verifier
 // interfaces used by the deposit pipeline.
+//
+// Zeroize on Signer (M1.1-6) wipes only the Go-side struct: s.sk = bls.SecretKey{}.
+// Per ADR-006: no process exit leaves secret material in **Go-managed** memory
+// but herumi's C-side `mcl` scalar persists until process exit. Honest framing
+// per PRD §3.2 metric 12 and architecture §15 / §6.2 (see research/03 §4).
 package bls
 
 import (
@@ -41,6 +46,7 @@ func Init() error {
 type Signer interface {
 	Sign(signingRoot [32]byte) (sig [96]byte, err error)
 	PublicKey() (pub [48]byte, err error)
+	Zeroize() // M1.1-6: Go-side only wipe per architecture §15 / §6.2
 }
 
 // Verifier can verify a BLS signature against a public key and signing root.
@@ -94,6 +100,9 @@ func NewSigner(secret []byte) (Signer, error) {
 // Sign hashes msg via the ETH BLS ciphersuite and returns the 96-byte
 // compressed G2 signature.
 func (s *signer) Sign(signingRoot [32]byte) ([96]byte, error) {
+	if s.sk.IsZero() {
+		return [96]byte{}, errors.New("bls: signer zeroized (Go-side only)")
+	}
 	herSig := s.sk.SignByte(signingRoot[:])
 	if herSig == nil {
 		return [96]byte{}, errors.New("bls: SignByte returned nil")
@@ -109,6 +118,9 @@ func (s *signer) Sign(signingRoot [32]byte) ([96]byte, error) {
 
 // PublicKey returns the compressed 48-byte G1 public key for this signer.
 func (s *signer) PublicKey() ([48]byte, error) {
+	if s.sk.IsZero() {
+		return [48]byte{}, errors.New("bls: signer zeroized (Go-side only)")
+	}
 	pk := s.sk.GetPublicKey()
 	if pk == nil {
 		return [48]byte{}, errors.New("bls: GetPublicKey returned nil")
@@ -120,6 +132,13 @@ func (s *signer) PublicKey() ([48]byte, error) {
 	var out [48]byte
 	copy(out[:], raw)
 	return out, nil
+}
+
+// Zeroize wipes the Go-side bls.SecretKey struct (per M1.1-6 / architecture §15).
+// The C-side mcl scalar inside herumi persists until process exit (ADR-006;
+// documented honestly per PRD §3.2 metric 12; see research/03 §4).
+func (s *signer) Zeroize() {
+	s.sk = bls.SecretKey{}
 }
 
 // verifier is the unexported concrete implementation of Verifier.

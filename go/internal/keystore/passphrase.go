@@ -28,6 +28,8 @@ func (e *envSource) Read() ([]byte, error) {
 	return []byte(val), nil
 }
 
+func (e *envSource) Zeroize() {}
+
 // termPromptSource is a PassphraseSource that reads from /dev/tty with echo
 // suppression, writing a prompt to a provided writer.
 type termPromptSource struct {
@@ -60,3 +62,5 @@ func (t *termPromptSource) Read() ([]byte, error) {
 
 	return pw, nil
 }
+
+func (t *termPromptSource) Zeroize() {}

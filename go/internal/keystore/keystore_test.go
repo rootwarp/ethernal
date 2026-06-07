@@ -39,6 +39,8 @@ func (b *bytesSource) Read() ([]byte, error) {
 	return out, nil
 }
 
+func (b *bytesSource) Zeroize() {}
+
 func newBytesSource(pw string) keystore.PassphraseSource {
 	return &bytesSource{data: []byte(pw)}
 }
@@ -51,6 +53,8 @@ type errSource struct {
 func (e *errSource) Read() ([]byte, error) {
 	return nil, e.err
 }
+
+func (e *errSource) Zeroize() {}
 
 // keystoreJSON is the outer EIP-2335 v4 envelope.
 type keystoreJSON struct {

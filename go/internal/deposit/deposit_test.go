@@ -32,6 +32,8 @@ func (f *fakeSigner) PublicKey() ([48]byte, error) {
 	return f.pubkey, nil
 }
 
+func (f *fakeSigner) Zeroize() {}
+
 // -----------------------------------------------------------------------------
 // Fake Verifier implementation
 // -----------------------------------------------------------------------------

@@ -61,6 +61,8 @@ func (f *fakeSigner) PublicKey() ([48]byte, error) {
 	return f.pubkey, f.err
 }
 
+func (f *fakeSigner) Zeroize() {}
+
 // fakeVerifier implements bls.Verifier for tests.
 type fakeVerifier struct {
 	ok  bool
