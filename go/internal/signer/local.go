@@ -66,6 +66,11 @@ func NewLocalSignerFromHex(hexKey string) (*LocalSigner, error) {
 // remember). Rejection paths also unset so an attacker cannot read post-hoc.
 //
 // Only the variable NAME appears in errors; the value is never included.
+// On bad values the returned error chains the specific diagnostic from
+// NewLocalSignerFromHex (e.g. "expected 32-byte..." or "not valid hex") via %w;
+// errors.Is(err, ErrInvalidKey) and redaction of the *name* (for long envVar)
+// continue to hold. Missing/empty uses bare-sentinel wrapper intentionally
+// (AC specifies the BadValue wrapped path).
 func NewLocalSignerFromEnv(envVar string) (*LocalSigner, error) {
 	value := os.Getenv(envVar)
 	nameForErr := envVar
@@ -74,12 +79,14 @@ func NewLocalSignerFromEnv(envVar string) (*LocalSigner, error) {
 	}
 	if value == "" {
 		_ = os.Unsetenv(envVar)
+		// Missing/empty intentionally bare ErrInvalidKey (AC names BadValue_WrappedSentinel for the specific case; see godoc).
 		return nil, fmt.Errorf("environment variable %q is not set or empty: %w", nameForErr, ErrInvalidKey)
 	}
 	s, err := NewLocalSignerFromHex(value)
 	if err != nil {
 		_ = os.Unsetenv(envVar)
-		return nil, fmt.Errorf("environment variable %q: %w", nameForErr, ErrInvalidKey)
+		// Bad value: wrap the specific FromHex diagnostic (M1.5-3/FR-P1-F3/GO-022) so "carries" for Is/As; still redacts value (M0.8-2), Is(ErrInvalidKey) holds.
+		return nil, fmt.Errorf("environment variable %q: %w", nameForErr, err)
 	}
 	_ = os.Unsetenv(envVar)
 	return s, nil

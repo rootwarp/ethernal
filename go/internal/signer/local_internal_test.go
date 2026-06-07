@@ -104,7 +104,7 @@ func TestLocalSigner_Sign_Closed(t *testing.T) {
 	}
 }
 
-func TestNewLocalSignerFromEnv_BadKeyValue(t *testing.T) {
+func TestNewLocalSignerFromEnv_BadValue_WrappedSentinel(t *testing.T) {
 	t.Setenv("TEST_ENV_BADKEY", "0xdeadbeefnotvalidhex")
 	_, err := NewLocalSignerFromEnv("TEST_ENV_BADKEY")
 	if !errors.Is(err, ErrInvalidKey) {
@@ -113,6 +113,10 @@ func TestNewLocalSignerFromEnv_BadKeyValue(t *testing.T) {
 	// Error must mention the var name but not the key value.
 	if !strings.Contains(err.Error(), "TEST_ENV_BADKEY") {
 		t.Errorf("error should mention env var name: %v", err)
+	}
+	// Explicitly assert "carries specific" FromHex diagnostic via the %w (M1.5-3 AC depth).
+	if !strings.Contains(err.Error(), "not valid hex") && !strings.Contains(err.Error(), "expected 32-byte") {
+		t.Errorf("specific FromHex cause not surfaced via wrap: %v", err)
 	}
 }
 
