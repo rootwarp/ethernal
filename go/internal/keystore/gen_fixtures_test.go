@@ -4,7 +4,7 @@
 //
 // To regenerate:
 //
-//	go test -run TestGenerateFixtures ./internal/keystore/
+//	GENERATE_FIXTURES=1 go test -run TestGenerateFixtures ./internal/keystore/
 package keystore_test
 
 import (
