@@ -119,65 +119,21 @@ Exit codes:
   2  User / configuration error (missing file, invalid JSON, bad --network, out-of-range --index)
   1  Unexpected internal error`,
 		UsageText: `eth-deposit-tx build --input-file FILE --network NET [options]`,
-		Flags: []ucli.Flag{
-			&ucli.StringFlag{
-				Name:    "input-file",
-				Aliases: []string{"input", "i"},
-				Usage:   "Path to deposit_data-*.json file (or '-' for stdin); --input is accepted as a shorter alias",
-				EnvVars: []string{"ETH_DEPOSIT_TX_INPUT_FILE"},
-			},
-			&ucli.StringFlag{
-				Name:    "network",
-				Aliases: []string{"n"},
-				Usage:   "Target network (mainnet, hoodi, sepolia, holesky)",
-				Value:   "hoodi",
-				EnvVars: []string{"ETH_DEPOSIT_TX_NETWORK"},
-			},
-			&ucli.StringFlag{
-				Name:  "confirm-network",
-				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
-			},
-			&ucli.BoolFlag{
-				Name:  "i-accept-local-signer-on-mainnet",
-				Usage: "Required when --signer local and --network mainnet: acknowledges risk of using local (hot, env-var) private key for mainnet deposit (irreversible 32 ETH lock; Ledger recommended)",
-			},
-			&ucli.StringFlag{
-				Name:    "output",
-				Usage:   "Output file for the unsigned transaction (default: stdout)",
-				EnvVars: []string{"ETH_DEPOSIT_TX_OUTPUT"},
-			},
-			&ucli.IntFlag{
-				Name:    "index",
-				Usage:   "Index of the deposit entry to use when the JSON contains multiple validators (default: 0)",
-				Value:   0,
-				EnvVars: []string{"ETH_DEPOSIT_TX_INDEX"},
-			},
-			&ucli.StringFlag{
-				Name:    "rpc-url",
-				Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (rejected for build; use `run` for hybrid or supply --nonce + fees explicitly)",
-				EnvVars: []string{"ETH_DEPOSIT_TX_RPC_URL"},
-			},
-			&ucli.StringFlag{
-				Name:    "gas-limit",
-				Usage:   fmt.Sprintf("Gas limit for the deposit transaction (default: %d)", defaultGasLimit),
-				EnvVars: []string{"ETH_DEPOSIT_TX_GAS_LIMIT"},
-			},
-			&ucli.StringFlag{
-				Name:    "max-fee-per-gas",
-				Usage:   "EIP-1559 maximum fee per gas in wei (decimal integer, e.g. 20000000000 for 20 Gwei)",
-				EnvVars: []string{"ETH_DEPOSIT_TX_MAX_FEE_PER_GAS"},
-			},
-			&ucli.StringFlag{
-				Name:    "max-priority-fee-per-gas",
-				Usage:   "EIP-1559 maximum priority fee per gas in wei (decimal integer, e.g. 1000000000 for 1 Gwei)",
-				EnvVars: []string{"ETH_DEPOSIT_TX_MAX_PRIORITY_FEE_PER_GAS"},
-			},
-			&ucli.StringFlag{
-				Name:    "nonce",
-				Usage:   "Override the sender account nonce (non-negative integer; omit to fetch from RPC or set later)",
-				EnvVars: []string{"ETH_DEPOSIT_TX_NONCE"},
-			},
-		},
+		Flags: func() []ucli.Flag {
+			// One source of truth: buildFlags (M2.2-3 / FR-P2-A15). Patch only the two
+			// command-specific Usages so `build --help` bytes are identical to before.
+			fs := buildFlags()
+			for _, f := range fs {
+				if sf, ok := f.(*ucli.StringFlag); ok {
+					if sf.Name == "output" {
+						sf.Usage = "Output file for the unsigned transaction (default: stdout)"
+					} else if sf.Name == "rpc-url" {
+						sf.Usage = "JSON-RPC endpoint URL for gas/nonce estimation (rejected for build; use `run` for hybrid or supply --nonce + fees explicitly)"
+					}
+				}
+			}
+			return fs
+		}(),
 		Action: func(c *ucli.Context) error {
 			cfg, err := LoadBuildConfig(c)
 			if err != nil {

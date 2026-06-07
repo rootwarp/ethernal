@@ -73,10 +73,9 @@ type Config struct {
 func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 	// Pre-validate required flags early (before any other processing) so that
 	// urfave/cli's internal errRequiredFlags is never emitted for our required
-	// schemas. The flag names derive from the definitions in buildFlags / the
-	// buildCommand flag table (M1.5-1 / FR-P1-F1). (String literal dup of Name: is
-	// per "smallest change" + "Required-flag lists derive from ... do NOT duplicate"
-	// rule; no list/const introduced.)
+	// schemas. The flag names derive from the definitions in buildFlags (single
+	// source of truth since M2.2-3 / FR-P2-A15; M1.5-1 / FR-P1-F1). (No list/const
+	// introduced; names are the literal strings in the canonical flag defs.)
 	if c.String("input-file") == "" {
 		return nil, ucli.Exit("--input-file: required flag not set", 2)
 	}
