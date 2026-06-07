@@ -7,13 +7,17 @@ toolchain go1.26.4
 require (
 	github.com/ethereum/go-ethereum v1.14.12
 	github.com/herumi/bls-eth-go-binary v1.37.0
+	github.com/kisielk/errcheck v1.20.0
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.4.1
 	golang.org/x/crypto v0.22.0
 	golang.org/x/term v0.43.0
+	golang.org/x/vuln v1.3.0
+	honnef.co/go/tools v0.7.0
 )
 
 require (
+	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
@@ -39,9 +43,13 @@ require (
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa // indirect
-	golang.org/x/sync v0.7.0 // indirect
+	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
+	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260421165255-392afab6f40e // indirect
 	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
