@@ -88,11 +88,7 @@ type Key struct {
 
 // Zeroize overwrites every byte of Secret with 0x00.
 // This must be called explicitly; Go's GC does not zero memory.
-func (k *Key) Zeroize() {
-	for i := range k.Secret {
-		k.Secret[i] = 0x00
-	}
-}
+func (k *Key) Zeroize() { zeroizeBytes(k.Secret) }
 
 // PassphraseSource abstracts where the passphrase comes from so the loader
 // can be tested without a TTY or a live environment variable.
@@ -252,7 +248,8 @@ func (l *loader) Load(ctx context.Context, path string, pw PassphraseSource) (Ke
 }
 
 // zeroizeBytes overwrites every byte of b with 0x00.
-// runtime.KeepAlive prevents the compiler from treating the writes as dead stores.
+// runtime.KeepAlive(b) keeps b reachable (extending its liveness) so the
+// preceding zeroing stores are not optimized away as dead stores.
 func zeroizeBytes(b []byte) {
 	for i := range b {
 		b[i] = 0x00
