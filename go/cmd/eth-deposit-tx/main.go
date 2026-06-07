@@ -1,4 +1,3 @@
-// Package main is the thin entry point for eth-deposit-tx (orchestration moved per M2.3-5 thin-main convention; see run.go etc).
 package main
 
 import (

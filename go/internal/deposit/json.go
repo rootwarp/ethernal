@@ -1,6 +1,3 @@
-// Package deposit — this file adds Launchpad-compatible JSON unmarshalling and
-// semantic validation to Entry. It is the read-side companion to the write-side
-// serialisation in internal/output.
 package deposit
 
 import (
