@@ -220,7 +220,7 @@ OPTIONS:
 		// checksum claim"). On any failure: clear operator guidance + exit 2; no
 		// deposit is produced. The validated string is bound to Config and will be
 		// used (M0.4-2) to derive 0x01 || 0x00*11 || addr[20]. This is prerequisite
-		// to safely deleting the dangerous defaultWithdrawalCreds (M0.4-3).
+		// to safely deleting the dangerous default placeholder logic (M0.4-3).
 		withdrawalAddr := c.String("withdrawal-address")
 		if len(withdrawalAddr) != 42 {
 			return ucli.Exit(fmt.Sprintf("--withdrawal-address: has invalid length %d (want 42)", len(withdrawalAddr)), 2)
@@ -415,4 +415,15 @@ func printBanner(w io.Writer, cfg Config) {
 		first[:],
 		last[:],
 		len(cfg.Pubkeys)) // ignore: best-effort banner write to ErrWriter
+}
+
+// requireNoArgs returns ucli.Exit(..., 2) if c.NArg() > 0, naming the offending
+// positional arg(s) (so the operator sees what was misread, e.g. as a flag value).
+// Returns nil for zero positional args. Unexported helper (per CONVENTIONS) for
+// call from both CLIs' Actions (architecture §6.10 / research/10 §2).
+func requireNoArgs(c *ucli.Context) error {
+	if c.NArg() > 0 {
+		return ucli.Exit(fmt.Sprintf("unexpected positional argument: %s", c.Args().First()), 2)
+	}
+	return nil
 }
