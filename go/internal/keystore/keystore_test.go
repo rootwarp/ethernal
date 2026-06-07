@@ -17,7 +17,7 @@ import (
 
 const (
 	testPassphrase = "testpassword"
-	testPubkeyHex  = "b9e7be8b1eea5ca44d9b1ef6e60de0b7e213d7e6b3f29e4a0e6a93b56678e58c2d1b4e2d1b4e2d1b4e2d1b4e2d1b4e2d1b4e2d1b4e2d1b4e2d1b4e2d1b4e2d1"
+	testPubkeyHex  = "8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9"
 )
 
 // testSecret is 32 bytes used as the BLS secret in fixture keystores.
@@ -395,7 +395,6 @@ func TestLoad_PubkeyNormalized(t *testing.T) {
 		t.Fatalf("encrypt: %v", err)
 	}
 
-	// A realistic pubkey: 0x-prefixed and uppercase, as some CLI tools emit.
 	uppercasePubkey := "0x" + strings.ToUpper(testPubkeyHex)
 
 	ks := keystoreJSON{
