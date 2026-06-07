@@ -4,7 +4,6 @@ import (
 	"context"
 	"math/big"
 
-	"github.com/rootwarp/eth-utils/go/internal/deposit"
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
@@ -31,11 +30,6 @@ type CallMsg struct {
 	To    [20]byte
 	Value *big.Int
 	Data  []byte
-}
-
-// TxBuilder constructs unsigned EIP-1559 deposit transactions.
-type TxBuilder interface {
-	BuildUnsigned(ctx context.Context, entry deposit.Entry, cfg BuildConfig) (*UnsignedTx, error)
 }
 
 // BuildConfig carries the parameters needed to build an unsigned transaction.

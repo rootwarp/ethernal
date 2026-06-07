@@ -40,54 +40,6 @@ func TestUint64Chunk(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// padRight tests
-// -----------------------------------------------------------------------------
-
-func TestPadRight(t *testing.T) {
-	t.Run("empty_to_32", func(t *testing.T) {
-		got := padRight([]byte{}, 32)
-		if len(got) != 32 {
-			t.Errorf("len = %d, want 32", len(got))
-		}
-		for i, b := range got {
-			if b != 0 {
-				t.Errorf("byte[%d] = %d, want 0", i, b)
-			}
-		}
-	})
-
-	t.Run("input_shorter_than_size", func(t *testing.T) {
-		input := []byte{0x01, 0x02, 0x03, 0x04}
-		got := padRight(input, 8)
-		want := []byte{0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00}
-		if len(got) != len(want) {
-			t.Fatalf("len = %d, want %d", len(got), len(want))
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Errorf("byte[%d] = %d, want %d", i, got[i], want[i])
-			}
-		}
-	})
-
-	t.Run("input_equal_to_size", func(t *testing.T) {
-		input := []byte{0xAA, 0xBB}
-		got := padRight(input, 2)
-		if len(got) != 2 || got[0] != 0xAA || got[1] != 0xBB {
-			t.Errorf("padRight(%x, 2) = %x, want same", input, got)
-		}
-	})
-
-	t.Run("original_not_mutated", func(t *testing.T) {
-		input := []byte{0x01, 0x02}
-		_ = padRight(input, 4)
-		if len(input) != 2 {
-			t.Errorf("input was mutated, len = %d", len(input))
-		}
-	})
-}
-
-// -----------------------------------------------------------------------------
 // merkleize tests
 // -----------------------------------------------------------------------------
 
@@ -233,10 +185,9 @@ func TestForkDataHashTreeRoot(t *testing.T) {
 				}
 			} else {
 				// Compute expected value directly for the non-zero case.
-				// chunk0 = current_version padded to 32 bytes
-				chunk0 := padRight(tc.fd.CurrentVersion[:], 32)
+				// chunk0 = current_version padded to 32 bytes (matches prod HashTreeRoot).
 				var c0 [32]byte
-				copy(c0[:], chunk0)
+				copy(c0[:], tc.fd.CurrentVersion[:])
 				// chunk1 = genesis_validators_root as-is
 				c1 := tc.fd.GenesisValidatorsRoot
 				want := sha256Pair(c0, c1)

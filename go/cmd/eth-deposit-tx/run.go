@@ -442,6 +442,3 @@ func rawPathFor(signedPath string) string {
 	ext := filepath.Ext(signedPath)
 	return strings.TrimSuffix(signedPath, ext) + ".raw"
 }
-
-// Compile-time assertion that signer.SignedTx has the RawRLP field we reference.
-var _ = (*signer.SignedTx)(nil)

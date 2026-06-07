@@ -15,12 +15,6 @@ import (
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
-// TestBuilderSatisfiesTxBuilder is an explicit runtime assertion complementing
-// the compile-time var _ check in builder.go.
-func TestBuilderSatisfiesTxBuilder(t *testing.T) {
-	var _ TxBuilder = NewBuilder()
-}
-
 func TestBuilder_BuildUnsigned_Success(t *testing.T) {
 	ctx := context.Background()
 	entry := makeValidEntry()

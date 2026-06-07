@@ -49,26 +49,6 @@ func decodeFixedHex(field, s string, wantLen int) ([]byte, error) {
 	return b, nil
 }
 
-// EntryFromJSON parses a single Launchpad-format JSON object (not array) into
-// an Entry. The JSON may contain additional unknown fields which are silently
-// ignored.
-//
-// Accepted hex strings may be "0x"-prefixed or unprefixed (lowercase or mixed
-// case). Length invariants are enforced:
-//   - pubkey:                 48 bytes
-//   - withdrawal_credentials: 32 bytes
-//   - signature:              96 bytes
-//   - deposit_message_root:   32 bytes
-//   - deposit_data_root:      32 bytes
-//   - fork_version:            4 bytes
-func EntryFromJSON(data []byte) (Entry, error) {
-	var raw jsonEntry
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return Entry{}, fmt.Errorf("deposit: unmarshal entry: %w", err)
-	}
-	return entryFromRaw(raw)
-}
-
 // entryFromRaw converts a decoded jsonEntry to an Entry, enforcing all length
 // invariants.
 func entryFromRaw(raw jsonEntry) (Entry, error) {

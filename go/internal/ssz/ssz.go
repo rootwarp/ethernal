@@ -188,19 +188,6 @@ func uint64Chunk(v uint64) [32]byte {
 	return chunk
 }
 
-// padRight right-pads b with zero bytes to the given size and returns a new
-// slice. The input slice is never modified.
-func padRight(b []byte, size int) []byte {
-	if len(b) >= size {
-		out := make([]byte, len(b))
-		copy(out, b)
-		return out
-	}
-	out := make([]byte, size)
-	copy(out, b)
-	return out
-}
-
 // sha256Pair computes SHA-256(a || b) and returns the result as a [32]byte.
 func sha256Pair(a, b [32]byte) [32]byte {
 	h := sha256.New()

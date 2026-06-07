@@ -21,13 +21,10 @@ var ErrInvalidAmount = errors.New("deposit amount must be exactly MinDepositAmou
 // value32ETH is 32 ETH expressed in wei (32 * 10^18 = 0x1bc16d674ec800000).
 var value32ETH = new(big.Int).Mul(big.NewInt(32), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
 
-// Builder is the concrete implementation of TxBuilder.
+// Builder constructs unsigned EIP-1559 deposit transactions (concrete, no interface indirection).
 type Builder struct {
 	logger *slog.Logger
 }
-
-// compile-time assertion that *Builder satisfies TxBuilder.
-var _ TxBuilder = (*Builder)(nil)
 
 // NewBuilder creates a new Builder.
 func NewBuilder() *Builder {
