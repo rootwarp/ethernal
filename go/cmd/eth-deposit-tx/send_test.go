@@ -16,13 +16,11 @@ import (
 
 	ucli "github.com/urfave/cli/v2"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
-	"math/big"
 )
 
 // mockBroadcaster is a test double for EthBroadcaster using the function-field pattern.
@@ -1043,25 +1041,9 @@ func TestSend_MainnetWithYesButNoConfirm_Reject(t *testing.T) {
 	ucli.OsExiter = func(int) {}
 	t.Cleanup(func() { ucli.OsExiter = orig })
 
-	// Override validate to return mainnet-shaped decoded RLP (chainID=1) so RPC
-	// guard can pass when mock also returns 1; the input fixture's RLP is not used.
-	origValidate := validateSignedAgainstRLP
-	validateSignedAgainstRLP = func(*signer.SignedTx, network.Params) (*types.Transaction, error) {
-		to := common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa")
-		val := new(big.Int)
-		val.SetString("32000000000000000000", 10)
-		return types.NewTx(&types.DynamicFeeTx{
-			ChainID:   big.NewInt(1),
-			Nonce:     0,
-			GasTipCap: big.NewInt(1_000_000_000),
-			GasFeeCap: big.NewInt(20_000_000_000),
-			Gas:       250000,
-			To:        &to,
-			Value:     val,
-			Data:      nil,
-		}), nil
-	}
-	t.Cleanup(func() { validateSignedAgainstRLP = origValidate })
+	// Use helper (defined in mainnet_gate_test.go) for mainnet-shaped decoded RLP (chainID=1).
+	// De-duped from prior inline (hygiene per M1.6-4 low finding on dupe overrides in existing tests).
+	overrideValidateForShapedChain(t, 1)
 
 	broadcastCalled := false
 	withMockBroadcaster(t, &mockBroadcaster{
@@ -1100,23 +1082,9 @@ func TestSend_ConfirmNetworkMismatchRPC_Reject(t *testing.T) {
 	ucli.OsExiter = func(int) {}
 	t.Cleanup(func() { ucli.OsExiter = orig })
 
-	origValidate := validateSignedAgainstRLP
-	validateSignedAgainstRLP = func(*signer.SignedTx, network.Params) (*types.Transaction, error) {
-		to := common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa")
-		val := new(big.Int)
-		val.SetString("32000000000000000000", 10)
-		return types.NewTx(&types.DynamicFeeTx{
-			ChainID:   big.NewInt(1),
-			Nonce:     0,
-			GasTipCap: big.NewInt(1_000_000_000),
-			GasFeeCap: big.NewInt(20_000_000_000),
-			Gas:       250000,
-			To:        &to,
-			Value:     val,
-			Data:      nil,
-		}), nil
-	}
-	t.Cleanup(func() { validateSignedAgainstRLP = origValidate })
+	// Use helper (defined in mainnet_gate_test.go) for mainnet-shaped decoded RLP (chainID=1).
+	// De-duped from prior inline (hygiene per M1.6-4 low finding on dupe overrides in existing tests).
+	overrideValidateForShapedChain(t, 1)
 
 	broadcastCalled := false
 	withMockBroadcaster(t, &mockBroadcaster{
@@ -1155,23 +1123,9 @@ func TestSend_ConfirmNetworkMatch_Allow(t *testing.T) {
 	ucli.OsExiter = func(int) {}
 	t.Cleanup(func() { ucli.OsExiter = orig })
 
-	origValidate := validateSignedAgainstRLP
-	validateSignedAgainstRLP = func(*signer.SignedTx, network.Params) (*types.Transaction, error) {
-		to := common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa")
-		val := new(big.Int)
-		val.SetString("32000000000000000000", 10)
-		return types.NewTx(&types.DynamicFeeTx{
-			ChainID:   big.NewInt(1),
-			Nonce:     0,
-			GasTipCap: big.NewInt(1_000_000_000),
-			GasFeeCap: big.NewInt(20_000_000_000),
-			Gas:       250000,
-			To:        &to,
-			Value:     val,
-			Data:      nil,
-		}), nil
-	}
-	t.Cleanup(func() { validateSignedAgainstRLP = origValidate })
+	// Use helper (defined in mainnet_gate_test.go) for mainnet-shaped decoded RLP (chainID=1).
+	// De-duped from prior inline (hygiene per M1.6-4 low finding on dupe overrides in existing tests).
+	overrideValidateForShapedChain(t, 1)
 
 	broadcastCalled := false
 	withMockBroadcaster(t, &mockBroadcaster{
