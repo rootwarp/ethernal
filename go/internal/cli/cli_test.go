@@ -1339,7 +1339,7 @@ func TestConfirmReader_StdinPiped_OpensDevTTY(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pr.Close(); pw.Close() })
+	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() }) // ignore: best-effort close of pipe ends for test cleanup (matches ConfirmReader/errcheck hygiene pattern)
 
 	// pr is a pipe fd → not a terminal.
 	got, cleanup, err := icli.ConfirmReader(pr)
@@ -1364,7 +1364,7 @@ func TestConfirmReader_NoDevTTY_ErrNoTTY(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pr.Close(); pw.Close() })
+	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() }) // ignore: best-effort close of pipe ends for test cleanup (matches ConfirmReader/errcheck hygiene pattern)
 
 	_, _, err = icli.ConfirmReader(pr)
 	if err == nil {

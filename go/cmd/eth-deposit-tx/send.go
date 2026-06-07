@@ -323,8 +323,6 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 			}
 		} else {
 			confirmR = c.App.Reader
-			cleanup = func() {}
-			cErr = nil
 		}
 		_, _ = fmt.Fprintf(c.App.ErrWriter, "> Type the network name to confirm: ") // ignore: best-effort to ErrWriter
 		reader := bufio.NewReader(confirmR)
@@ -348,14 +346,14 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 		return err
 	}
 
-	// 8. Print result.
+	// 10. Print result.
 	_, _ = fmt.Fprintf(c.App.Writer, "Tx hash: %s\n", txHash) // ignore: best-effort to Writer
 	if netParams.ExplorerURL != "" {
 		_, _ = fmt.Fprintf(c.App.Writer, "Explorer: %s/tx/%s\n", netParams.ExplorerURL, txHash) // ignore: best-effort to Writer
 	}
 	slog.Info("broadcast succeeded", "hash", txHash, "network", netParams.Name)
 
-	// 9. Optionally wait for receipt.
+	// 11. Optionally wait for receipt.
 	if cfg.WaitForReceipt {
 		rec, err := pollReceipt(c.Context, broadcaster, txHash, cfg.ReceiptTimeout)
 		if err != nil {

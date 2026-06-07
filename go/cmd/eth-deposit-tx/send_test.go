@@ -272,7 +272,7 @@ func TestSend_InputDashWithYes_NoTTY_Reject(t *testing.T) {
 	// avoid that; the unit tests for ConfirmReader cover the paths.
 	ttyCheck, checkErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if checkErr == nil {
-		ttyCheck.Close()
+		_ = ttyCheck.Close()
 		t.Skip("controlling TTY present; cannot exercise NoTTY reject for --input - confirm without blocking read")
 	}
 

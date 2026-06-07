@@ -425,9 +425,8 @@ func TestWorkerPool_SIGINTPropagatesWithin1s(t *testing.T) {
 	defer stop()
 
 	done := make(chan error, 1)
-	go func() {
-		_ = syscall.Kill(os.Getpid(), syscall.SIGINT) // immediate; covers "during queued" by preventing Loads for all (incl. would-be remaining/prompted)
-	}()
+	_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+	time.Sleep(5 * time.Millisecond) // yield for NotifyContext delivery (ctx.Err visible before run launches workers; loadCount stays 0, matching sibling TestSIGTERM pattern + test intent)
 	go func() { done <- runWithDeps(ctx, cfg, d) }()
 
 	select {

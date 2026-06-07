@@ -64,7 +64,7 @@ func probeOrSkipDepositCLI(t *testing.T) string {
 	}
 	cmd := exec.Command(bin, "--version")
 	cmd.Env = sanitizedEnv()
-	out, _ := cmd.CombinedOutput()
+	out, _ := cmd.CombinedOutput() // ignore: --version failure is non-fatal here; string content decides refuse vs. skip (AC3)
 	ver := string(out)
 	if !strings.Contains(ver, "ethstaker") {
 		t.Fatalf("DEPOSIT_CLI_BIN=%s --version does not contain \"ethstaker\" (got: %q). This is the deprecated \"staking-deposit-cli\" fork per research/01 §R2 and AC3; both the image (M1.7-1) and this test refuse it — use the ethstaker fork instead.", bin, ver)

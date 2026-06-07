@@ -117,6 +117,8 @@ func (b *bytesPassphraseSource) Read() ([]byte, error) {
 	return []byte(b.pw), nil
 }
 
+func (b *bytesPassphraseSource) Zeroize() {}
+
 // TestHoodiGoldenDeposit is the M1 exit-gate integration test. It:
 //  1. Loads testdata/hoodi/keystore.json via the real keystore.Loader
 //  2. Decrypts with the passphrase from testdata/hoodi/passphrase.txt
