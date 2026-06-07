@@ -35,7 +35,6 @@ func TestExitCodeFor(t *testing.T) {
 		{"ErrInvalidKey direct", signer.ErrInvalidKey, 3},
 		{"ErrInvalidChainID direct", signer.ErrInvalidChainID, 3},
 		{"ErrChainIDMismatch direct", signer.ErrChainIDMismatch, 3},
-		{"ErrLedgerNotSupported direct", signer.ErrLedgerNotSupported, 3},
 		{"ErrSignerClosed wrapped", fmt.Errorf("sign: %w", signer.ErrSignerClosed), 3},
 		// User rejection → exit 4.
 		{"ErrUserRejected direct", signer.ErrUserRejected, 4},

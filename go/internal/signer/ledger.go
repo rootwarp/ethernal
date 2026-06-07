@@ -1,17 +1,11 @@
 // Package signer — Ledger hardware wallet signer.
 //
-// Build-tag isolation: this file has no build tag and compiles everywhere.
-// ledger_cgo.go (//go:build cgo) provides the real usbwallet transport.
-// ledger_nocgo.go (//go:build !cgo) provides a stub returning ErrLedgerNotSupported.
-//
-// Note: the repo already requires CGO transitively via herumi/bls-eth-go-binary,
-// so CGO_ENABLED=0 go build ./... does not succeed for the module as a whole.
-// The non-CGO stub is retained for hygiene and to let callers that guard Ledger
-// usage behind a flag compile without the HID transport.
+// ledger_cgo.go (//go:build cgo) provides the real usbwallet transport via
+// geth's accounts/usbwallet. The whole module requires CGO (transitively via
+// herumi BLS), so there is no supported !cgo path.
 //
 // Coverage: ledger.go (orchestration) + ledger_internal_test.go (mock) achieve
-// ≥80% for the package without exercising ledger_cgo.go (requires CGO) or
-// ledger_nocgo.go (excluded when CGO is on).
+// ≥80% for the package without exercising ledger_cgo.go (requires CGO).
 
 package signer
 
@@ -52,7 +46,6 @@ type LedgerSigner struct {
 // NewLedgerSigner discovers the first connected Ledger, opens the Ethereum app,
 // and derives the account at m/44'/60'/0'/0/0 (accounts.DefaultBaseDerivationPath).
 //
-// Returns ErrLedgerNotSupported if the binary was built without CGO.
 // Returns ErrNoDevice if no Ledger is detected.
 // Returns ErrAppNotOpen if a Ledger is found but the Ethereum app is not open.
 func NewLedgerSigner(opts ...ledgerOption) (*LedgerSigner, error) {

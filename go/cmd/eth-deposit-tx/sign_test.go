@@ -315,8 +315,8 @@ func TestSignCommand_LocalSigner_StdoutOutput(t *testing.T) {
 }
 
 func TestSignCommand_Ledger_NotSupported_OnCGOPath(t *testing.T) {
-	// Ledger support requires a real device and CGO build; this path always
-	// yields an error (ErrNoDevice or ErrLedgerNotSupported) without hardware.
+	// Ledger support requires a real device and CGO build (module is CGO-only via herumi).
+	// This path always yields ErrNoDevice without hardware.
 	// We verify the error is non-nil and exit code 3 is returned.
 	orig := ucli.OsExiter
 	ucli.OsExiter = func(int) {}
@@ -340,8 +340,7 @@ func TestSignCommand_Ledger_NotSupported_OnCGOPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for ledger with no device, got nil")
 	}
-	// Without real hardware: ErrNoDevice or ErrLedgerNotSupported — both exit 3.
-	// If by some chance we're on non-CGO, ErrLedgerNotSupported → exit 3 too.
+	// Without real hardware: ErrNoDevice (exit 3).
 	code := ExitCodeFor(err)
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3; err = %v", code, err)

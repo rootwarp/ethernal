@@ -73,7 +73,6 @@ func TestExitCodeContract(t *testing.T) {
 		{"signer.ErrInvalidKey", signer.ErrInvalidKey, 3, ""},
 		{"signer.ErrInvalidChainID", signer.ErrInvalidChainID, 3, ""},
 		{"signer.ErrChainIDMismatch", signer.ErrChainIDMismatch, 3, ""},
-		{"signer.ErrLedgerNotSupported", signer.ErrLedgerNotSupported, 3, ""},
 		{"signer.ErrSenderMismatch", signer.ErrSenderMismatch, 3, "M0 / GO-023"},
 		// bls/deposit 3-class covered in gen contract (tx paths use other sentinels or wraps; direct not branched in tx ExitCodeFor)
 

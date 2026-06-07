@@ -68,7 +68,6 @@ func TestExitCodeContract(t *testing.T) {
 		{"signer.ErrInvalidKey (tx; gen 1)", signer.ErrInvalidKey, 1, "arch 3"},
 		{"signer.ErrInvalidChainID (tx; gen 1)", signer.ErrInvalidChainID, 1, "arch 3"},
 		{"signer.ErrChainIDMismatch (tx; gen 1)", signer.ErrChainIDMismatch, 1, "arch 3"},
-		{"signer.ErrLedgerNotSupported (tx; gen 1)", signer.ErrLedgerNotSupported, 1, "arch 3"},
 		{"signer.ErrSenderMismatch (tx; gen 1)", signer.ErrSenderMismatch, 1, "arch 3"},
 		{"internaltx.ErrRPCDial (tx; gen 1)", internaltx.ErrRPCDial, 1, "arch 5"},
 		{"internaltx.ErrBroadcastFailed (tx; gen 1)", internaltx.ErrBroadcastFailed, 1, "arch 5"},

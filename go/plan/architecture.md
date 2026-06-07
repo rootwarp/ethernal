@@ -704,8 +704,7 @@ type LocalSigner struct {
 //     "abandoning HID handle" warning. Goroutine leak is documented and acceptable.
 ```
 
-**M2:** delete `ledger_nocgo.go` (GO-050, FR-P2-A4) or break the `signer → bls` dependency to
-make a real `CGO_ENABLED=0` build possible. Decision deferred to M2 ADR.
+**M2:** `ledger_nocgo.go` and unreachable `ErrLedgerNotSupported` deleted (GO-050, FR-P2-A4, ADR-008); CGO remains required (herumi BLS).
 
 **Owned findings:**
 - M0: FR-P0-A5 (GO-003), FR-P0-C2 (GO-014), FR-P0-D2 (GO-019), FR-P0-D3 (GO-023), FR-P0-D4
@@ -1941,6 +1940,29 @@ These are the conflicts the team-lead asked to be flagged rather than silently r
   generated code committed; dedicated CI lane.
 - **Alternatives:** Python eth2spec (slow, flaky); vendor Prysm types (GPL-3 incompatible).
 - **Consequences:** one new test-only dep; default `go test` unchanged.
+
+### ADR-008: Delete `ledger_nocgo.go` stub and `ErrLedgerNotSupported` (Spike S4)
+
+- **Status:** Accepted (M2.3).
+- **Context:** GO-050: the `//go:build !cgo` `ledger_nocgo.go` (and its `ErrLedgerNotSupported`
+  path) can never be reached or even type-checked, because `internal/signer` → `internal/tx` →
+  `internal/deposit` → `internal/bls` → herumi (CGO-only). The module as a whole requires
+  `CGO_ENABLED=1` (PRD §7.5, architecture §6.9). The stub and sentinel were dead code giving
+  a false impression of optional CGO for Ledger (while Ledger itself uses usbwallet which also
+  needs CGO). Spike S4 default + estimator: delete (1pt code + ADR).
+- **Decision:** Delete `go/internal/signer/ledger_nocgo.go`, remove `ErrLedgerNotSupported`
+  sentinel + all references (exit mapping, contract tests, godoc, package comments, signer
+  sentinel test). Update comments to state CGO requirement clearly. Publish ADR-008 as
+  `go/docs/ADR-008-ledger-nocgo.md`. (No CI CGO=0 matrix added; the cycle break option was
+  rejected as higher-cost with no benefit given herumi.)
+- **Alternatives considered:** Break the `signer → bls` cycle (e.g. move BLS deps, introduce
+  indirection for read-path validation) so that `CGO_ENABLED=0` would succeed for signer
+  package; then add CI matrix exercising it. Cost ≥4pt per plan risk #3; still leaves
+  herumi CGO req for full builds and for `eth-deposit-gen`.
+- **Consequences:** Dead unreachable path removed (hygiene win). `ErrLedgerNotSupported` no
+  longer exists (tests/contracts updated). Module's CGO requirement is now explicit and
+  accurate with no misleading build-tag stubs. ADR-008 recorded for traceability. Ledger
+  remains the documented mainnet-safe path under CGO builds.
 
 ---
 

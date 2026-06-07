@@ -44,10 +44,6 @@ var (
 	// ErrSignerClosed indicates Sign was called after Close.
 	ErrSignerClosed = errors.New("signer is closed")
 
-	// ErrLedgerNotSupported indicates the binary was built without CGO, so the
-	// Ledger HID transport is unavailable. Rebuild with CGO_ENABLED=1.
-	ErrLedgerNotSupported = errors.New("ledger support requires CGO_ENABLED=1; rebuild with cgo enabled")
-
 	// ErrInvalidToAddress indicates the To field in the unsigned transaction
 	// failed strict validation in parseUnsignedTx: !common.IsHexAddress || len != 42,
 	// or the address is not the deposit contract for unsigned.ChainID (via network.LookupByChainID).

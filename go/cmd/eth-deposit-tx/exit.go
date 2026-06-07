@@ -75,7 +75,6 @@ func ExitCodeFor(err error) int {
 		errors.Is(err, signer.ErrInvalidKey) ||
 		errors.Is(err, signer.ErrInvalidChainID) ||
 		errors.Is(err, signer.ErrChainIDMismatch) ||
-		errors.Is(err, signer.ErrLedgerNotSupported) ||
 		errors.Is(err, signer.ErrSenderMismatch) {
 		return 3
 	}
