@@ -153,11 +153,40 @@ func runDepositCLIVerify(ctx context.Context, cliPath, outputPath string) error 
 		return fmt.Errorf("%w: %q not found in PATH: %v", ErrDepositCLINotFound, cliPath, err)
 	}
 	cmd := exec.CommandContext(ctx, cliPath, "verify", "--input-file", outputPath)
+	cmd.Env = sanitizedEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrDepositCLIFailed, string(out))
 	}
 	return nil
+}
+
+// sanitizedEnv returns os.Environ() filtered to a fixed allow-list.
+// The allow-list (HOME, PATH, LANG) is the minimal set required for
+// typical operation of the ethstaker-deposit-cli subprocess. It is
+// deliberately small and fixed; new entries are added only when a
+// concrete use-case appears and must be documented here.
+//
+// Rationale (per architecture §8.4): the child must never receive
+// ETH_DEPOSIT_TX_PRIVATE_KEY (or custom --private-key-env variants)
+// or any keystore passphrase env var (from --passphrase-env or
+// internal sources). These would be inherited by default because
+// exec.CommandContext leaves cmd.Env==nil. Sanitization at spawn
+// time is defense-in-depth even after parent-side Unsetenv (M1.1-5)
+// or Zeroize (M1.1-6 / M0.8).
+func sanitizedEnv() []string {
+	allow := map[string]bool{
+		"HOME": true,
+		"PATH": true,
+		"LANG": true,
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok && allow[k] {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // buildLogger constructs a *slog.Logger based on the verbose and jsonLogs flags.

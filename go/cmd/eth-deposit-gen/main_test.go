@@ -1567,6 +1567,88 @@ func TestVerifyDepositCLI_DryRun_NeverCalled(t *testing.T) {
 	}
 }
 
+// TestRunDepositCLIVerify_EnvSanitized (M1.1-7 AC): exercises the production
+// runDepositCLIVerify (via a always-succeed cli "true" in PATH) under
+// polluted env; asserts via the helper that only allow-list keys are present
+// and no secret keys (ETH_DEPOSIT_TX_PRIVATE_KEY or *_PASSPHRASE_ENV) leak.
+func TestRunDepositCLIVerify_EnvSanitized(t *testing.T) {
+	t.Setenv("ETH_DEPOSIT_TX_PRIVATE_KEY", "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("MY_PASSPHRASE_ENV", "supersecretpw")
+	t.Setenv("HOME", "/home/testuser")
+	t.Setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
+	t.Setenv("LANG", "C")
+	t.Setenv("UNWANTED_VAR", "shouldnotappear")
+
+	if _, err := exec.LookPath("true"); err != nil {
+		t.Skip("true not found in PATH; skipping direct runDepositCLIVerify env test")
+	}
+
+	err := runDepositCLIVerify(context.Background(), "true", "/tmp/dummy-deposit-data.json")
+	if err != nil {
+		t.Fatalf("runDepositCLIVerify('true', ...) unexpected error: %v", err)
+	}
+
+	env := sanitizedEnv()
+	keys := map[string]bool{}
+	for _, e := range env {
+		if k, _, ok := strings.Cut(e, "="); ok {
+			keys[k] = true
+		}
+	}
+	for _, want := range []string{"HOME", "PATH", "LANG"} {
+		if !keys[want] {
+			t.Errorf("sanitized env missing allow-list key %q", want)
+		}
+	}
+	if keys["ETH_DEPOSIT_TX_PRIVATE_KEY"] {
+		t.Error("ETH_DEPOSIT_TX_PRIVATE_KEY present in sanitized env")
+	}
+	if keys["MY_PASSPHRASE_ENV"] {
+		t.Error("MY_PASSPHRASE_ENV present in sanitized env")
+	}
+	if keys["UNWANTED_VAR"] {
+		t.Error("non-allow key UNWANTED_VAR present in sanitized env")
+	}
+}
+
+// TestRunWithDeps_Verify_PrintenvMocked_NoSecretKeys (M1.1-7 AC): uses
+// runWithDeps + VerifyWithDepositCLI + a mocked verify stub that runs
+// "printenv" under sanitizedEnv(); asserts the mocked child's visible
+// env contains none of the secret keys.
+func TestRunWithDeps_Verify_PrintenvMocked_NoSecretKeys(t *testing.T) {
+	t.Setenv("ETH_DEPOSIT_TX_PRIVATE_KEY", "0xdeadbeef0123456789abcdef0123456789abcdef0123456789abcdef01234567")
+	t.Setenv("E2E_PASSPHRASE_ENV", "anothersecret")
+	t.Setenv("HOME", "/home/u")
+	t.Setenv("PATH", "/bin")
+	t.Setenv("LANG", "POSIX")
+
+	var summaryBuf bytes.Buffer
+	d := makeTestDeps(&summaryBuf, nil)
+
+	d.verifyDepositCLI = func(ctx context.Context, cliPath, outputPath string) error {
+		// Mocked "printenv" subprocess (the deposit CLI is replaced by printenv
+		// for this AC; exercises the same sanitizedEnv helper used by real
+		// runDepositCLIVerify).
+		cmd := exec.CommandContext(ctx, "printenv")
+		cmd.Env = sanitizedEnv()
+		out, _ := cmd.CombinedOutput()
+		s := string(out)
+		if strings.Contains(s, "ETH_DEPOSIT_TX_PRIVATE_KEY") || strings.Contains(s, "E2E_PASSPHRASE_ENV") {
+			t.Errorf("mocked printenv subprocess saw secret key(s) in env: %s", s)
+		}
+		return nil
+	}
+
+	cfg := makeCfg()
+	cfg.VerifyWithDepositCLI = true
+	cfg.DepositCLIPath = "deposit" // not executed; stubbed
+
+	err := runWithDeps(context.Background(), cfg, d)
+	if err != nil {
+		t.Fatalf("runWithDeps with verify printenv mock unexpected error: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestProgress — Issue #19 progress indicator tests
 // ---------------------------------------------------------------------------
