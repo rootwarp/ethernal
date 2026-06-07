@@ -1,0 +1,34 @@
+name: differential-oracle
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+jobs:
+  differential-oracle:
+    name: go test -tags=differential_oracle (M1.2-5)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: go mod download (for fastssz cache hygiene per plan)
+        run: go mod download
+        working-directory: go
+
+      - name: Verify oracle regen up to date (M1.2-4 AC1 + addresses SEC bypass via generated tampering)
+        run: make oracle-regen && git diff --exit-code internal/ssz/testdata/oracle_types_ssz.go
+        working-directory: go
+
+      - name: go test -tags=differential_oracle ./internal/ssz/...
+        run: go test -tags=differential_oracle ./internal/ssz/...
+        working-directory: go

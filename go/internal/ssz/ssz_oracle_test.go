@@ -38,12 +38,16 @@ func TestDifferentialDepositMessageRoot(t *testing.T) {
 			WithdrawalCredentials: c.WC,
 			Amount:                c.Amount,
 		}.HashTreeRoot()
-		theirs, _ := (&oracle.DepositMessage{
+		theirs, err := (&oracle.DepositMessage{
 			Pubkey:                c.Pubkey,
 			WithdrawalCredentials: c.WC,
 			Amount:                c.Amount,
 		}).HashTreeRoot()
+		if err != nil {
+			t.Fatalf("oracle HTR err: %v", err)
+		}
 		if ours != theirs {
+			// roots are synthetic corpus only (public per research/05 + M0.8); %x for deliberate SSZ bug visibility (AC2) + debug in CI logs (see SEC MED roots-in-logs finding)
 			t.Errorf("DepositMessage[%d] root mismatch:\n  ours:   %x\n  theirs: %x", i, ours, theirs)
 		}
 	}
@@ -75,13 +79,17 @@ func TestDifferentialDepositDataRoot(t *testing.T) {
 			Amount:                c.Amount,
 			Signature:             c.Sig,
 		}.HashTreeRoot()
-		theirs, _ := (&oracle.DepositData{
+		theirs, err := (&oracle.DepositData{
 			Pubkey:                c.Pubkey,
 			WithdrawalCredentials: c.WC,
 			Amount:                c.Amount,
 			Signature:             c.Sig,
 		}).HashTreeRoot()
+		if err != nil {
+			t.Fatalf("oracle HTR err: %v", err)
+		}
 		if ours != theirs {
+			// roots are synthetic corpus only (public per research/05 + M0.8); %x for deliberate SSZ bug visibility (AC2) + debug in CI logs (see SEC MED roots-in-logs finding)
 			t.Errorf("DepositData[%d] root mismatch:\n  ours:   %x\n  theirs: %x", i, ours, theirs)
 		}
 	}
@@ -112,7 +120,10 @@ func FuzzDifferentialDepositMessageRoot(f *testing.F) {
 		var w [32]byte
 		copy(w[:], wc)
 		ours := DepositMessage{Pubkey: p, WithdrawalCredentials: w, Amount: amount}.HashTreeRoot()
-		theirs, _ := (&oracle.DepositMessage{Pubkey: p, WithdrawalCredentials: w, Amount: amount}).HashTreeRoot()
+		theirs, err := (&oracle.DepositMessage{Pubkey: p, WithdrawalCredentials: w, Amount: amount}).HashTreeRoot()
+		if err != nil {
+			t.Fatalf("oracle HTR err: %v", err)
+		}
 		if ours != theirs {
 			t.Errorf("DepositMessage fuzz mismatch")
 		}
@@ -139,7 +150,10 @@ func FuzzDifferentialDepositDataRoot(f *testing.F) {
 		var s [96]byte
 		copy(s[:], sig)
 		ours := DepositData{Pubkey: p, WithdrawalCredentials: w, Amount: amount, Signature: s}.HashTreeRoot()
-		theirs, _ := (&oracle.DepositData{Pubkey: p, WithdrawalCredentials: w, Amount: amount, Signature: s}).HashTreeRoot()
+		theirs, err := (&oracle.DepositData{Pubkey: p, WithdrawalCredentials: w, Amount: amount, Signature: s}).HashTreeRoot()
+		if err != nil {
+			t.Fatalf("oracle HTR err: %v", err)
+		}
 		if ours != theirs {
 			t.Errorf("DepositData fuzz mismatch")
 		}
