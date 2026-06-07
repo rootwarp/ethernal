@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -980,5 +982,86 @@ func TestLedgerSigner_Sign_Success_CrossCheck(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatal("expected non-nil SignedTx on happy-path matching fields/sender")
+	}
+}
+
+// --- M1.1-4 AC tests (fake wallet; smallest exact per plan) ---
+
+func TestLedgerSigner_CloseAfterCancel_StderrMessage(t *testing.T) {
+	// Mirrors TestLedgerSigner_Sign_ContextCancelledMidSign pattern exactly
+	// (readyCh + blockCh + go Sign + cancel + drain) but asserts the reject
+	// message was emitted to the (captured) confirmationPrompt on the Close
+	// after cancel path. Uses fake that hangs on SignTx so inFlight remains set.
+	readyCh := make(chan struct{})
+	blockCh := make(chan struct{})
+	t.Cleanup(func() { close(blockCh) })
+
+	w := &mockWallet{
+		SignTxFn: func(_ accounts.Account, _ *types.Transaction, _ *big.Int) (*types.Transaction, error) {
+			close(readyCh)
+			<-blockCh
+			return nil, errors.New("test cleanup")
+		},
+	}
+	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
+
+	s, err := NewLedgerSigner()
+	if err != nil {
+		t.Fatalf("NewLedgerSigner: %v", err)
+	}
+	defer func() { _ = s.Close() }() // ignore: best-effort
+	var buf bytes.Buffer
+	s.setConfirmationPrompt(&buf)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, e := s.Sign(ctx, internaltxUnsigned())
+		errCh <- e
+	}()
+
+	<-readyCh
+	cancel()
+	<-errCh // Sign returned Canceled; inFlight left true
+
+	if cerr := s.Close(); cerr != nil {
+		t.Errorf("Close after cancel: %v", cerr)
+	}
+	if !strings.Contains(buf.String(), "reject on device to unblock") {
+		t.Errorf("captured stderr %q does not contain exact \"reject on device to unblock\"", buf.String())
+	}
+}
+
+func TestLedgerSigner_CloseTimeout_WarningEmitted(t *testing.T) {
+	// Fake wallet Close hangs forever; ctor option compresses 30s to ms;
+	// injected logger (via setter, per existing set*ForTest pattern) captures
+	// the WARN at LevelWarn; Close must return promptly without hanging.
+	hangCh := make(chan struct{})
+	w := &mockWallet{
+		CloseFn: func() error {
+			<-hangCh
+			return nil
+		},
+	}
+	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
+
+	s, err := NewLedgerSigner(withCloseTimeout(5 * time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewLedgerSigner: %v", err)
+	}
+	defer func() { close(hangCh); _ = s.Close() }()
+
+	var logBuf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	s.setLoggerForTest(lg)
+
+	if cerr := s.Close(); cerr != nil {
+		t.Errorf("Close under timeout returned err: %v", cerr)
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, "abandoning HID handle after timeout") || !strings.Contains(logs, "leaked") {
+		t.Errorf("WARN not emitted (or wrong text) in captured logger: %q", logs)
 	}
 }

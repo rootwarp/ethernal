@@ -21,9 +21,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -42,6 +44,9 @@ type LedgerSigner struct {
 	account            accounts.Account
 	closed             atomic.Bool
 	confirmationPrompt io.Writer
+	closeTimeout       time.Duration
+	logger             *slog.Logger
+	inFlight           atomic.Bool // remains true if a SignTx goroutine was started but not reaped (i.e. canceled path); Close uses this to emit the reject message and knows the SignTx goro will be leaked on timeout.
 }
 
 // NewLedgerSigner discovers the first connected Ledger, opens the Ethereum app,
@@ -50,7 +55,7 @@ type LedgerSigner struct {
 // Returns ErrLedgerNotSupported if the binary was built without CGO.
 // Returns ErrNoDevice if no Ledger is detected.
 // Returns ErrAppNotOpen if a Ledger is found but the Ethereum app is not open.
-func NewLedgerSigner() (*LedgerSigner, error) {
+func NewLedgerSigner(opts ...ledgerOption) (*LedgerSigner, error) {
 	hub, err := newLedgerHub()
 	if err != nil {
 		return nil, fmt.Errorf("ledger hub init: %w", err)
@@ -89,13 +94,38 @@ func NewLedgerSigner() (*LedgerSigner, error) {
 		return nil, fmt.Errorf("ledger derive failed: %w", err)
 	}
 
-	return &LedgerSigner{wallet: w, account: acc, confirmationPrompt: os.Stderr}, nil
+	ls := &LedgerSigner{
+		wallet:             w,
+		account:            acc,
+		confirmationPrompt: os.Stderr,
+		closeTimeout:       30 * time.Second,
+	}
+	for _, o := range opts {
+		o(ls)
+	}
+	return ls, nil
 }
 
 // setConfirmationPrompt sets the writer for "please confirm on device" messages.
 // Used in tests to capture or silence the prompt.
 func (s *LedgerSigner) setConfirmationPrompt(w io.Writer) {
 	s.confirmationPrompt = w
+}
+
+// ledgerOption configures NewLedgerSigner (test-only for now; keeps call sites
+// unchanged since variadic).
+type ledgerOption func(*LedgerSigner)
+
+// withCloseTimeout is the constructor option exposing configurable timeout
+// (default 30s) for tests that must compress the Close timeout path.
+func withCloseTimeout(d time.Duration) ledgerOption {
+	return func(ls *LedgerSigner) { ls.closeTimeout = d }
+}
+
+// setLoggerForTest injects *slog.Logger used for the WARN on Close timeout.
+// Mirrors setConfirmationPrompt pattern; used only in tests.
+func (s *LedgerSigner) setLoggerForTest(l *slog.Logger) {
+	s.logger = l
 }
 
 // isAppNotOpenErr returns true when err suggests the Ethereum app is not open.
@@ -181,12 +211,15 @@ func (s *LedgerSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx)
 		signed, err := s.wallet.SignTx(s.account, unsignedTx, p.chainID)
 		ch <- signResult{signed, err}
 	}()
+	s.inFlight.Store(true)
 
 	var r signResult
 	select {
 	case <-ctx.Done():
+		// leave inFlight=true: Close will see it, emit reject-to-unblock, and on timeout the SignTx goro is (documented) leaked
 		return nil, ctx.Err()
 	case r = <-ch:
+		s.inFlight.Store(false)
 	}
 
 	if r.err != nil {
@@ -260,11 +293,46 @@ func (s *LedgerSigner) Name() string                  { return ledgerSignerName 
 func (s *LedgerSigner) RequiresUserInteraction() bool { return true }
 
 // Close releases the HID handle. Idempotent.
+//
+// When Close is reached via a canceled Sign (ctx.Err() != nil path that left
+// a goroutine inside wallet.SignTx), Close first emits the exact message
+// "reject on device to unblock" to the confirmation prompt (stderr in prod)
+// so the operator knows to reject on the device and unblock the pending APDU.
+// It then runs wallet.Close under a bounded timeout (default 30 s; overridable
+// via constructor option for tests). On timeout it logs at WARN (via the
+// injected *slog.Logger or fallback to stderr) and returns; the goroutine
+// blocked in wallet.SignTx is leaked. The leak is unavoidable: geth's
+// usbwallet cannot interrupt an in-flight APDU exchange (architecture §9.5,
+// research/03 §1).
 func (s *LedgerSigner) Close() error {
 	if s.closed.Swap(true) {
 		return nil
 	}
-	return s.wallet.Close()
+	if s.inFlight.Load() {
+		_, _ = fmt.Fprintf(s.confirmationPrompt, "reject on device to unblock\n")
+	}
+
+	to := s.closeTimeout
+	if to <= 0 {
+		to = 30 * time.Second
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- s.wallet.Close()
+	}()
+	timer := time.NewTimer(to)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		if s.logger != nil {
+			s.logger.Warn("abandoning HID handle after timeout; goroutine waiting on wallet.SignTx is leaked (unavoidable per geth `wallet.SignTx` cannot be interrupted mid-APDU)", "timeout", to)
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "WARN: abandoning HID handle after timeout; goroutine waiting on wallet.SignTx is leaked (unavoidable per geth `wallet.SignTx` cannot be interrupted mid-APDU) (timeout=%s)\n", to)
+		}
+		return nil
+	}
 }
 
 // Compile-time assertion.
