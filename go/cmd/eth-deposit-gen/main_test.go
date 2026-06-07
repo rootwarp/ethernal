@@ -19,6 +19,8 @@ import (
 
 	ucli "github.com/urfave/cli/v2"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/deposit"
@@ -442,6 +444,74 @@ func TestDefaultWithdrawalCreds(t *testing.T) {
 		if wc[i] != 0 {
 			t.Errorf("defaultWithdrawalCreds()[%d] = 0x%02x, want 0x00", i, wc[i])
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDeriveWC01_FromAddress — table test for exact 0x01 || 0x00*11 || addr[20] layout (M0.4-2 AC)
+// ---------------------------------------------------------------------------
+
+func TestDeriveWC01_FromAddress(t *testing.T) {
+	// Sample address from EIP-55 and M0.4-1 tests.
+	const sampleAddr = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+	sampleAddrLower := strings.ToLower(sampleAddr)
+	sampleAddrBytes := common.HexToAddress(sampleAddr)
+
+	// Build expected for sample: 0x01 + 11 zero bytes + 20 addr bytes.
+	var wantSample [32]byte
+	wantSample[0] = 0x01
+	copy(wantSample[12:], sampleAddrBytes[:])
+
+	// All-zero address case (still produces 0x01 + zeros + zeros).
+	var wantZero [32]byte
+	wantZero[0] = 0x01
+
+	tests := []struct {
+		name string
+		addr string
+		want [32]byte
+	}{
+		{
+			name: "EIP55 checksummed sample",
+			addr: sampleAddr,
+			want: wantSample,
+		},
+		{
+			name: "all lower sample",
+			addr: sampleAddrLower,
+			want: wantSample,
+		},
+		{
+			name: "zero address",
+			addr: "0x0000000000000000000000000000000000000000",
+			want: wantZero,
+		},
+		{
+			name: "all upper",
+			addr: strings.ToUpper(sampleAddr),
+			want: wantSample,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveWithdrawalCredential01(tc.addr)
+			if got != tc.want {
+				t.Errorf("deriveWithdrawalCredential01(%q) = %x, want %x", tc.addr, got[:], tc.want[:])
+			}
+			// Explicit layout checks per AC.
+			if got[0] != 0x01 {
+				t.Errorf("prefix byte = 0x%02x, want 0x01", got[0])
+			}
+			for i := 1; i < 12; i++ {
+				if got[i] != 0 {
+					t.Errorf("padding byte[%d] = 0x%02x, want 0x00", i, got[i])
+				}
+			}
+			if !bytes.Equal(got[12:], tc.want[12:]) {
+				t.Errorf("addr suffix mismatch: got %x, want %x", got[12:], tc.want[12:])
+			}
+		})
 	}
 }
 
@@ -870,6 +940,58 @@ func TestRunWithDeps_DryRun_VerifyFailureAbortsWithSameExitCode(t *testing.T) {
 	}
 	if code := exitCodeFor(err); code != 3 {
 		t.Errorf("exitCodeFor(ErrSelfVerifyFailed) = %d, want 3", code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRunWithDeps_E2E_HappyPath_JSONHas01WC — M0.4-2 AC: e2e happy-path (existing
+// testdata / single-keystore path; uses makeTestDeps/makeCfg with WithdrawalAddress
+// from M0.4-1, cfg equivalent to testdata/hoodi single-keystore flows) produces
+// deposit_data JSON with withdrawal_credentials starting 0x01 (i.e. hex "01" + 22 zero
+// chars + addr). Skipped per project-plan exit criterion (M0.4 + M0.10) until golden refresh.
+// ---------------------------------------------------------------------------
+
+func TestRunWithDeps_E2E_HappyPath_JSONHas01WC(t *testing.T) {
+	t.Skip("TODO(M0.10): golden refresh pending in M0.10; this e2e happy-path test (exercising runWithDeps + deposit generator + DryRun JSON output with single-keystore cfg equivalent to testdata/ flows) now produces withdrawal_credentials starting with 0x01... from the validated WithdrawalAddress derivation (M0.4-2); re-enable after fixture update")
+	var stdoutBuf bytes.Buffer
+	var summaryBuf bytes.Buffer
+
+	d := makeTestDeps(&summaryBuf, output.NewDryRunWriter(&stdoutBuf))
+	cfg := makeCfg()
+	cfg.DryRun = true
+
+	if err := runWithDeps(context.Background(), cfg, d); err != nil {
+		t.Fatalf("runWithDeps(dry-run e2e): %v", err)
+	}
+
+	got := stdoutBuf.Bytes()
+	var parsed []map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\nstdout: %s", err, got)
+	}
+	if len(parsed) == 0 {
+		t.Fatal("expected >=1 entry in produced deposit_data JSON")
+	}
+	wcFieldIface, ok := parsed[0]["withdrawal_credentials"]
+	if !ok {
+		t.Fatal("withdrawal_credentials field missing in JSON entry")
+	}
+	wcField, ok := wcFieldIface.(string)
+	if !ok {
+		t.Fatalf("withdrawal_credentials not string: %T", wcFieldIface)
+	}
+	addrHex := strings.ToLower(strings.TrimPrefix(cfg.WithdrawalAddress, "0x"))
+	// The JSON value is 64 lowercase hex chars (no 0x prefix per output.toJSONEntry).
+	// Per AC and arch: starts with 01 (for 0x01 byte) + 22 '0' (for 0x00*11) + 40-char addr.
+	wantStart := "01" + strings.Repeat("0", 22) + addrHex
+	if !strings.HasPrefix(wcField, "01"+strings.Repeat("0", 22)) {
+		t.Errorf("withdrawal_credentials must start with 0x01||0x00*11 i.e. hex '01'+'0'*22; got %s (len=%d)", wcField, len(wcField))
+	}
+	if !strings.HasSuffix(wcField, addrHex) || len(wcField) != 64 {
+		t.Errorf("withdrawal_credentials must be 64 hex ending with addr %s; got %s", addrHex, wcField)
+	}
+	if wcField != wantStart { // full equality since 1+11+20=32 bytes ->64 hex
+		t.Errorf("withdrawal_credentials = %s, want exact %s (0x01 + 0*11 + addr)", wcField, wantStart)
 	}
 }
 
@@ -1526,5 +1648,79 @@ func Test_WithdrawalAddress_Missing_Exit2(t *testing.T) {
 	sim := fmt.Errorf("Required flag \"withdrawal-address\" not set")
 	if got := exitCodeFor(sim); got != 2 {
 		t.Errorf("exitCodeFor(sim) = %d, want 2", got)
+	}
+}
+
+// TestRunWithDeps_EndToEnd_HappyPath_Derived01WC exercises the full runWithDeps
+// + real deposit.NewGenerator path using existing testdata single keystore +
+// the --withdrawal-address (via cfg) + derivation. Produces deposit_data JSON
+// (via DryRun) whose withdrawal_credentials starts "01" + 22 zero hex + addr.
+// Skipped (with TODO(M0.10)) per AC and project-plan exit criterion until
+// M0.10 fixture refresh; do not refresh goldens here.
+func TestRunWithDeps_EndToEnd_HappyPath_Derived01WC(t *testing.T) {
+	t.Skip("golden refresh pending in M0.10") // TODO(M0.10)
+
+	// Use existing testdata for single-keystore e2e happy path (M0.4-2 AC).
+	ksDir := t.TempDir()
+	src := "testdata/hoodi/keystores/keystore.json"
+	dst := filepath.Join(ksDir, "keystore.json")
+	ksBytes, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read existing testdata keystore: %v", err)
+	}
+	if err := os.WriteFile(dst, ksBytes, 0o600); err != nil {
+		t.Fatalf("write temp keystore: %v", err)
+	}
+
+	pw := "hoodi-golden-test-passphrase"
+	t.Setenv("E2E_TEST_PW", pw)
+
+	// The pubkey inside the hoodi testdata keystore (from pubkeys.txt).
+	pubkeyHex := "8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9"
+	var pk [48]byte
+	pkBytes, _ := hex.DecodeString(pubkeyHex)
+	copy(pk[:], pkBytes)
+
+	addr := "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+
+	var stdoutBuf bytes.Buffer
+	var summaryBuf bytes.Buffer
+	d := productionDeps()
+	d.writer = output.NewDryRunWriter(&stdoutBuf)
+	d.summaryOut = &summaryBuf
+	d.progressOut = io.Discard
+	d.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	// verifyDepositCLI remains the real one (but not exercised in dry-run).
+
+	cfg := cli.Config{
+		KeystoreDir:       ksDir,
+		Pubkeys:           [][48]byte{pk},
+		Network:           network.Hoodi,
+		OutputDir:         t.TempDir(),
+		PassphraseEnv:     "E2E_TEST_PW",
+		WithdrawalAddress: addr,
+		DryRun:            true,
+	}
+
+	if err := runWithDeps(context.Background(), cfg, d); err != nil {
+		t.Fatalf("runWithDeps(e2e happy 01wc): %v", err)
+	}
+
+	// When unskipped, this would verify the produced JSON (the AC target).
+	// The field value is hex without 0x prefix (see toJSONEntry).
+	type j struct {
+		WithdrawalCredentials string `json:"withdrawal_credentials"`
+	}
+	var entries []j
+	if err := json.Unmarshal(stdoutBuf.Bytes(), &entries); err != nil {
+		t.Fatalf("unmarshal produced JSON: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	wc := entries[0].WithdrawalCredentials
+	wantStart := "01" + strings.Repeat("00", 11) + strings.ToLower(strings.TrimPrefix(addr, "0x"))
+	if !strings.HasPrefix(wc, wantStart) {
+		t.Errorf("withdrawal_credentials starts %q, want prefix %q (0x01 + 22 zeros + addr)", wc, wantStart)
 	}
 }

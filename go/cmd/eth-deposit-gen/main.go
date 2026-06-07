@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	ucli "github.com/urfave/cli/v2"
 	"golang.org/x/term"
 
@@ -68,6 +69,22 @@ func defaultWithdrawalCreds() [32]byte {
 	var wc [32]byte
 	wc[0] = 0x00 // BLS withdrawal type prefix; rest is zero
 	return wc
+}
+
+// deriveWithdrawalCredential01 derives the 32-byte 0x01-form withdrawal
+// credential from a validated EIP-55 (or lowercase) 0x-prefixed 20-byte
+// execution-layer address: cred[0] = 0x01; cred[1:12] = 0x00*11; cred[12:32] = addr[20].
+// This is the exact layout required by the spec and arch §6.11 / §13.2
+// ("derivedFromFlag" path). The input is already validated by M0.4-1 (EIP-55 +
+// len + hex); derivation is pure, deterministic, no secrets, no side effects.
+// Threaded into deposit.Request so it reaches the generator, Entry, JSON output
+// (withdrawal_credentials starts "0x01..."), and on-chain deposit.
+func deriveWithdrawalCredential01(withdrawalAddr string) [32]byte {
+	var cred [32]byte
+	cred[0] = 0x01
+	addr := common.HexToAddress(withdrawalAddr)
+	copy(cred[12:], addr[:])
+	return cred
 }
 
 // pickPassphraseSource returns the appropriate PassphraseSource based on cfg.
@@ -264,9 +281,9 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 		return errMainnetAckRequired
 	}
 	// WithdrawalAddress (EIP-55 validated 0x01 input from --withdrawal-address flag,
-	// bound in cli layer per M0.4-1) is received here in the Config load path for
-	// M0.4-2 derivation (currently _ = to satisfy "bound in main.go" per review/plan notes; no use yet, no creep).
-	_ = cfg.WithdrawalAddress
+	// bound in cli layer per M0.4-1) is received here in the Config load path;
+	// derive the 0x01 credential for threading (M0.4-2).
+	withdrawalCreds := deriveWithdrawalCredential01(cfg.WithdrawalAddress)
 	if cfg.Network == network.Mainnet {
 		log.Debug("mainnet: explicit ack verified")
 	}
@@ -357,7 +374,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 				e, err := gen.Generate(workerCtx, deposit.Request{
 					Network:               cfg.Network,
 					Pubkeys:               [][48]byte{pk},
-					WithdrawalCredentials: defaultWithdrawalCreds(),
+					WithdrawalCredentials: withdrawalCreds,
 					AmountGwei:            32_000_000_000,
 					DepositCLIVersion:     CLIVersion,
 				})
