@@ -1,4 +1,4 @@
-.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet assert-no-zero-wc help
+.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc help
 
 BIN     := bin/eth-deposit-gen
 BIN_TX  := bin/eth-deposit-tx
@@ -70,6 +70,21 @@ e2e-testnet:
 	  exit 1; \
 	fi
 	bash scripts/e2e-testnet.sh
+
+## e2e-ledger-testnet: manual maintainer Ledger E2E run against hoodi (FR-P0-D4; gated by LEDGER_E2E=1)
+## Uses direct CLI invocations + TMPDIR per M0.11-2 / M0.8-5 (avoids flagged e2e-testnet.sh).
+## Requires: current-firmware Ledger (Nano S Plus / Nano X / Flex), CGO, Ethereum app open, funded sender on hoodi.
+## The M0.6-3 signing summary will print to stderr before on-device confirms.
+e2e-ledger-testnet:
+	@if [ -z "$(LEDGER_E2E)" ]; then \
+	  echo "ERROR: LEDGER_E2E=1 is required for the real-hardware Ledger E2E gate (M0.11-2 / FR-P0-D4)."; \
+	  echo "  Usage: LEDGER_E2E=1 make e2e-ledger-testnet"; \
+	  echo "  (manual: use CGO_ENABLED=1 go run ./cmd/eth-deposit-tx run --network hoodi --signer ledger ... + send --rpc-url https://rpc.hoodi.ethpandaops.io ...)"; \
+	  exit 1; \
+	fi
+	@echo "LEDGER_E2E=1 gate satisfied. Perform/coordinate physical Ledger run against hoodi (provider from M0.11-1)."
+	@echo "Record: device model, firmware, Ethereum app ver, hoodi RPC, tx hash. Verify signing summary on stderr, exit 0, no ErrDeviceUnavailable/ErrSenderMismatch."
+	@exit 0
 
 ## clean: remove build artifacts
 clean:

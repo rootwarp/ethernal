@@ -216,12 +216,23 @@ func signUnsignedTx(ctx context.Context, cfg *SignConfig, errWriter io.Writer, u
 		unsigned.AllowNonDepositRecipient = true
 	}
 
-	// 2. Prompt if device interaction is needed.
+	// 2. Print 4-line signing summary to stderr before s.Sign (M0.6-3).
+	// Operator sees chainID/to/value/nonce (from unsigned; validated inside Sign).
+	// Appears on stderr before each on-device confirm for ledger (and the
+	// "Waiting..." / "Please confirm..." prompts). Uses errWriter for test capture.
+	if errWriter != nil {
+		_, _ = fmt.Fprintf(errWriter, "chainID: %d\n", unsigned.ChainID)
+		_, _ = fmt.Fprintf(errWriter, "to: %s\n", unsigned.To)
+		_, _ = fmt.Fprintf(errWriter, "value: %s\n", unsigned.Value)
+		_, _ = fmt.Fprintf(errWriter, "nonce: %d\n", unsigned.Nonce)
+	}
+
+	// 3. Prompt if device interaction is needed.
 	if s.RequiresUserInteraction() && errWriter != nil {
 		_, _ = fmt.Fprintf(errWriter, "Waiting for confirmation on Ledger device...\n") // ignore: best-effort prompt to errWriter
 	}
 
-	// 3. Sign.
+	// 4. Sign.
 	signed, err := s.Sign(ctx, unsigned)
 	if err != nil {
 		return nil, fmt.Errorf("sign (%s): %w", cfg.Signer, err)
