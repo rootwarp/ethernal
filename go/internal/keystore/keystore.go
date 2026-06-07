@@ -92,12 +92,19 @@ func NewLoader() KeyLoader {
 
 // Load reads and decrypts the keystore at path.
 //
+// It honours ctx: checks ctx.Err() before file read, before pw.Read(), and
+// before Decrypt (per M1.1-1 / arch §9.2). Decrypt (scrypt via wealdtech)
+// cannot be cancelled mid-flight — only at these boundaries.
+//
 // Error mapping:
 //   - file not found            → ErrKeystoreMissing
 //   - invalid JSON / schema     → ErrKeystoreMalformed
 //   - version field != 4        → ErrKeystoreVersion
 //   - wrong passphrase          → ErrWrongPassphrase
-func (l *loader) Load(_ context.Context, path string, pw PassphraseSource) (Key, error) {
+func (l *loader) Load(ctx context.Context, path string, pw PassphraseSource) (Key, error) {
+	if err := ctx.Err(); err != nil {
+		return Key{}, err
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -121,10 +128,18 @@ func (l *loader) Load(_ context.Context, path string, pw PassphraseSource) (Key,
 		return Key{}, fmt.Errorf("%w: %s: missing crypto field", ErrKeystoreMalformed, path)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return Key{}, err
+	}
 	// Source the passphrase.
 	passBytes, err := pw.Read()
 	if err != nil {
 		return Key{}, fmt.Errorf("passphrase source: %w", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		zeroizeBytes(passBytes)
+		return Key{}, err
 	}
 
 	// Decrypt. The wealdtech API takes a string. We convert from []byte and
@@ -135,6 +150,9 @@ func (l *loader) Load(_ context.Context, path string, pw PassphraseSource) (Key,
 	passString := string(passBytes)
 	defer zeroizeBytes(passBytes)
 
+	if err := ctx.Err(); err != nil {
+		return Key{}, err
+	}
 	enc := keystorev4.New()
 	secret, err := enc.Decrypt(envelope.Crypto, passString)
 	if err != nil {

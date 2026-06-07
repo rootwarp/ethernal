@@ -325,6 +325,10 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 		go func() {
 			defer wg.Done()
 			for i := range work {
+				if err := workerCtx.Err(); err != nil {
+					results <- workerResult{idx: i, err: err}
+					continue
+				}
 				pk := cfg.Pubkeys[i]
 				pkHex := fmt.Sprintf("%x", pk[:])
 				log.Debug("deposit: processing pubkey", "pubkey", pkHex)

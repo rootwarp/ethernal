@@ -308,6 +308,55 @@ func TestRunWithDeps_ContextCanceled_ExitCode4(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestWorkerPool_CtxCancelMidRun_AllWorkersEmitOneResult (M1.1-1 AC)
+// cancel ctx (pre or mid) → collector receives exactly N results (N=work count)
+// because of per-iteration workerCtx.Err() check at top of for-range in pool.
+// Uses Parallel=1 + pre-cancel so load count==0 (checks emit result w/o Load).
+// ---------------------------------------------------------------------------
+
+func TestWorkerPool_CtxCancelMidRun_AllWorkersEmitOneResult(t *testing.T) {
+	pks := make3Pubkeys()
+	n := len(pks)
+	var loadCount int
+	loaderFn := func(_ context.Context, path string, _ keystore.PassphraseSource) (keystore.Key, error) {
+		loadCount++
+		var idx int
+		_, _ = fmt.Sscanf(path, "/fake/%d.json", &idx) // ignore: synthetic
+		pk := pks[idx]
+		secret := make([]byte, 32)
+		secret[0] = pk[0]
+		return keystore.Key{
+			Secret:    secret,
+			PubkeyHex: fmt.Sprintf("%x", pk[:]),
+		}, nil
+	}
+
+	var summaryBuf bytes.Buffer
+	d := makeMultiPubkeyDeps(&summaryBuf, pks)
+	d.loader = &funcLoader{fn: loaderFn}
+
+	cfg := cli.Config{
+		KeystoreDir:       "/fake/keystores",
+		Pubkeys:           pks,
+		Network:           network.Hoodi,
+		OutputDir:         "/tmp",
+		Parallel:          1,
+		WithdrawalAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel exercises the top-of-iter check for every i
+
+	err := runWithDeps(ctx, cfg, d)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runWithDeps err = %v, want context.Canceled (N=%d results were emitted)", err, n)
+	}
+	if loadCount != 0 {
+		t.Errorf("loadCount=%d, want 0: ctx check emitted result per work item without reaching Load", loadCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestExitCodeFor — table-driven tests for exitCodeFor
 // ---------------------------------------------------------------------------
 

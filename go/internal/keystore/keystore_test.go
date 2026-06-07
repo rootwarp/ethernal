@@ -169,6 +169,20 @@ func TestLoad_MissingFile(t *testing.T) {
 	}
 }
 
+// TestLoader_CtxCancelBeforeRead_NoFileIO (M1.1-1 AC): cancel before Load →
+// returns ctx err with no file I/O attempted (uses nonexist path; if read had
+// been reached would have produced ErrKeystoreMissing instead of Canceled).
+func TestLoader_CtxCancelBeforeRead_NoFileIO(t *testing.T) {
+	loader := keystore.NewLoader()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := loader.Load(ctx, "/nonexistent/path/keystore.json", newBytesSource(testPassphrase))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Load err = %v, want context.Canceled (proves no os.ReadFile attempted)", err)
+	}
+}
+
 func TestLoad_MalformedJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "keystore.json")
