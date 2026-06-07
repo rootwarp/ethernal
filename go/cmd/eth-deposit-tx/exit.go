@@ -84,7 +84,8 @@ func ExitCodeFor(err error) int {
 		errors.Is(err, internaltx.ErrBroadcastFailed) ||
 		errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) ||
 		errors.Is(err, internaltx.ErrReceiptReverted) ||
-		errors.Is(err, internaltx.ErrReceiptTimeout) {
+		errors.Is(err, internaltx.ErrReceiptTimeout) ||
+		errors.Is(err, internaltx.ErrNoBaseFee) {
 		return 5
 	}
 	// Fallback.
