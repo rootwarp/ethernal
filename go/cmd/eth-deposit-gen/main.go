@@ -60,17 +60,6 @@ var ErrDepositCLINotFound = errors.New("deposit CLI binary not found")
 // Maps to exit code 3 (the verification step is a crypto/correctness check).
 var ErrDepositCLIFailed = errors.New("deposit CLI verification failed")
 
-// defaultWithdrawalCreds returns the 32-byte withdrawal credentials for v1.
-// Type 0x00 prefix = BLS withdrawal type. Per the architecture doc this is
-// acceptable for v1; a future --withdrawal-address flag will plug in here.
-//
-// TODO(P1): replace with a real withdrawal address derived from --withdrawal-address flag.
-func defaultWithdrawalCreds() [32]byte {
-	var wc [32]byte
-	wc[0] = 0x00 // BLS withdrawal type prefix; rest is zero
-	return wc
-}
-
 // deriveWithdrawalCredential01 derives the 32-byte 0x01-form withdrawal
 // credential from a validated EIP-55 (or lowercase) 0x-prefixed 20-byte
 // execution-layer address: cred[0] = 0x01; cred[1:12] = 0x00*11; cred[12:32] = addr[20].
