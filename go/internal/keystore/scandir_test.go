@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rootwarp/eth-utils/go/internal/keystore"
@@ -247,5 +248,71 @@ func TestScanDir_ReadError_WarnLogged(t *testing.T) {
 	}
 	if !strings.Contains(logs, "skipping file (read error)") {
 		t.Errorf("expected read error warn msg, got: %q", logs)
+	}
+}
+
+// TestScanDir_Symlink_Skipped: symlink (named *.json) in dir → skipped + WARN logged.
+// Uses writeRawFile + os.Symlink (exact style from M1.4-2's writeRaw+Chmod read-err test;
+// no new helpers).
+func TestScanDir_Symlink_Skipped(t *testing.T) {
+	dir := t.TempDir()
+	// Target does not end in .json so only the symlink entry is a .json candidate.
+	target := writeRawFile(t, dir, "target.txt", []byte(`{"pubkey":"aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd","version":4}`))
+	symPath := filepath.Join(dir, "symlink.json")
+	if err := os.Symlink(target, symPath); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	idx, err := keystore.ScanDir(dir, lg)
+	if err != nil {
+		t.Fatalf("ScanDir error = %v, want nil (symlink skipped)", err)
+	}
+	if len(idx) != 0 {
+		t.Errorf("ScanDir len = %d, want 0 (symlink entry skipped, target not .json)", len(idx))
+	}
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, "WARN") && !strings.Contains(logs, "level=WARN") {
+		t.Errorf("expected WARN record in captured logger, got: %q", logs)
+	}
+	if !strings.Contains(logs, "skipping file (non-regular)") {
+		t.Errorf("expected non-regular skip warn msg, got: %q", logs)
+	}
+}
+
+// TestScanDir_FIFO_Skipped (Unix-only, mocked): FIFO named *.json → skipped + WARN logged
+// before any open/read (prevents hang). Uses syscall.Mkfifo + writeRaw+Chmod test style;
+// no new helpers. Skips on windows like the read-err AC test.
+func TestScanDir_FIFO_Skipped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO creation via syscall.Mkfifo is Unix-only (per AC; mocked via type check)")
+	}
+	dir := t.TempDir()
+	fifoPath := filepath.Join(dir, "fifo.json")
+	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {
+		t.Fatalf("Mkfifo: %v", err)
+	}
+	// Do not open/write the fifo; the IsRegular check must skip before os.Open/ReadFile.
+
+	var logBuf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	idx, err := keystore.ScanDir(dir, lg)
+	if err != nil {
+		t.Fatalf("ScanDir error = %v, want nil (fifo skipped)", err)
+	}
+	if len(idx) != 0 {
+		t.Errorf("ScanDir len = %d, want 0 (fifo entry skipped)", len(idx))
+	}
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, "WARN") && !strings.Contains(logs, "level=WARN") {
+		t.Errorf("expected WARN record in captured logger, got: %q", logs)
+	}
+	if !strings.Contains(logs, "skipping file (non-regular)") {
+		t.Errorf("expected non-regular skip warn msg, got: %q", logs)
 	}
 }

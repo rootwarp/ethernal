@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -41,6 +42,13 @@ var (
 	// variable is unset or empty. This maps to exit code 2 (user error).
 	ErrEnvVarEmpty = errors.New("passphrase environment variable is unset or empty")
 )
+
+// MaxKeystoreSize is the maximum number of bytes that will be read from a
+// keystore file by ScanDir (for pubkey indexing) or Load (for full decrypt).
+// Files larger than this are rejected by Load with a descriptive error.
+// Both paths use io.LimitReader to enforce the bound. Value is 1 MiB per
+// architecture §15 / FR-P1-E4 (GO-030).
+const MaxKeystoreSize = 1 << 20
 
 // wealdtechInvalidChecksum is the exact string returned *only* by
 // wealdtech/go-eth2-wallet-encryptor-keystorev4@v1.4.1/decrypt.go:168
@@ -145,13 +153,29 @@ func (l *loader) Load(ctx context.Context, path string, pw PassphraseSource) (Ke
 	if err := ctx.Err(); err != nil {
 		return Key{}, err
 	}
-	raw, err := os.ReadFile(path)
+	// Wrap read with io.LimitReader + MaxKeystoreSize per M1.4-4 / arch §6.4/§15.
+	// Probe after the capped read to detect bound exceeded (for >Max files,
+	// ReadAll on Limit succeeds with prefix; the extra byte from underlying f
+	// indicates the file was larger).
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Key{}, fmt.Errorf("%w: %s", ErrKeystoreMissing, path)
 		}
 		return Key{}, fmt.Errorf("read keystore %s: %w", path, err)
 	}
+	defer func() { _ = f.Close() }() // ignore: best-effort on read-only keystore fd after LimitReader cap + probe (matches explicit ignore discipline for closes in package per CONVENTIONS)
+	limited := io.LimitReader(f, MaxKeystoreSize)
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		return Key{}, fmt.Errorf("read keystore %s: %w", path, err)
+	}
+	// Detect > MaxKeystoreSize (LimitReader bound exceeded case).
+	var probe [1]byte
+	if n, _ := f.Read(probe[:]); n > 0 {
+		return Key{}, fmt.Errorf("read keystore %s: size exceeds MaxKeystoreSize (%d bytes)", path, MaxKeystoreSize)
+	}
+	// ignore probeErr from Read (via _): only n>0 matters to detect data beyond MaxKeystoreSize (EOF/other err means no extra bytes); explicit per CONVENTIONS for justified discards; smallest change preserving prior behavior and ACs (static 2MiB case + capped prefix processing)
 
 	var envelope keystoreEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {

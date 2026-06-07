@@ -634,3 +634,36 @@ func TestLoad_HappyPath_32Byte(t *testing.T) {
 		t.Errorf("Load() Secret = %x, want %x", key.Secret, testSecret)
 	}
 }
+
+// TestLoad_2MiBFile_Reject: file > MaxKeystoreSize → LimitReader bound exceeded
+// (detected post-capped ReadAll via probe read on underlying file) → rejected with
+// descriptive error. Follows exact style of M1.4-1/3 Load error tests (write via
+// os.WriteFile in TempDir like TestLoad_MalformedJSON/TestLoad_UnreadableFile,
+// context.Background, newBytesSource, t.Fatal on nil-err, t.Errorf on mismatch;
+// uses the exported MaxKeystoreSize, no new helpers).
+func TestLoad_2MiBFile_Reject(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.json")
+	big := make([]byte, 2*keystore.MaxKeystoreSize)
+	if err := os.WriteFile(path, big, 0o600); err != nil {
+		t.Fatalf("write 2MiB: %v", err)
+	}
+
+	loader := keystore.NewLoader()
+	_, err := loader.Load(context.Background(), path, newBytesSource(testPassphrase))
+	if err == nil {
+		t.Fatal("Load() error = nil, want error (2MiB > MaxKeystoreSize)")
+	}
+	if !strings.Contains(err.Error(), "MaxKeystoreSize") {
+		t.Errorf("Load() error = %v, want descriptive error mentioning MaxKeystoreSize (LimitReader cap exceeded)", err)
+	}
+}
+
+// TestMaxKeystoreSize verifies the constant is exported, has the documented value,
+// and is usable from tests (covers the "MaxKeystoreSize constant exported and documented" AC).
+func TestMaxKeystoreSize(t *testing.T) {
+	const want = 1 << 20
+	if keystore.MaxKeystoreSize != want {
+		t.Errorf("MaxKeystoreSize = %d, want %d", keystore.MaxKeystoreSize, want)
+	}
+}
