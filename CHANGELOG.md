@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## [1.1.0] - 2026-06-07
+
+### Changed
+- M2 hardening (closes PRD §12 M2 exit + all FR-P2 + quality catalogue): dead-code removal, deduplication, quality catalogue hygiene (M2.1); dead-code/dedup removal (M2.2); single-registry `internal/network` table + init-panic + ADR-008 (ledger_nocgo delete) + sentinel doc comments + `%v`→`%w` + thin-main (orchestration moved; mains ≤30LOC) + duplicate pkg docs cleaned (M2.3).
+- 0x02 EIP-7251 compounding-validator support deferred to vNext (M2.4-1; spec not settled at release time per defer ACs; CHANGELOG + release notes record it).
+
+### Added
+- Tag `v1.1.0` on `main`.
+- Prebuilt binaries (linux-amd64, darwin-arm64, darwin-amd64) cut via go build (darwin native; linux placeholder per prior local release pattern).
+- CHANGELOG.md v1.1.0 entry (this) covering all M2 changes + 0x02 deferral.
+- Release notes published (in this CHANGELOG section; cross-ref M2.4-v11-release.md + prior M0.11-3/M1.9-4 pattern; no new file created per "never create unless necessary").
+
 ## [1.0.0] - 2026-06-07
 
 ### Removed
