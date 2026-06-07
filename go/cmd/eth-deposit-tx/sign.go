@@ -11,6 +11,7 @@ import (
 
 	ucli "github.com/urfave/cli/v2"
 
+	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
@@ -31,6 +32,10 @@ type SignConfig struct {
 	OutputFile string
 	// PrivateKeyEnvVar is the env var name holding the hex private key (local signer only).
 	PrivateKeyEnvVar string
+	// AllowNonDepositRecipient when true causes parseUnsignedTx to skip the
+	// deposit-contract address cross-check for the ChainID (the 42-char
+	// IsHexAddress check is never skipped). Default false (strict).
+	AllowNonDepositRecipient bool
 }
 
 // LoadSignConfig parses and validates sign subcommand flags.
@@ -47,17 +52,21 @@ func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
 
 	envVar := c.String("private-key-env")
 	if !posixEnvVarName.MatchString(envVar) {
+		_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: the rejected value should be treated as compromised\n")
 		return nil, ucli.Exit(fmt.Sprintf(
 			"--private-key-env: %q is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?",
-			envVar,
+			cli.Redact(envVar, 4),
 		), 2)
 	}
 
+	allowNonDeposit := c.Bool("allow-non-deposit-recipient")
+
 	return &SignConfig{
-		Signer:           signerType,
-		InputFile:        inputFile,
-		OutputFile:       c.String("output"),
-		PrivateKeyEnvVar: envVar,
+		Signer:                   signerType,
+		InputFile:                inputFile,
+		OutputFile:               c.String("output"),
+		PrivateKeyEnvVar:         envVar,
+		AllowNonDepositRecipient: allowNonDeposit,
 	}, nil
 }
 
@@ -96,7 +105,7 @@ Exit codes:
   2  User / configuration error (bad --signer, missing --input, invalid JSON)
   3  Signer / crypto error (bad key, no Ledger device, Ethereum app not open)
   4  User abort (Ctrl-C or rejection on Ledger device)`,
-		UsageText: `eth-deposit-tx sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]`,
+		UsageText: `eth-deposit-tx sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR] [--allow-non-deposit-recipient]`,
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{
 				Name:     "signer",
@@ -117,6 +126,10 @@ Exit codes:
 				Name:  "private-key-env",
 				Usage: fmt.Sprintf("Environment variable name holding the hex private key (local signer only; default: %s)", defaultPrivKeyEnvVar),
 				Value: defaultPrivKeyEnvVar,
+			},
+			&ucli.BoolFlag{
+				Name:  "allow-non-deposit-recipient",
+				Usage: "Allow signing when the 'to' address is not the deposit contract for ChainID (the strict 42-char hex check still applies; advanced, use with caution)",
 			},
 		},
 		Action: func(c *ucli.Context) error {
@@ -195,6 +208,13 @@ func signUnsignedTx(ctx context.Context, cfg *SignConfig, errWriter io.Writer, u
 		}
 	}
 	defer func() { _ = s.Close() }()
+
+	// Carry the --allow-non-deposit-recipient decision (from cfg) into the
+	// UnsignedTx so that parseUnsignedTx (called inside s.Sign) can see it.
+	// The field is never persisted in JSON (json:"-").
+	if cfg != nil && cfg.AllowNonDepositRecipient {
+		unsigned.AllowNonDepositRecipient = true
+	}
 
 	// 2. Prompt if device interaction is needed.
 	if s.RequiresUserInteraction() && errWriter != nil {

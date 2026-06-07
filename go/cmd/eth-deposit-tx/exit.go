@@ -7,7 +7,7 @@
 //	    chain ID mismatch, signer closed)
 //	4 — user abort (SIGINT / context.Canceled / Ledger device rejection)
 //	5 — broadcast / RPC errors (dial failure, eth_sendRawTransaction error,
-//	    chain ID mismatch between signed tx and RPC node)
+//	    chain ID mismatch between signed tx and RPC node, receipt reverted/timeout)
 //	1 — fallback for any other error
 package main
 
@@ -47,6 +47,11 @@ func ExitCodeFor(err error) int {
 	if errors.As(err, &ec) && ec.ExitCode() == 2 {
 		return 2
 	}
+	// Exit code 2: To address failed strict IsHex+len+cross-check validation
+	// (ErrInvalidToAddress per M0.6-1/M0.6-2; input error, not signer/crypto).
+	if errors.Is(err, signer.ErrInvalidToAddress) {
+		return 2
+	}
 	// Exit code 4: user rejected signing on hardware device.
 	if errors.Is(err, signer.ErrUserRejected) {
 		return 4
@@ -66,7 +71,9 @@ func ExitCodeFor(err error) int {
 	// Exit code 5: broadcast / RPC errors.
 	if errors.Is(err, internaltx.ErrRPCDial) ||
 		errors.Is(err, internaltx.ErrBroadcastFailed) ||
-		errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) {
+		errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) ||
+		errors.Is(err, internaltx.ErrReceiptReverted) ||
+		errors.Is(err, internaltx.ErrReceiptTimeout) {
 		return 5
 	}
 	// Fallback.

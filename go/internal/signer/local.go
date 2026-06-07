@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
+	"github.com/rootwarp/eth-utils/go/internal/cli"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
@@ -57,12 +58,16 @@ func NewLocalSignerFromHex(hexKey string) (*LocalSigner, error) {
 // Only the variable NAME appears in errors; the value is never included.
 func NewLocalSignerFromEnv(envVar string) (*LocalSigner, error) {
 	value := os.Getenv(envVar)
+	nameForErr := envVar
+	if len(envVar) > 32 {
+		nameForErr = cli.Redact(envVar, 4)
+	}
 	if value == "" {
-		return nil, fmt.Errorf("environment variable %q is not set or empty: %w", envVar, ErrInvalidKey)
+		return nil, fmt.Errorf("environment variable %q is not set or empty: %w", nameForErr, ErrInvalidKey)
 	}
 	s, err := NewLocalSignerFromHex(value)
 	if err != nil {
-		return nil, fmt.Errorf("environment variable %q: %w", envVar, ErrInvalidKey)
+		return nil, fmt.Errorf("environment variable %q: %w", nameForErr, ErrInvalidKey)
 	}
 	return s, nil
 }

@@ -11,6 +11,7 @@ import (
 
 	ucli "github.com/urfave/cli/v2"
 
+	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 )
 
@@ -52,9 +53,10 @@ func LoadRunConfig(c *ucli.Context) (*RunConfig, error) {
 
 	envVar := c.String("private-key-env")
 	if !posixEnvVarName.MatchString(envVar) {
+		_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: the rejected value should be treated as compromised\n")
 		return nil, ucli.Exit(fmt.Sprintf(
 			"--private-key-env: %q is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?",
-			envVar,
+			cli.Redact(envVar, 4),
 		), 2)
 	}
 

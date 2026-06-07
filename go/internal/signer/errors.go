@@ -47,4 +47,10 @@ var (
 	// ErrLedgerNotSupported indicates the binary was built without CGO, so the
 	// Ledger HID transport is unavailable. Rebuild with CGO_ENABLED=1.
 	ErrLedgerNotSupported = errors.New("ledger support requires CGO_ENABLED=1; rebuild with cgo enabled")
+
+	// ErrInvalidToAddress indicates the To field in the unsigned transaction
+	// failed strict validation in parseUnsignedTx: !common.IsHexAddress || len != 42,
+	// or the address is not the deposit contract for unsigned.ChainID (via network.LookupByChainID).
+	// Exit code 2 (input validation) per architecture §15 and M0.6-1.
+	ErrInvalidToAddress = errors.New("To is not a valid 0x-prefixed 42-char address")
 )

@@ -137,3 +137,53 @@ func TestLocalSigner_Close_ZeroizesKey(t *testing.T) {
 		}
 	}
 }
+
+// TestParseUnsignedTx_BadTo_NotHex: non-hex to (e.g. trailing g) → ErrInvalidToAddress (per AC).
+func TestParseUnsignedTx_BadTo_NotHex(t *testing.T) {
+	unsigned := localUnsigned()
+	unsigned.To = "0x424242424242424242424242424242424242424g" // len=42 but invalid hex digit
+	_, err := parseUnsignedTx(unsigned)
+	if !errors.Is(err, ErrInvalidToAddress) {
+		t.Fatalf("expected ErrInvalidToAddress for non-hex To, got %v", err)
+	}
+}
+
+// TestParseUnsignedTx_BadTo_WrongLength: 41/43-char to → ErrInvalidToAddress (per AC; follows M0.4-1 len style).
+func TestParseUnsignedTx_BadTo_WrongLength(t *testing.T) {
+	base := localUnsigned()
+	tests := []struct {
+		name string
+		to   string
+	}{
+		{"41char", "0x424242424242424242424242424242424242424"},   // drop last
+		{"43char", "0x42424242424242424242424242424242424242422"}, // extra
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := base
+			u.To = tt.to
+			_, err := parseUnsignedTx(u)
+			if !errors.Is(err, ErrInvalidToAddress) {
+				t.Fatalf("expected ErrInvalidToAddress for wrong-len To %q, got %v", tt.to, err)
+			}
+		})
+	}
+}
+
+// TestParseUnsignedTx_BadTo_NotDepositContract: valid 42-hex EIP-55-ish but wrong contract for chain → sentinel (per AC).
+func TestParseUnsignedTx_BadTo_NotDepositContract(t *testing.T) {
+	unsigned := localUnsigned()                                // chainID 17000 = holesky (0x42..)
+	unsigned.To = "0x00000000219ab540356cBB839Cbe05303d7705Fa" // mainnet/hoodi contract (valid hex+len, IsHex true, but != holesky's)
+	_, err := parseUnsignedTx(unsigned)
+	if !errors.Is(err, ErrInvalidToAddress) {
+		t.Fatalf("expected ErrInvalidToAddress for non-deposit To, got %v", err)
+	}
+}
+
+// TestParseUnsignedTx_HappyPath exercises correct contract +42-hex still works (existing fixtures pass; AC).
+func TestParseUnsignedTx_HappyPath(t *testing.T) {
+	_, err := parseUnsignedTx(localUnsigned())
+	if err != nil {
+		t.Fatalf("happy path (correct 42-hex deposit contract for chain) failed: %v", err)
+	}
+}

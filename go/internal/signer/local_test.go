@@ -388,7 +388,7 @@ func TestLocalSigner_Sign_InvalidMaxPriorityFeeHex_Rejected(t *testing.T) {
 // TestLocalSigner_Sign_VariousChainIDs verifies signing works for mainnet and other chains.
 func TestLocalSigner_Sign_VariousChainIDs(t *testing.T) {
 	keyHex, _ := validHexKey(t)
-	for _, chainID := range []uint64{1, 5, 11155111, 17000} {
+	for _, chainID := range []uint64{1, 11155111, 17000} {
 		t.Run(fmt.Sprintf("chainID_%d", chainID), func(t *testing.T) {
 			s, err := signer.NewLocalSignerFromHex(keyHex)
 			if err != nil {
@@ -398,12 +398,66 @@ func TestLocalSigner_Sign_VariousChainIDs(t *testing.T) {
 
 			unsigned := holeskyUnsignedTx()
 			unsigned.ChainID = chainID
+			// Set To to the deposit contract for *this* chainID so the M0.6-1
+			// cross-check in parseUnsignedTx passes (existing test updated for
+			// the strict boundary; 5/goerli dropped as unsupported network).
+			switch chainID {
+			case 1:
+				unsigned.To = "0x00000000219ab540356cBB839Cbe05303d7705Fa"
+			case 11155111:
+				unsigned.To = "0x7f02C3E3c98b133055B8B348B2Ac625669Ed295D"
+			default:
+				unsigned.To = "0x4242424242424242424242424242424242424242"
+			}
 			signed, err := s.Sign(context.Background(), unsigned)
 			if err != nil {
 				t.Fatalf("Sign chainID=%d: %v", chainID, err)
 			}
 			if signed.V != "0" && signed.V != "1" {
 				t.Errorf("V = %q, want decimal 0 or 1", signed.V)
+			}
+		})
+	}
+}
+
+// TestNewLocalSignerFromEnv_NoLeak for both Missing-var and Invalid-value paths (architecture §11.7).
+// Bad cases use long key-like arg to exercise redaction; happy unchanged covered by prior tests; uses errors.Is.
+func TestNewLocalSignerFromEnv_NoLeak(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVar string
+		setVal string // if non-empty, setenv to this (for invalid-value path)
+	}{
+		{
+			name:   "missing_var_keylike",
+			envVar: "0x" + strings.Repeat("a", 64), // long, triggers redact in error; would have leaked before
+		},
+		{
+			name:   "invalid_value_path",
+			envVar: "TEST_NEW_NOLEAK_BAD",
+			setVal: "not-a-64-hex-value",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setVal != "" {
+				t.Setenv(tc.envVar, tc.setVal)
+			}
+			_, err := signer.NewLocalSignerFromEnv(tc.envVar)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !errors.Is(err, signer.ErrInvalidKey) {
+				t.Errorf("want errors.Is(ErrInvalidKey), got %v", err)
+			}
+			errStr := err.Error()
+			if len(tc.envVar) > 32 && strings.Contains(errStr, tc.envVar) {
+				t.Errorf("envVar arg (or keylike) leaked into err: %s", errStr)
+			}
+			if tc.name == "missing_var_keylike" {
+				if !strings.Contains(errStr, "… (len=") {
+					t.Errorf("redacted marker missing from err for keylike: %s", errStr)
+				}
 			}
 		})
 	}

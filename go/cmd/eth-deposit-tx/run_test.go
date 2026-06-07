@@ -486,3 +486,40 @@ func TestRunSubcommand_Help(t *testing.T) {
 		t.Errorf("run --help missing --keep-unsigned flag, got: %s", s)
 	}
 }
+
+// TestLoadRunConfig_RejectKeyValueNoLeak (architecture §11.7): set --private-key-env to a known sentinel string (simulating key value); error message contains only the redacted form; full string not present. Also verifies "treat as compromised" warning on stderr.
+func TestLoadRunConfig_RejectKeyValueNoLeak(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	app := newTestApp()
+	var buf bytes.Buffer
+	app.Writer = &buf
+	app.ErrWriter = &buf
+
+	sentinel := "0x" + generateTestPrivKey(t)
+	err := app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "holesky",
+		"--input-file", fixtureAbsPath(t),
+		"--signer", "local",
+		"--private-key-env", sentinel,
+	})
+	if err == nil {
+		t.Fatal("expected error for key value as --private-key-env, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, sentinel) {
+		t.Errorf("full sentinel key leaked into error: %s", errStr)
+	}
+	if !strings.Contains(errStr, "… (len=") {
+		t.Errorf("redacted form missing from error: %s", errStr)
+	}
+	if !strings.Contains(buf.String(), "treated as compromised") {
+		t.Errorf("warning not visible on stderr: %s", buf.String())
+	}
+}

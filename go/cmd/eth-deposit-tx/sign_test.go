@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -539,4 +540,143 @@ func randomSuffix(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return strings.ToUpper(hex.EncodeToString(b))
+}
+
+// TestSign_NonDepositRecipient_WithOverride_Allowed: override flag set + non-deposit `To` → no exit-2 reject.
+// (exact AC name per M0.6-2 plan; follows M0.6-1 parse test + sign cmd style; uses errors.Is)
+func TestSign_NonDepositRecipient_WithOverride_Allowed(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	envVar := "TEST_SIGN_NONDEPOSIT_OVERRIDE_" + randomSuffix(t)
+	t.Setenv(envVar, "0x"+generateTestPrivKey(t))
+
+	// Build unsigned JSON with valid 42-hex To that is NOT the deposit contract for chainId=17000 (holesky).
+	var u map[string]interface{}
+	if err := json.Unmarshal(unsignedTxJSON(), &u); err != nil {
+		t.Fatal(err)
+	}
+	u["to"] = "0x00000000219ab540356cBB839Cbe05303d7705Fa" // mainnet/hoodi contract (valid hex/len)
+	badJSON, err := json.MarshalIndent(u, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	badJSON = append(badJSON, '\n')
+
+	inFile := filepath.Join(t.TempDir(), "unsigned-non-deposit.json")
+	if err := os.WriteFile(inFile, badJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := newTestApp()
+	var out bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &bytes.Buffer{}
+
+	err = app.Run([]string{
+		"eth-deposit-tx", "sign",
+		"--signer", "local",
+		"--input", inFile,
+		"--output", "-",
+		"--private-key-env", envVar,
+		"--allow-non-deposit-recipient",
+	})
+	if err != nil {
+		t.Fatalf("with --allow-non-deposit-recipient, expected success for non-deposit To, got err: %v", err)
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Errorf("signed output not valid JSON with override: %s", out.String())
+	}
+}
+
+// TestSign_NonDepositRecipient_NoOverride_Reject: override absent → exit 2.
+// (exact AC name; errors.Is on sentinel; exit via ExitCodeFor per cmd contract)
+func TestSign_NonDepositRecipient_NoOverride_Reject(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	envVar := "TEST_SIGN_NONDEPOSIT_NOOVERRIDE_" + randomSuffix(t)
+	t.Setenv(envVar, "0x"+generateTestPrivKey(t))
+
+	// Same non-deposit To as above.
+	var u map[string]interface{}
+	if err := json.Unmarshal(unsignedTxJSON(), &u); err != nil {
+		t.Fatal(err)
+	}
+	u["to"] = "0x00000000219ab540356cBB839Cbe05303d7705Fa"
+	badJSON, err := json.MarshalIndent(u, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	badJSON = append(badJSON, '\n')
+
+	inFile := filepath.Join(t.TempDir(), "unsigned-non-deposit.json")
+	if err := os.WriteFile(inFile, badJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := newTestApp()
+	var buf bytes.Buffer
+	app.Writer = &buf
+	app.ErrWriter = &buf
+
+	err = app.Run([]string{
+		"eth-deposit-tx", "sign",
+		"--signer", "local",
+		"--input", inFile,
+		"--private-key-env", envVar,
+		// deliberately no --allow-non-deposit-recipient
+	})
+	if err == nil {
+		t.Fatal("expected error for non-deposit To without override, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	if !errors.Is(err, signer.ErrInvalidToAddress) {
+		t.Fatalf("expected errors.Is(ErrInvalidToAddress), got %v", err)
+	}
+}
+
+// TestLoadSignConfig_RejectKeyValueNoLeak (architecture §11.7): set --private-key-env to a known sentinel string (simulating key value); error message contains only the redacted form; full string not present. Also verifies "treat as compromised" warning on stderr.
+func TestLoadSignConfig_RejectKeyValueNoLeak(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	inFile := filepath.Join(t.TempDir(), "unsigned.json")
+	if err := os.WriteFile(inFile, unsignedTxJSON(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := newTestApp()
+	var buf bytes.Buffer
+	app.Writer = &buf
+	app.ErrWriter = &buf
+
+	sentinel := "0x" + generateTestPrivKey(t)
+	err := app.Run([]string{
+		"eth-deposit-tx", "sign",
+		"--signer", "local",
+		"--input", inFile,
+		"--private-key-env", sentinel,
+	})
+	if err == nil {
+		t.Fatal("expected error for key value as --private-key-env, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, sentinel) {
+		t.Errorf("full sentinel key leaked into error: %s", errStr)
+	}
+	if !strings.Contains(errStr, "… (len=") {
+		t.Errorf("redacted form missing from error: %s", errStr)
+	}
+	if !strings.Contains(buf.String(), "treated as compromised") {
+		t.Errorf("warning not visible on stderr: %s", buf.String())
+	}
 }

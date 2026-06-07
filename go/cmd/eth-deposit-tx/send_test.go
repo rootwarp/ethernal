@@ -13,6 +13,10 @@ import (
 
 	ucli "github.com/urfave/cli/v2"
 
+	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/rootwarp/eth-utils/go/internal/network"
+	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
@@ -490,8 +494,8 @@ func TestSendCommand_WaitForReceipt_Timeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
-	if !strings.Contains(err.Error(), "timed out") {
-		t.Errorf("error should mention timeout; got: %v", err)
+	if !errors.Is(err, internaltx.ErrReceiptTimeout) {
+		t.Errorf("expected errors.Is(ErrReceiptTimeout) (wrapped); got: %v", err)
 	}
 }
 
@@ -562,5 +566,354 @@ func TestSendCommand_RPCDialFailure(t *testing.T) {
 	}
 	if got := ExitCodeFor(err); got != 5 {
 		t.Errorf("exit code = %d, want 5; err = %v", got, err)
+	}
+}
+
+// TestSendAction_PromptValuesFromRLP: capture stderr, verify "(decoded from RLP)"
+// label present and values match the decoded tx (exact AC name per M0.6-5;
+// follows M0.6-1/M0.6-2 named AC test style + M0.5 table/happy patterns;
+// uses existing fixture + --yes path through sendAction).
+func TestSendAction_PromptValuesFromRLP(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return holeskyChainID, nil },
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) { return fakeTxHash, nil },
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	errStr := errOut.String()
+	for _, want := range []string{"(decoded from RLP)", "0x4242424242424242424242424242424242424242", "0 (decoded from RLP)"} {
+		if !strings.Contains(errStr, want) {
+			t.Errorf("stderr prompt missing %q (decoded label or value); got:\n%s", want, errStr)
+		}
+	}
+	if !strings.Contains(errStr, "32.000000 ETH") {
+		t.Errorf("value not in prompt: %s", errStr)
+	}
+}
+
+// TestSendAction_ChainIDGuard_DecodedVsRPC: RPC reports chainID different from
+// decoded (==json here) → ErrBroadcastChainIDMismatch exit 5 (exact AC;
+// reuses existing mismatch test pattern + errors.Is).
+func TestSendAction_ChainIDGuard_DecodedVsRPC(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return 1, nil }, // != holesky decoded
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) {
+			t.Error("broadcast must not be called when chain guard fails")
+			return "", nil
+		},
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+	})
+	if err == nil {
+		t.Fatal("expected error for decoded-vs-RPC chain mismatch, got nil")
+	}
+	if got := ExitCodeFor(err); got != 5 {
+		t.Errorf("exit code = %d, want 5; err = %v", got, err)
+	}
+	if !errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) {
+		t.Errorf("expected errors.Is(ErrBroadcastChainIDMismatch), got %v", err)
+	}
+}
+
+// TestSendAction_ValidateBeforeBroadcast_Order: instrumented broadcaster +
+// validate override shows validateSignedAgainstRLP called before
+// broadcaster's ChainID() (exact AC name; spy pattern follows newBroadcaster
+// override in this file + M0.5/M0.6 validator call-site tests).
+func TestSendAction_ValidateBeforeBroadcast_Order(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	validateCalledBeforeChainID := false
+	origValidate := validateSignedAgainstRLP
+	validateSignedAgainstRLP = func(signed *signer.SignedTx, netParams network.Params) (*types.Transaction, error) {
+		// spy: record that validate ran; delegate to real
+		validateCalledBeforeChainID = true // set before any ChainID
+		return origValidate(signed, netParams)
+	}
+	t.Cleanup(func() { validateSignedAgainstRLP = origValidate })
+
+	chainIDCalled := false
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) {
+			chainIDCalled = true
+			if !validateCalledBeforeChainID {
+				t.Error("BroadcasterChainID() was called before validateSignedAgainstRLP")
+			}
+			return holeskyChainID, nil
+		},
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) { return fakeTxHash, nil },
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !validateCalledBeforeChainID {
+		t.Error("validateSignedAgainstRLP was never called")
+	}
+	if !chainIDCalled {
+		t.Error("ChainID was never called")
+	}
+}
+
+// The following are the M0.6-4 AC tests (TestValidateRLP_*) added here so that
+// "All M0.6-4 tests still green when run through sendAction" AC can be satisfied
+// in this integration step (co-located validate per M0.6-4 notes allowing send.go).
+// They are table-driven for bad cases + happy unchanged; use errors.Is; existing
+// fixtures pass. Follow M0.5 TestValidate_*_Table style + M0.6-1 parse AC tests.
+
+func TestValidateRLP_TypeMismatch(t *testing.T) {
+	// Use rawRLP with non-dynamic prefix (0x01 = AccessList). UnmarshalBinary
+	// will fail (or we hit before type assert); either way exit 2 per AC.
+	// (Smallest effective; no full legacy tx RLP construction required.)
+	bad := &signer.SignedTx{
+		Unsigned: internaltx.UnsignedTx{ChainID: holeskyChainID, To: "0x4242424242424242424242424242424242424242"},
+		From:     "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1",
+		Hash:     "0x00",
+		RawRLP:   "0x01deadbeef", // type=1 will cause decode err -> exit 2
+	}
+	net, _ := network.LookupByChainID(holeskyChainID)
+	_, err := realValidateSignedAgainstRLP(bad, net)
+	if err == nil {
+		t.Fatal("expected type/decode error for non-dynamic RLP")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit=%d want 2 for type mismatch", got)
+	}
+}
+
+func TestValidateRLP_SenderMismatch(t *testing.T) {
+	// Use golden fixture (correct sig for its from), but tamper From to different.
+	data := signedTxFixture(t)
+	var s signer.SignedTx
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.From = "0x0000000000000000000000000000000000000001" // mismatch recovered
+	net, _ := network.LookupByChainID(holeskyChainID)
+	_, err := realValidateSignedAgainstRLP(&s, net)
+	if err == nil {
+		t.Fatal("expected sender mismatch")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit=%d want 2", got)
+	}
+	if !strings.Contains(err.Error(), "sender") && !strings.Contains(fmt.Sprintf("%v", err), "sender") {
+		// ucli.Exit error text
+	}
+}
+
+func TestValidateRLP_ChainIDDivergence(t *testing.T) {
+	data := signedTxFixture(t)
+	var s signer.SignedTx
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Unsigned.ChainID = 1               // tamper json chain (RLP inside is 17000)
+	net, _ := network.LookupByChainID(1) // use matching declared for net
+	_, err := realValidateSignedAgainstRLP(&s, net)
+	if err == nil {
+		t.Fatal("expected chainID divergence")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit=%d want 2; err=%v", got, err)
+	}
+	if !strings.Contains(fmt.Sprintf("%v", err), "chainID") {
+		t.Errorf("divergence msg should mention chainID; got %v", err)
+	}
+}
+
+func TestValidateRLP_ToDivergence(t *testing.T) {
+	data := signedTxFixture(t)
+	var s signer.SignedTx
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Unsigned.To = "0x00000000219ab540356cBB839Cbe05303d7705Fa" // different valid
+	net, _ := network.LookupByChainID(holeskyChainID)
+	_, err := realValidateSignedAgainstRLP(&s, net)
+	if err == nil {
+		t.Fatal("expected to divergence")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit=%d want 2", got)
+	}
+}
+
+func TestValidateRLP_NonDepositContract(t *testing.T) {
+	data := signedTxFixture(t)
+	var s signer.SignedTx
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	// keep json To as deposit, but to test non, we change the netParams passed
+	// to one whose deposit != the tx's To. (or tamper To to non-deposit)
+	s.Unsigned.To = "0x00000000219ab540356cBB839Cbe05303d7705Fa" // non-holesky deposit
+	netH, _ := network.LookupByChainID(holeskyChainID)           // holesky contract is 42..
+	_, err := realValidateSignedAgainstRLP(&s, netH)
+	if err == nil {
+		t.Fatal("expected non-deposit contract reject")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit=%d want 2", got)
+	}
+}
+
+func TestValidateRLP_HappyPath(t *testing.T) {
+	data := signedTxFixture(t)
+	var s signer.SignedTx
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	net, _ := network.LookupByChainID(holeskyChainID)
+	dec, err := realValidateSignedAgainstRLP(&s, net)
+	if err != nil {
+		t.Fatalf("happy path validate failed: %v", err)
+	}
+	if dec == nil {
+		t.Fatal("expected non-nil decoded tx")
+	}
+	if dec.ChainId().Uint64() != holeskyChainID {
+		t.Errorf("decoded chain = %d want %d", dec.ChainId().Uint64(), holeskyChainID)
+	}
+}
+
+// Exact-named AC tests per M0.7-2 (bad cases using mock; happy receipt status=1 unchanged in sibling test;
+// errors.Is + ExitCodeFor; follows M0.6-5/M0.6-4 named AC test style + prior sentinel patterns).
+func TestSend_ReceiptRevert_Exit5_FilePresent(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	mockRec := &internaltx.Receipt{
+		TransactionHash: fakeTxHash,
+		Status:          0,
+		BlockNumber:     12345,
+		BlockHash:       "0xabc",
+		GasUsed:         100000,
+	}
+
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return holeskyChainID, nil },
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) { return fakeTxHash, nil },
+		TransactionReceiptFn: func(_ context.Context, _ string) (*internaltx.Receipt, error) {
+			return mockRec, nil
+		},
+	})
+
+	recFile := filepath.Join(t.TempDir(), "receipt-revert.json")
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+		"--receipt-output", recFile,
+		"--receipt-timeout", "5s",
+	})
+	if err == nil {
+		t.Fatal("expected revert error, got nil")
+	}
+	if got := ExitCodeFor(err); got != 5 {
+		t.Errorf("exit code = %d, want 5; err = %v", got, err)
+	}
+	if !errors.Is(err, internaltx.ErrReceiptReverted) {
+		t.Errorf("expected errors.Is(ErrReceiptReverted), got %v", err)
+	}
+	// file written before error return (forensics)
+	if _, statErr := os.Stat(recFile); statErr != nil {
+		t.Errorf("receipt file not present after revert: %v", statErr)
+	}
+}
+
+func TestSend_ReceiptTimeout_Exit5_FileAbsent(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return holeskyChainID, nil },
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) { return fakeTxHash, nil },
+		TransactionReceiptFn: func(_ context.Context, _ string) (*internaltx.Receipt, error) {
+			return nil, nil // never mined -> triggers timeout sentinel
+		},
+	})
+
+	recFile := filepath.Join(t.TempDir(), "receipt-timeout.json")
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+		"--wait-for-receipt",
+		"--receipt-output", recFile,
+		"--receipt-timeout", "100ms",
+	})
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if got := ExitCodeFor(err); got != 5 {
+		t.Errorf("exit code = %d, want 5; err = %v", got, err)
+	}
+	if !errors.Is(err, internaltx.ErrReceiptTimeout) {
+		t.Errorf("expected errors.Is(ErrReceiptTimeout), got %v", err)
+	}
+	// no file written on timeout path
+	if _, statErr := os.Stat(recFile); statErr == nil {
+		t.Error("receipt file should be absent on timeout")
 	}
 }

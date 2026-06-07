@@ -151,6 +151,12 @@ func (v *verifier) Verify(pub [48]byte, signingRoot [32]byte, sig [96]byte) (boo
 	return hSig.VerifyByte(&hPub, signingRoot[:]), nil
 }
 
+// ErrPubkeyInvalid is returned by ValidatePubkeyBytes when the 48-byte
+// compressed point is not a valid BLS12-381 G1 point (off-curve, bad encoding,
+// etc.). Mirrors architecture §6.6 / §15; used by both deposit and tx layers
+// (M0 enables the check; M1.2-2 will also reject identity via ErrPubkeyZero).
+var ErrPubkeyInvalid = errors.New("bls: pubkey is not a valid G1 point")
+
 // ValidatePubkeyBytes checks that b is a valid compressed BLS12-381 G1 point.
 // Init must have been called (or will be called internally). Returns nil if valid.
 func ValidatePubkeyBytes(pub [48]byte) error {
@@ -159,7 +165,7 @@ func ValidatePubkeyBytes(pub [48]byte) error {
 	}
 	var hPub bls.PublicKey
 	if err := hPub.Deserialize(pub[:]); err != nil {
-		return fmt.Errorf("bls: invalid G1 point: %w", err)
+		return fmt.Errorf("%w: %v", ErrPubkeyInvalid, err)
 	}
 	return nil
 }

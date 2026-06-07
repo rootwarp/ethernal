@@ -25,4 +25,9 @@ type UnsignedTx struct {
 	Nonce uint64 `json:"nonce"`
 	// Type is always "0x2" for EIP-1559 transactions.
 	Type string `json:"type"`
+	// AllowNonDepositRecipient is an internal (non-JSON) flag, set by the
+	// signing CLI when --allow-non-deposit-recipient is passed. It is
+	// inspected by parseUnsignedTx to decide whether to skip the deposit
+	// contract cross-check (M0.6-2). Never serialized; zero value means strict.
+	AllowNonDepositRecipient bool `json:"-"`
 }

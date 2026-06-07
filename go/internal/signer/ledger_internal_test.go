@@ -22,7 +22,7 @@ import (
 func internaltxUnsigned() internaltx.UnsignedTx {
 	return internaltx.UnsignedTx{
 		ChainID:              1,
-		To:                   "0x1234",
+		To:                   "0x00000000219ab540356cBB839Cbe05303d7705Fa", // mainnet deposit contract (42-hex, matches LookupByChainID(1))
 		Value:                "0x1",
 		MaxFeePerGas:         "0x3B9ACA00",
 		MaxPriorityFeePerGas: "0x3B9ACA00",

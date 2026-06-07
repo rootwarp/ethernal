@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +16,9 @@ import (
 
 	ucli "github.com/urfave/cli/v2"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+
 	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
@@ -23,6 +28,11 @@ import (
 var newBroadcaster = func(ctx context.Context, rpcURL string) (internaltx.EthBroadcaster, error) {
 	return internaltx.NewEthClient(ctx, rpcURL)
 }
+
+// validateSignedAgainstRLP is the production RLP/JSON validator (per M0.6-4/5,
+// arch §7.3/§13.1/§15). Assigned at init to the real impl; tests rebind a
+// wrapper (capturing orig) for call-order spying exactly as newBroadcaster.
+var validateSignedAgainstRLP = realValidateSignedAgainstRLP
 
 // SendConfig holds parsed, validated inputs for the send subcommand.
 type SendConfig struct {
@@ -165,46 +175,71 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 		return ucli.Exit(fmt.Sprintf("invalid input JSON: %v", err), 2)
 	}
 
-	// 2. Dial RPC.
+	// 2. Compute netParams from *declared* JSON chainID (not RPC) so we can
+	//    call validateSignedAgainstRLP *before* any broadcaster.ChainID().
+	//    (enables TestSendAction_ValidateBeforeBroadcast_Order and validate-first).
+	declaredChainID := signed.Unsigned.ChainID
+	netParams, lookupErr := network.LookupByChainID(declaredChainID)
+	if lookupErr != nil {
+		// Non-fatal fallback for display/validate contract check (matches prior behavior).
+		netParams = network.Params{
+			Name:    network.Network(fmt.Sprintf("chain-%d", declaredChainID)),
+			ChainID: declaredChainID,
+		}
+	}
+
+	// 3. validate-first: RLP vs JSON + deposit contract (M0.6-5 restructure per
+	//    arch §7.3/§13.1). Uses declared net for contract check. All divergence
+	//    and type errors -> ucli.Exit(...,2) with descriptive msg.
+	rlpTx, err := validateSignedAgainstRLP(&signed, netParams)
+	if err != nil {
+		return err
+	}
+
+	// 4. Dial RPC (after validate).
 	broadcaster, err := newBroadcaster(c.Context, cfg.RPCURL)
 	if err != nil {
 		return err
 	}
 	defer broadcaster.Close()
 
-	// 3. Verify chain ID.
+	// 5. RPC chain ID guard now against the *decoded* rlpTx (not signed.Unsigned).
 	rpcChainID, err := broadcaster.BroadcasterChainID(c.Context)
 	if err != nil {
 		return fmt.Errorf("%w: fetch chain ID: %v", internaltx.ErrBroadcastFailed, err)
 	}
-	if rpcChainID != signed.Unsigned.ChainID {
+	if rpcChainID != rlpTx.ChainId().Uint64() {
 		return fmt.Errorf("%w: signed tx has chain ID %d but RPC reports %d",
-			internaltx.ErrBroadcastChainIDMismatch, signed.Unsigned.ChainID, rpcChainID)
+			internaltx.ErrBroadcastChainIDMismatch, rlpTx.ChainId().Uint64(), rpcChainID)
 	}
 
-	// 4. Resolve network for display.
-	netParams, err := network.LookupByChainID(rpcChainID)
-	if err != nil {
-		// Non-fatal: we'll display what we can without a network name.
+	// 6. Re-resolve netParams from the now-authoritative (guard-passed) rpc chain.
+	netParams, lookupErr = network.LookupByChainID(rpcChainID)
+	if lookupErr != nil {
 		netParams = network.Params{
 			Name:    network.Network(fmt.Sprintf("chain-%d", rpcChainID)),
 			ChainID: rpcChainID,
 		}
 	}
 
-	// 5. Print the "about to broadcast" prompt.
-	valueBigWei, _ := hexToBigInt(signed.Unsigned.Value)
-	maxFeeBigWei, _ := hexToBigInt(signed.Unsigned.MaxFeePerGas)
-
+	// 7. Print the "about to broadcast" prompt from *decoded* rlpTx values,
+	//    labelled "(decoded from RLP)" (existing prompt code updated to take
+	//    decoded; per M0.6-5 AC + arch §13.1). From remains from container.
+	valueBigWei := rlpTx.Value()
+	maxFeeBigWei := rlpTx.GasFeeCap()
+	toStr := "0x0000000000000000000000000000000000000000"
+	if rlpTx.To() != nil {
+		toStr = rlpTx.To().Hex()
+	}
 	_, _ = fmt.Fprintf(c.App.ErrWriter, "\n")                                                                               // ignore: best-effort to ErrWriter
 	_, _ = fmt.Fprintf(c.App.ErrWriter, "> You are about to BROADCAST a %s deposit transaction.\n", formatETH(valueBigWei)) // ignore: best-effort to ErrWriter
 	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Network:        %s (chain ID %d)\n", netParams.Name, netParams.ChainID)        // ignore: best-effort to ErrWriter
 	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   From:           %s\n", signed.From)                                            // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   To (deposit):   %s\n", signed.Unsigned.To)                                     // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Value:          %s\n", formatETH(valueBigWei))                                 // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Nonce:          %d\n", signed.Unsigned.Nonce)                                  // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   MaxFeePerGas:   %s\n", formatGwei(maxFeeBigWei))                               // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Tx hash:        %s\n", signed.Hash)                                            // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   To (deposit):   %s (decoded from RLP)\n", toStr)                               // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Value:          %s (decoded from RLP)\n", formatETH(valueBigWei))              // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Nonce:          %d (decoded from RLP)\n", rlpTx.Nonce())                       // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   MaxFeePerGas:   %s (decoded from RLP)\n", formatGwei(maxFeeBigWei))            // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Tx hash:        %s (decoded from RLP)\n", rlpTx.Hash().Hex())                  // ignore: best-effort to ErrWriter
 	_, _ = fmt.Fprintf(c.App.ErrWriter, ">\n")                                                                              // ignore: best-effort to ErrWriter
 
 	// 6. Confirmation.
@@ -263,10 +298,79 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 				}
 				slog.Info("wrote receipt", "path", cfg.ReceiptOutputFile)
 			}
+			if rec.Status == 0 {
+				return internaltx.ErrReceiptReverted
+			}
 		}
 	}
 
 	return nil
+}
+
+// realValidateSignedAgainstRLP implements the GO-004 boundary check: decode
+// RawRLP, enforce DynamicFee type, recover+match sender, field-compare all
+// critical metadata against the JSON container, enforce deposit contract To
+// (no override path in send), and return the decoded tx for prompt/guard use.
+// Divergences and type errors surface via ucli.Exit(..., 2) with context so
+// operator sees "JSON vs decoded". Follows M0.6-1 parse style + M0.5 validator
+// patterns (errors.Is-able sentinels via ucli, no new sentinels here).
+func realValidateSignedAgainstRLP(signed *signer.SignedTx, netParams network.Params) (*types.Transaction, error) {
+	if signed == nil {
+		return nil, ucli.Exit("validate: nil signed tx", 2)
+	}
+	rawHex := strings.TrimPrefix(signed.RawRLP, "0x")
+	rawBytes, err := hex.DecodeString(rawHex)
+	if err != nil {
+		return nil, ucli.Exit(fmt.Sprintf("validate: invalid rawRLP hex: %v", err), 2)
+	}
+	var decoded types.Transaction
+	if err := decoded.UnmarshalBinary(rawBytes); err != nil {
+		return nil, ucli.Exit(fmt.Sprintf("validate: RLP decode failed: %v", err), 2)
+	}
+	if decoded.Type() != types.DynamicFeeTxType {
+		return nil, ucli.Exit(fmt.Sprintf("validate: tx type %d is not DynamicFeeTxType", decoded.Type()), 2)
+	}
+	// Recover sender from RLP using LatestSigner (M0.2 geth).
+	s := types.LatestSignerForChainID(decoded.ChainId())
+	recovered, err := types.Sender(s, &decoded)
+	if err != nil {
+		return nil, ucli.Exit(fmt.Sprintf("validate: sender recovery: %v", err), 2)
+	}
+	if recovered.Hex() != signed.From {
+		return nil, ucli.Exit("validate: recovered sender does not match signed.from", 2)
+	}
+	// Field divergence checks (descriptive for operator, per M0.6-4 notes using
+	// errors.Join + context; maps to exit 2).
+	var diverges []error
+	if decoded.ChainId().Uint64() != signed.Unsigned.ChainID {
+		diverges = append(diverges, fmt.Errorf("chainID: json=%d decoded=%d", signed.Unsigned.ChainID, decoded.ChainId().Uint64()))
+	}
+	toHex := ""
+	if decoded.To() != nil {
+		toHex = decoded.To().Hex()
+	}
+	if toHex != signed.Unsigned.To {
+		diverges = append(diverges, fmt.Errorf("to: json=%s decoded=%s", signed.Unsigned.To, toHex))
+	}
+	vJSON, _ := hexToBigInt(signed.Unsigned.Value)
+	if vJSON == nil || decoded.Value().Cmp(vJSON) != 0 {
+		diverges = append(diverges, fmt.Errorf("value: json=%s decoded=%s", signed.Unsigned.Value, decoded.Value().String()))
+	}
+	if decoded.Nonce() != signed.Unsigned.Nonce {
+		diverges = append(diverges, fmt.Errorf("nonce: json=%d decoded=%d", signed.Unsigned.Nonce, decoded.Nonce()))
+	}
+	if decoded.Hash().Hex() != signed.Hash {
+		diverges = append(diverges, fmt.Errorf("hash: json=%s decoded=%s", signed.Hash, decoded.Hash().Hex()))
+	}
+	if len(diverges) != 0 {
+		return nil, ucli.Exit(fmt.Sprintf("JSON metadata diverges from decoded RLP: %v", errors.Join(diverges...)), 2)
+	}
+	// Deposit contract cross-check (netParams from caller; no --allow override in send path).
+	depositAddr := common.BytesToAddress(netParams.DepositContractAddress[:])
+	if decoded.To() == nil || *decoded.To() != depositAddr {
+		return nil, ucli.Exit(fmt.Sprintf("decoded To %s is not deposit contract for network", toHex), 2)
+	}
+	return &decoded, nil
 }
 
 // pollReceipt polls for a transaction receipt until timeout.
@@ -289,7 +393,7 @@ func pollReceipt(ctx context.Context, bc internaltx.EthBroadcaster, txHash strin
 			return rec, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for receipt after %s", timeout)
+			return nil, internaltx.ErrReceiptTimeout
 		}
 		select {
 		case <-ctx.Done():
