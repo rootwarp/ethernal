@@ -52,5 +52,5 @@ var (
 	// failed strict validation in parseUnsignedTx: !common.IsHexAddress || len != 42,
 	// or the address is not the deposit contract for unsigned.ChainID (via network.LookupByChainID).
 	// Exit code 2 (input validation) per architecture §15 and M0.6-1.
-	ErrInvalidToAddress = errors.New("To is not a valid 0x-prefixed 42-char address")
+	ErrInvalidToAddress = errors.New("to is not a valid 0x-prefixed 42-char address")
 )
