@@ -87,60 +87,59 @@ func mustParseAddr(s string) [20]byte {
 	return addr
 }
 
+// paramsByName is the single source of truth (per architecture §6.1 / FR-P2-A3 / GO-047).
+// All per-network metadata derives from it. Address constants are parsed exactly
+// once here (at package init time); a typo panics at process start.
+var paramsByName = map[Network]Params{
+	Mainnet: {
+		Name:                   Mainnet,
+		GenesisForkVersion:     [4]byte{0x00, 0x00, 0x00, 0x00},
+		ChainID:                1,
+		DepositContractAddress: mustParseAddr("00000000219ab540356cBB839Cbe05303d7705Fa"),
+		DefaultRPCURL:          "",
+		ExplorerURL:            "https://etherscan.io",
+	},
+	Hoodi: {
+		Name:                   Hoodi,
+		GenesisForkVersion:     [4]byte{0x10, 0x00, 0x09, 0x10},
+		ChainID:                560048,
+		DepositContractAddress: mustParseAddr("00000000219ab540356cBB839Cbe05303d7705Fa"),
+		DefaultRPCURL:          "",
+		ExplorerURL:            "https://hoodi.etherscan.io",
+	},
+	Sepolia: {
+		Name:                   Sepolia,
+		GenesisForkVersion:     [4]byte{0x90, 0x00, 0x00, 0x69},
+		ChainID:                11155111,
+		DepositContractAddress: mustParseAddr("7f02C3E3c98b133055B8B348B2Ac625669Ed295D"),
+		DefaultRPCURL:          "",
+		ExplorerURL:            "https://sepolia.etherscan.io",
+	},
+	Holesky: {
+		Name:                   Holesky,
+		GenesisForkVersion:     [4]byte{0x01, 0x01, 0x70, 0x00},
+		ChainID:                17000,
+		DepositContractAddress: mustParseAddr("4242424242424242424242424242424242424242"),
+		DefaultRPCURL:          "",
+		ExplorerURL:            "https://holesky.etherscan.io",
+	},
+}
+
 // Lookup returns the Params for the given network.
 // It returns a descriptive error for any unknown network.
 func Lookup(n Network) (Params, error) {
-	switch n {
-	case Mainnet:
-		return Params{
-			Name:                   Mainnet,
-			GenesisForkVersion:     [4]byte{0x00, 0x00, 0x00, 0x00},
-			ChainID:                1,
-			DepositContractAddress: mustParseAddr("00000000219ab540356cBB839Cbe05303d7705Fa"),
-			DefaultRPCURL:          "",
-			ExplorerURL:            "https://etherscan.io",
-		}, nil
-	case Hoodi:
-		return Params{
-			Name:                   Hoodi,
-			GenesisForkVersion:     [4]byte{0x10, 0x00, 0x09, 0x10},
-			ChainID:                560048,
-			DepositContractAddress: mustParseAddr("00000000219ab540356cBB839Cbe05303d7705Fa"),
-			DefaultRPCURL:          "",
-			ExplorerURL:            "https://hoodi.etherscan.io",
-		}, nil
-	case Sepolia:
-		return Params{
-			Name:                   Sepolia,
-			GenesisForkVersion:     [4]byte{0x90, 0x00, 0x00, 0x69},
-			ChainID:                11155111,
-			DepositContractAddress: mustParseAddr("7f02C3E3c98b133055B8B348B2Ac625669Ed295D"),
-			DefaultRPCURL:          "",
-			ExplorerURL:            "https://sepolia.etherscan.io",
-		}, nil
-	case Holesky:
-		return Params{
-			Name:                   Holesky,
-			GenesisForkVersion:     [4]byte{0x01, 0x01, 0x70, 0x00},
-			ChainID:                17000,
-			DepositContractAddress: mustParseAddr("4242424242424242424242424242424242424242"),
-			DefaultRPCURL:          "",
-			ExplorerURL:            "https://holesky.etherscan.io",
-		}, nil
-	default:
+	p, ok := paramsByName[n]
+	if !ok {
 		return Params{}, fmt.Errorf("unknown network %q: must be one of %q, %q, %q, %q",
 			n, Mainnet, Hoodi, Sepolia, Holesky)
 	}
+	return p, nil
 }
 
 // LookupByChainID returns the Params for the network with the given chain ID.
 // Returns an error if no supported network matches.
 func LookupByChainID(chainID uint64) (Params, error) {
-	for _, n := range []Network{Mainnet, Hoodi, Sepolia, Holesky} {
-		p, err := Lookup(n)
-		if err != nil {
-			continue
-		}
+	for _, p := range paramsByName {
 		if p.ChainID == chainID {
 			return p, nil
 		}
@@ -152,17 +151,11 @@ func LookupByChainID(chainID uint64) (Params, error) {
 // It accepts exactly "mainnet", "hoodi", "sepolia", and "holesky" (case-sensitive).
 // Any other input returns an error containing the offending value.
 func ParseFlag(s string) (Network, error) {
-	switch s {
-	case string(Mainnet):
-		return Mainnet, nil
-	case string(Hoodi):
-		return Hoodi, nil
-	case string(Sepolia):
-		return Sepolia, nil
-	case string(Holesky):
-		return Holesky, nil
-	default:
-		return "", fmt.Errorf("unsupported network %q: must be one of %q, %q, %q, %q",
-			s, Mainnet, Hoodi, Sepolia, Holesky)
+	for n := range paramsByName {
+		if string(n) == s {
+			return n, nil
+		}
 	}
+	return "", fmt.Errorf("unsupported network %q: must be one of %q, %q, %q, %q",
+		s, Mainnet, Hoodi, Sepolia, Holesky)
 }

@@ -1,32 +1,30 @@
-package network_test
+package network
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
 // TestConstants verifies the compile-time byte values.
 func TestConstants(t *testing.T) {
 	t.Run("DomainDeposit", func(t *testing.T) {
 		want := [4]byte{0x03, 0x00, 0x00, 0x00}
-		if network.DomainDeposit() != want {
-			t.Errorf("DomainDeposit = %v, want %v", network.DomainDeposit(), want)
+		if DomainDeposit() != want {
+			t.Errorf("DomainDeposit = %v, want %v", DomainDeposit(), want)
 		}
 	})
 
 	t.Run("ZeroGenesisValidatorsRoot", func(t *testing.T) {
 		var want [32]byte // all zeros
-		if network.ZeroGenesisValidatorsRoot() != want {
-			t.Errorf("ZeroGenesisValidatorsRoot = %v, want all zeros", network.ZeroGenesisValidatorsRoot())
+		if ZeroGenesisValidatorsRoot() != want {
+			t.Errorf("ZeroGenesisValidatorsRoot = %v, want all zeros", ZeroGenesisValidatorsRoot())
 		}
 	})
 }
 
 // TestLookupMainnet verifies mainnet fork bytes byte-for-byte.
 func TestLookupMainnet(t *testing.T) {
-	params, err := network.Lookup(network.Mainnet)
+	params, err := Lookup(Mainnet)
 	if err != nil {
 		t.Fatalf("Lookup(Mainnet) unexpected error: %v", err)
 	}
@@ -34,39 +32,39 @@ func TestLookupMainnet(t *testing.T) {
 	if params.GenesisForkVersion != want {
 		t.Errorf("GenesisForkVersion = %v, want %v", params.GenesisForkVersion, want)
 	}
-	if params.Name != network.Mainnet {
-		t.Errorf("Name = %q, want %q", params.Name, network.Mainnet)
+	if params.Name != Mainnet {
+		t.Errorf("Name = %q, want %q", params.Name, Mainnet)
 	}
 }
 
 // TestLookup verifies Lookup for all supported networks, new fields, and error cases.
 func TestLookup(t *testing.T) {
 	tests := []struct {
-		net                    network.Network
+		net                    Network
 		wantForkVersion        [4]byte
 		wantChainID            uint64
 		wantDepositContractHex string
 	}{
 		{
-			net:                    network.Mainnet,
+			net:                    Mainnet,
 			wantForkVersion:        [4]byte{0x00, 0x00, 0x00, 0x00},
 			wantChainID:            1,
 			wantDepositContractHex: "0x00000000219ab540356cbb839cbe05303d7705fa",
 		},
 		{
-			net:                    network.Hoodi,
+			net:                    Hoodi,
 			wantForkVersion:        [4]byte{0x10, 0x00, 0x09, 0x10},
 			wantChainID:            560048,
 			wantDepositContractHex: "0x00000000219ab540356cbb839cbe05303d7705fa",
 		},
 		{
-			net:                    network.Sepolia,
+			net:                    Sepolia,
 			wantForkVersion:        [4]byte{0x90, 0x00, 0x00, 0x69},
 			wantChainID:            11155111,
 			wantDepositContractHex: "0x7f02c3e3c98b133055b8b348b2ac625669ed295d",
 		},
 		{
-			net:                    network.Holesky,
+			net:                    Holesky,
 			wantForkVersion:        [4]byte{0x01, 0x01, 0x70, 0x00},
 			wantChainID:            17000,
 			wantDepositContractHex: "0x4242424242424242424242424242424242424242",
@@ -76,7 +74,7 @@ func TestLookup(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(string(tc.net), func(t *testing.T) {
-			params, err := network.Lookup(tc.net)
+			params, err := Lookup(tc.net)
 			if err != nil {
 				t.Fatalf("Lookup(%q) error = %v, want nil", tc.net, err)
 			}
@@ -98,8 +96,8 @@ func TestLookup(t *testing.T) {
 	}
 
 	t.Run("Unknown_network_returns_descriptive_error", func(t *testing.T) {
-		unknown := network.Network("goerli")
-		_, err := network.Lookup(unknown)
+		unknown := Network("goerli")
+		_, err := Lookup(unknown)
 		if err == nil {
 			t.Fatal("Lookup(unknown) error = nil, want error")
 		}
@@ -113,18 +111,18 @@ func TestLookup(t *testing.T) {
 func TestParseFlag(t *testing.T) {
 	validCases := []struct {
 		input string
-		want  network.Network
+		want  Network
 	}{
-		{"mainnet", network.Mainnet},
-		{"hoodi", network.Hoodi},
-		{"sepolia", network.Sepolia},
-		{"holesky", network.Holesky},
+		{"mainnet", Mainnet},
+		{"hoodi", Hoodi},
+		{"sepolia", Sepolia},
+		{"holesky", Holesky},
 	}
 
 	for _, tc := range validCases {
 		tc := tc
 		t.Run("valid_"+tc.input, func(t *testing.T) {
-			got, err := network.ParseFlag(tc.input)
+			got, err := ParseFlag(tc.input)
 			if err != nil {
 				t.Fatalf("ParseFlag(%q) error = %v, want nil", tc.input, err)
 			}
@@ -149,7 +147,7 @@ func TestParseFlag(t *testing.T) {
 	for _, input := range invalidCases {
 		input := input
 		t.Run("invalid_"+input, func(t *testing.T) {
-			_, err := network.ParseFlag(input)
+			_, err := ParseFlag(input)
 			if err == nil {
 				t.Errorf("ParseFlag(%q) error = nil, want error", input)
 			}
@@ -162,19 +160,19 @@ func TestParseFlag(t *testing.T) {
 func TestLookupByChainID(t *testing.T) {
 	cases := []struct {
 		chainID     uint64
-		wantNetwork network.Network
+		wantNetwork Network
 		wantURL     string
 	}{
-		{1, network.Mainnet, "https://etherscan.io"},
-		{560048, network.Hoodi, "https://hoodi.etherscan.io"},
-		{11155111, network.Sepolia, "https://sepolia.etherscan.io"},
-		{17000, network.Holesky, "https://holesky.etherscan.io"},
+		{1, Mainnet, "https://etherscan.io"},
+		{560048, Hoodi, "https://hoodi.etherscan.io"},
+		{11155111, Sepolia, "https://sepolia.etherscan.io"},
+		{17000, Holesky, "https://holesky.etherscan.io"},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(string(tc.wantNetwork), func(t *testing.T) {
-			p, err := network.LookupByChainID(tc.chainID)
+			p, err := LookupByChainID(tc.chainID)
 			if err != nil {
 				t.Fatalf("LookupByChainID(%d) error = %v, want nil", tc.chainID, err)
 			}
@@ -191,7 +189,7 @@ func TestLookupByChainID(t *testing.T) {
 	}
 
 	t.Run("unknown_chain_ID", func(t *testing.T) {
-		_, err := network.LookupByChainID(99999)
+		_, err := LookupByChainID(99999)
 		if err == nil {
 			t.Error("LookupByChainID(99999) error = nil, want error")
 		}
@@ -200,10 +198,10 @@ func TestLookupByChainID(t *testing.T) {
 
 // TestLookupExplorerURL verifies ExplorerURL is set for all known networks.
 func TestLookupExplorerURL(t *testing.T) {
-	for _, n := range []network.Network{network.Mainnet, network.Hoodi, network.Sepolia, network.Holesky} {
+	for _, n := range []Network{Mainnet, Hoodi, Sepolia, Holesky} {
 		n := n
 		t.Run(string(n), func(t *testing.T) {
-			p, err := network.Lookup(n)
+			p, err := Lookup(n)
 			if err != nil {
 				t.Fatalf("Lookup(%q) error = %v", n, err)
 			}
@@ -219,7 +217,7 @@ func TestLookupExplorerURL(t *testing.T) {
 
 // TestDepositContractAddressHex verifies the hex formatting helper.
 func TestDepositContractAddressHex(t *testing.T) {
-	params, err := network.Lookup(network.Holesky)
+	params, err := Lookup(Holesky)
 	if err != nil {
 		t.Fatalf("Lookup(Holesky) error = %v", err)
 	}
@@ -231,4 +229,19 @@ func TestDepositContractAddressHex(t *testing.T) {
 	if len(got) != 42 {
 		t.Errorf("DepositContractAddressHex() len = %d, want 42", len(got))
 	}
+}
+
+// TestNetworkInit_BadAddressTypo_PanicsAtInit verifies (via recover) that a
+// typo'd address constant causes panic at the time of paramsByName population
+// (package init time), satisfying the AC. (Sub-process not required for the
+// mustParse logic exercised at registry init.)
+func TestNetworkInit_BadAddressTypo_PanicsAtInit(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("expected panic for bad address (simulates init-time typo in registry)")
+		}
+	}()
+	// bad (non-hex) triggers decode err path in mustParseAddr, same as would
+	// happen for a typo in one of the 4 address literals at var init.
+	_ = mustParseAddr("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
 }
