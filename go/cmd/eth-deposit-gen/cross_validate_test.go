@@ -63,7 +63,7 @@ func probeOrSkipDepositCLI(t *testing.T) string {
 		t.Skipf("DEPOSIT_CLI_BIN=%s (or default) not in PATH (these tests are intended to run inside the M1.7-1 pinned cross-validate image; see workflow + Makefile proxy); skipping", bin)
 	}
 	cmd := exec.Command(bin, "--version")
-	cmd.Env = sanitizedEnv()
+	cmd.Env = cli.SanitizedEnv()
 	out, _ := cmd.CombinedOutput() // ignore: --version failure is non-fatal here; string content decides refuse vs. skip (AC3)
 	ver := string(out)
 	if !strings.Contains(ver, "ethstaker") {
@@ -101,7 +101,7 @@ func TestCrossValidate_GeneratesAndVerifiesForHoodiAndMainnet(t *testing.T) {
 			t.Setenv(pwEnv, "hoodi-golden-test-passphrase")
 
 			var outBuf, errBuf bytes.Buffer
-			app := cli.NewApp(run)
+			app := cli.NewApp(cli.Run)
 			app.Writer = &outBuf
 			app.ErrWriter = &errBuf
 			app.ExitErrHandler = func(*ucli.Context, error) {}
@@ -132,7 +132,7 @@ func TestCrossValidate_GeneratesAndVerifiesForHoodiAndMainnet(t *testing.T) {
 			// external verify (real ethstaker, --deposit-data per §11.3); sanitized env; assert exit 0 + zero stderr
 			var vOut, vErr bytes.Buffer
 			vCmd := exec.Command(cliBin, "verify", "--deposit-data", depositPath)
-			vCmd.Env = sanitizedEnv()
+			vCmd.Env = cli.SanitizedEnv()
 			vCmd.Stdout = &vOut
 			vCmd.Stderr = &vErr
 			if runErr := vCmd.Run(); runErr != nil {
@@ -161,7 +161,7 @@ func TestCrossValidate_RefusesWrongCLI_Descriptive(t *testing.T) {
 
 	// direct probe of the bad bin (mirrors probeOrSkip logic)
 	cmd := exec.Command(bad, "--version")
-	cmd.Env = sanitizedEnv()
+	cmd.Env = cli.SanitizedEnv()
 	out, _ := cmd.CombinedOutput()
 	s := string(out)
 	if !strings.Contains(s, "staking-deposit-cli") {
