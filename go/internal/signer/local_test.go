@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -138,6 +139,35 @@ func TestNewLocalSignerFromEnv_Missing(t *testing.T) {
 	// Error must reference the var name but not contain key material.
 	if !strings.Contains(err.Error(), "TEST_MISSING_KEY") {
 		t.Errorf("error should mention env var name, got: %v", err)
+	}
+}
+
+// TestNewLocalSignerFromEnv_UnsetsEnv: after construction, os.Getenv(envVar) == "" (M1.1-5 AC).
+func TestNewLocalSignerFromEnv_UnsetsEnv(t *testing.T) {
+	keyHex, _ := validHexKey(t)
+	envVar := "TEST_LOCAL_SIGNER_UNSETS"
+	t.Setenv(envVar, keyHex)
+	s, err := signer.NewLocalSignerFromEnv(envVar)
+	if err != nil {
+		t.Fatalf("NewLocalSignerFromEnv: %v", err)
+	}
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
+
+	if got := os.Getenv(envVar); got != "" {
+		t.Errorf("after construction, os.Getenv(%q) = %q, want empty (M1.1-5 AC TestNewLocalSignerFromEnv_UnsetsEnv)", envVar, got)
+	}
+}
+
+// TestNewLocalSignerFromEnv_BadValue_StillUnsets: rejection path also unsets the env var (M1.1-5 AC).
+func TestNewLocalSignerFromEnv_BadValue_StillUnsets(t *testing.T) {
+	envVar := "TEST_LOCAL_SIGNER_BAD_UNSET"
+	t.Setenv(envVar, "0xdeadbeefnotvalidhex") // triggers bad value in NewFromHex
+	_, err := signer.NewLocalSignerFromEnv(envVar)
+	if !errors.Is(err, signer.ErrInvalidKey) {
+		t.Fatalf("expected ErrInvalidKey, got %v", err)
+	}
+	if got := os.Getenv(envVar); got != "" {
+		t.Errorf("rejection path must still unset so attacker can't read post-hoc: os.Getenv(%q)=%q, want empty (M1.1-5 AC)", envVar, got)
 	}
 }
 

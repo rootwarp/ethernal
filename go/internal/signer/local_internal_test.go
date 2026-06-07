@@ -187,3 +187,20 @@ func TestParseUnsignedTx_HappyPath(t *testing.T) {
 		t.Fatalf("happy path (correct 42-hex deposit contract for chain) failed: %v", err)
 	}
 }
+
+// TestSign_ZeroizesIntermediates: after Sign returns, the byte slice `b` (instrumented via testSignDecodeBuffer) is zero (M1.1-5 AC).
+func TestSign_ZeroizesIntermediates(t *testing.T) {
+	s := newLocalSigner(t)
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
+
+	_, err := s.Sign(context.Background(), localUnsigned())
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	for i, bb := range testSignDecodeBuffer {
+		if bb != 0 {
+			t.Errorf("b[%d] = 0x%02x after Sign return, want 0x00 (M1.1-5; instrumented decode buffer zeroized per-Sign)", i, bb)
+		}
+	}
+}

@@ -46,16 +46,24 @@ func NewLocalSignerFromHex(hexKey string) (*LocalSigner, error) {
 	}
 	// Validate as secp256k1 scalar (rejects zero, values >= curve order, etc.).
 	if _, err := gethcrypto.ToECDSA(b); err != nil {
+		for i := range b {
+			b[i] = 0
+		}
 		return nil, fmt.Errorf("invalid secp256k1 private key: %w", ErrInvalidKey)
 	}
 	keyCopy := make([]byte, 32)
 	copy(keyCopy, b)
+	for i := range b {
+		b[i] = 0
+	}
 	return &LocalSigner{key: keyCopy}, nil
 }
 
 // NewLocalSignerFromEnv reads a hex-encoded private key from the named
-// environment variable and constructs a LocalSigner. The variable is NOT
-// cleared by this constructor — callers should unsetenv it after construction.
+// environment variable and constructs a LocalSigner. The env var is unset
+// via os.Unsetenv(envVar) right before every return (defense-in-depth per
+// M1.1-5 / architecture §8.4 / FR-P1-B4 GO-017 secp side; callers need not
+// remember). Rejection paths also unset so an attacker cannot read post-hoc.
 //
 // Only the variable NAME appears in errors; the value is never included.
 func NewLocalSignerFromEnv(envVar string) (*LocalSigner, error) {
@@ -65,14 +73,23 @@ func NewLocalSignerFromEnv(envVar string) (*LocalSigner, error) {
 		nameForErr = cli.Redact(envVar, 4)
 	}
 	if value == "" {
+		_ = os.Unsetenv(envVar)
 		return nil, fmt.Errorf("environment variable %q is not set or empty: %w", nameForErr, ErrInvalidKey)
 	}
 	s, err := NewLocalSignerFromHex(value)
 	if err != nil {
+		_ = os.Unsetenv(envVar)
 		return nil, fmt.Errorf("environment variable %q: %w", nameForErr, ErrInvalidKey)
 	}
+	_ = os.Unsetenv(envVar)
 	return s, nil
 }
+
+// testSignDecodeBuffer holds the header to the per-Sign decode buffer `b`
+// (after zeroing) for instrumentation in TestSign_ZeroizesIntermediates
+// (M1.1-5 AC; "instrumented in test build" per plan). Same-package access
+// from local_internal_test.go only.
+var testSignDecodeBuffer []byte
 
 // Sign produces a signed EIP-1559 transaction for the given unsigned tx.
 // ctx is honored for cancellation; local signing is fast but the check
@@ -105,16 +122,27 @@ func (s *LocalSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx) 
 	ethSigner := types.LatestSignerForChainID(p.chainID)
 
 	// Guarded copy of key under mu; signing work (SignTx etc) off-lock per M1.1-3 / arch §9.3.
+	// Per-Sign zeroize of decode buffer `b` + intermediates (M1.1-5).
 	s.mu.Lock()
 	if s.closed.Load() {
 		s.mu.Unlock()
 		return nil, ErrSignerClosed
 	}
-	keyCopy := make([]byte, 32)
-	copy(keyCopy, s.key)
+	b := make([]byte, 32)
+	copy(b, s.key)
 	s.mu.Unlock()
+	testSignDecodeBuffer = b
+	defer func() {
+		for i := range b {
+			b[i] = 0
+		}
+	}()
 
-	priv, err := gethcrypto.ToECDSA(keyCopy)
+	// FR-P1-B4 (GO-017 secp side): *ecdsa.PrivateKey.D (*big.Int) words cannot
+	// be wiped via stdlib API (no Destroy/zeroize on big.Int limbs). We zero
+	// the input decode buffer `b` (and Sign-local values) after use/on errs
+	// via defer (honest framing per architecture §8.4 + M1.1-5 impl notes).
+	priv, err := gethcrypto.ToECDSA(b)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse signing key: %w", ErrInvalidKey)
 	}
