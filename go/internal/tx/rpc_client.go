@@ -61,8 +61,8 @@ type ethClient struct {
 func NewEthClient(ctx context.Context, rpcURL string) (*ethClient, error) {
 	c, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
-		// %v intentional: contains secret material (redacted RPC URL); do not use %w per architecture §8.2 rule 1.
-		return nil, fmt.Errorf("%w: %s: %v", ErrRPCDial, cli.Redact(rpcURL, 16), err)
+		// %w (M2.3-4 cleanup after M1.5-8; enables errors.Is on dial err; redaction prefix + §8.2 protects secrets).
+		return nil, fmt.Errorf("%w: %s: %w", ErrRPCDial, cli.Redact(rpcURL, 16), err)
 	}
 	return &ethClient{client: c}, nil
 }
