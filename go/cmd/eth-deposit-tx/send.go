@@ -19,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
@@ -242,10 +243,28 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Tx hash:        %s (decoded from RLP)\n", rlpTx.Hash().Hex())                  // ignore: best-effort to ErrWriter
 	_, _ = fmt.Fprintf(c.App.ErrWriter, ">\n")                                                                              // ignore: best-effort to ErrWriter
 
-	// 6. Confirmation.
+	// 8. Confirmation.
 	if !cfg.Yes {
+		var confirmR io.Reader
+		var cleanup func()
+		var cErr error
+		if cfg.InputFile == "-" {
+			// only for --input - (where app.Reader was consumed for JSON) do we need
+			// ConfirmReader to possibly return /dev/tty or ErrNoTTY; for normal file
+			// input the pre-existing direct use of (possibly faked-in-test) c.App.Reader
+			// for the prompt must be preserved for testability/env independence.
+			confirmR, cleanup, cErr = cli.ConfirmReader(c.App.Reader)
+			defer cleanup()
+			if errors.Is(cErr, cli.ErrNoTTY) {
+				return ucli.Exit(cErr.Error(), 2)
+			}
+		} else {
+			confirmR = c.App.Reader
+			cleanup = func() {}
+			cErr = nil
+		}
 		_, _ = fmt.Fprintf(c.App.ErrWriter, "> Type the network name to confirm: ") // ignore: best-effort to ErrWriter
-		reader := bufio.NewReader(c.App.Reader)
+		reader := bufio.NewReader(confirmR)
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			// EOF or any read error → abort
@@ -259,7 +278,7 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 		}
 	}
 
-	// 7. Broadcast.
+	// 9. Broadcast.
 	_, _ = fmt.Fprintf(c.App.ErrWriter, "> Broadcasting...\n") // ignore: best-effort to ErrWriter
 	txHash, err := broadcaster.SendRawTransaction(c.Context, signed.RawRLP)
 	if err != nil {

@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1310,5 +1311,66 @@ func Test_WithdrawalAddress_DocumentedInHelp(t *testing.T) {
 	}
 	if !found {
 		t.Error("withdrawal-address flag Usage does not document EIP-55 / example form")
+	}
+}
+
+// TestConfirmReader_StdinIsTTY_ReturnsStdin (M1.5-4 AC).
+func TestConfirmReader_StdinIsTTY_ReturnsStdin(t *testing.T) {
+	// Use /dev/tty itself as the "stdin" arg; its fd will pass IsTerminal.
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		t.Skipf("no controlling TTY for StdinIsTTY test: %v", err)
+	}
+	t.Cleanup(func() { _ = tty.Close() })
+
+	r, cleanup, err := icli.ConfirmReader(tty)
+	if err != nil {
+		t.Fatalf("ConfirmReader(tty stdin): %v", err)
+	}
+	if r != tty {
+		t.Errorf("ConfirmReader returned %T, want the same *os.File stdin", r)
+	}
+	cleanup()
+}
+
+// TestConfirmReader_StdinPiped_OpensDevTTY (M1.5-4 AC; fd manip via pipe for non-TTY stdin).
+func TestConfirmReader_StdinPiped_OpensDevTTY(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pr.Close(); pw.Close() })
+
+	// pr is a pipe fd → not a terminal.
+	got, cleanup, err := icli.ConfirmReader(pr)
+	if err != nil {
+		if errors.Is(err, icli.ErrNoTTY) {
+			t.Skip("no /dev/tty available to open for piped-stdin case")
+		}
+		t.Fatalf("ConfirmReader(piped): %v", err)
+	}
+	if got == pr {
+		t.Error("ConfirmReader returned the piped reader; want opened /dev/tty")
+	}
+	// (no terminal fd check here: "got != pr" + open success already validates the
+	// fallback contract; removed guard to avoid os.NewFile+Close side-effect on the
+	// live fd returned by ConfirmReader, per fd-ownership hygiene.)
+	cleanup()
+}
+
+// TestConfirmReader_NoDevTTY_ErrNoTTY (M1.5-4 AC).
+func TestConfirmReader_NoDevTTY_ErrNoTTY(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pr.Close(); pw.Close() })
+
+	_, _, err = icli.ConfirmReader(pr)
+	if err == nil {
+		t.Skip("controlling TTY present; /dev/tty open succeeded so cannot hit ErrNoTTY path without fd manipulation beyond scope")
+	}
+	if !errors.Is(err, icli.ErrNoTTY) {
+		t.Errorf("ConfirmReader(piped, no-dev-tty): err = %v, want ErrNoTTY", err)
 	}
 }

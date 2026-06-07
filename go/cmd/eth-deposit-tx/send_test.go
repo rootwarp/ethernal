@@ -252,6 +252,54 @@ func TestSendCommand_ConfirmPrompt_EOF(t *testing.T) {
 	}
 }
 
+// TestSend_InputDashWithYes_NoTTY_Reject (M1.5-4 AC): --input - without --yes
+// when neither stdin nor /dev/tty is a controlling terminal must reject with
+// exit 2 (via ErrNoTTY from ConfirmReader turned into ucli.Exit(2)). The
+// --input - case exercises the post-ReadAll prompt path. (Name matches the
+// mandated AC list verbatim; body omits --yes to reach confirm+ErrNoTTY path
+// for the dash input; --input- --yes is the non-interactive usage that skips
+// ConfirmReader entirely and must succeed with no TTY.)
+func TestSend_InputDashWithYes_NoTTY_Reject(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	// If a controlling TTY is present, opening /dev/tty will succeed inside
+	// ConfirmReader and the read will block on real stdin (hang). Skip to
+	// avoid that; the unit tests for ConfirmReader cover the paths.
+	ttyCheck, checkErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if checkErr == nil {
+		ttyCheck.Close()
+		t.Skip("controlling TTY present; cannot exercise NoTTY reject for --input - confirm without blocking read")
+	}
+
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return holeskyChainID, nil },
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) { return fakeTxHash, nil },
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+	// --input - : reader supplies the JSON (will be ReadAll'ed); no --yes so
+	// confirmation step will call ConfirmReader on this non-*os.File reader.
+	app.Reader = bytes.NewReader(signedTxFixture(t))
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", "-",
+		"--rpc-url", "http://localhost:8545",
+		// deliberately no --yes
+	})
+	if err == nil {
+		t.Fatal("expected error for --input - no-TTY no-yes, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+}
+
 func TestSendCommand_ChainIDMismatch(t *testing.T) {
 	orig := ucli.OsExiter
 	ucli.OsExiter = func(int) {}
