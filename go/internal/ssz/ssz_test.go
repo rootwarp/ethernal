@@ -461,3 +461,15 @@ func TestComputeSigningRoot(t *testing.T) {
 		}
 	})
 }
+
+// TestMerkleize_Precondition_Panic confirms that violating the len(chunks) <= limit
+// precondition panics (programmer error). Uses recover() per M1.2 ssz hygiene pattern.
+func TestMerkleize_Precondition_Panic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected merkleize to panic on len(chunks) > limit")
+		}
+	}()
+	// len=2 > limit=1; all production call sites use equal lengths.
+	merkleize([][32]byte{{}, {}}, 1)
+}

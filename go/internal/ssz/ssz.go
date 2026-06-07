@@ -160,10 +160,10 @@ func byteVectorRoot(b []byte) [32]byte {
 //
 // For a single chunk (after padding to pow2=1), the chunk itself is returned.
 func merkleize(chunks [][32]byte, limit int) [32]byte {
-	n := len(chunks)
-	if limit > n {
-		n = limit
+	if len(chunks) > limit {
+		panic("merkleize: len(chunks) > limit (programmer error)")
 	}
+	n := limit
 	// Find next power of two >= n.
 	size := 1
 	for size < n {
