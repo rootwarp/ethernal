@@ -181,8 +181,13 @@ func (v *verifier) Verify(pub [48]byte, signingRoot [32]byte, sig [96]byte) (boo
 // ErrPubkeyInvalid is returned by ValidatePubkeyBytes when the 48-byte
 // compressed point is not a valid BLS12-381 G1 point (off-curve, bad encoding,
 // etc.). Mirrors architecture §6.6 / §15; used by both deposit and tx layers
-// (M0 enables the check; M1.2-2 will also reject identity via ErrPubkeyZero).
+// (M0 enables the check; M1.2-2 also rejects identity via ErrPubkeyZero).
 var ErrPubkeyInvalid = errors.New("bls: pubkey is not a valid G1 point")
+
+// ErrPubkeyZero is returned by ValidatePubkeyBytes when the 48-byte compressed
+// pubkey is the point-at-infinity (the IETF KeyValidate identity rejection).
+// Per M1.2-2 / architecture §15 / GO-037.
+var ErrPubkeyZero = errors.New("bls: pubkey is point at infinity (KeyValidate rejected)")
 
 // ValidatePubkeyBytes checks that b is a valid compressed BLS12-381 G1 point.
 // Init must have been called (or will be called internally). Returns nil if valid.
@@ -193,6 +198,9 @@ func ValidatePubkeyBytes(pub [48]byte) error {
 	var hPub bls.PublicKey
 	if err := hPub.Deserialize(pub[:]); err != nil {
 		return fmt.Errorf("%w: %v", ErrPubkeyInvalid, err)
+	}
+	if hPub.IsZero() {
+		return ErrPubkeyZero
 	}
 	return nil
 }

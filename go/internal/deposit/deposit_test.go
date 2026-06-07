@@ -292,6 +292,8 @@ func (f *fakeErrorSigner) PublicKey() ([48]byte, error) {
 	return [48]byte{}, f.pubkeyErr
 }
 
+func (f *fakeErrorSigner) Zeroize() {}
+
 // TestGenerate_PublicKeyError verifies that an error from signer.PublicKey()
 // is propagated directly (not wrapped in ErrPubkeyMismatch).
 func TestGenerate_PublicKeyError(t *testing.T) {
@@ -340,6 +342,8 @@ func (f *fakeSignErrorSigner) Sign(_ [32]byte) ([96]byte, error) {
 func (f *fakeSignErrorSigner) PublicKey() ([48]byte, error) {
 	return f.pubkey, nil
 }
+
+func (f *fakeSignErrorSigner) Zeroize() {}
 
 // TestGenerate_SignError verifies that an error from signer.Sign() is propagated.
 func TestGenerate_SignError(t *testing.T) {

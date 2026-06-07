@@ -242,3 +242,49 @@ func TestSigner_Zeroize_GoSideOnly(t *testing.T) {
 		t.Error("PublicKey() after Zeroize succeeded, want error (Go-side state wiped per M1.1-6)")
 	}
 }
+
+// TestValidatePubkeyBytes_Identity_Reject verifies that ValidatePubkeyBytes rejects
+// the compressed G1 point-at-infinity (0xc0 + 47 zero bytes) with the sentinel
+// ErrPubkeyZero (M1.2-2 AC per m1.2-bls-ssz-abi-defense.md).
+func TestValidatePubkeyBytes_Identity_Reject(t *testing.T) {
+	if err := bls.Init(); err != nil {
+		t.Fatalf("Init() = %v", err)
+	}
+
+	var identity [48]byte
+	identity[0] = 0xc0
+	// bytes 1-47 remain zero (the compressed infinity encoding)
+
+	err := bls.ValidatePubkeyBytes(identity)
+	if err == nil {
+		t.Error("ValidatePubkeyBytes(0xc0+47zero) returned nil error, want ErrPubkeyZero")
+	}
+	if !errors.Is(err, bls.ErrPubkeyZero) {
+		t.Errorf("ValidatePubkeyBytes(identity) = %v, want %v", err, bls.ErrPubkeyZero)
+	}
+}
+
+// TestValidatePubkeyBytes_OnCurve_Accept verifies that a real on-curve G1 point
+// (derived from a test secret, standing in for a fixture) is accepted with nil
+// (M1.2-2 AC).
+func TestValidatePubkeyBytes_OnCurve_Accept(t *testing.T) {
+	if err := bls.Init(); err != nil {
+		t.Fatalf("Init() = %v", err)
+	}
+
+	// Real G1 point from NewSigner + PublicKey (matches "from a fixture" pattern
+	// used in roundtrips / other tests; golden fixtures also carry such points).
+	secret := bytes.Repeat([]byte{0x01}, 32)
+	s, err := bls.NewSigner(secret)
+	if err != nil {
+		t.Fatalf("NewSigner() = %v", err)
+	}
+	pub, err := s.PublicKey()
+	if err != nil {
+		t.Fatalf("PublicKey() = %v", err)
+	}
+
+	if err := bls.ValidatePubkeyBytes(pub); err != nil {
+		t.Errorf("ValidatePubkeyBytes(real G1 point) = %v, want nil", err)
+	}
+}
