@@ -1,9 +1,13 @@
 package atomicio
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Sentinels for WriteFile failure modes. Callers use errors.Is to distinguish.
@@ -67,4 +71,25 @@ func WriteFile(path string, data []byte, perm os.FileMode) (string, error) {
 	}
 
 	return path, nil
+}
+
+// WriteFileWithSuffix derives a unique final filename from prefix,
+// UTC RFC3339Nano timestamp, and the first 8 hex chars of sha256(data),
+// writes atomically into dir, and returns (finalPath, sha256hex, error).
+//
+// Final filename: <prefix>-<RFC3339Nano>-<sha256[:4hex]>.<ext>
+// Refuses to clobber an existing finalPath. Used by internal/output (FSWriter).
+func WriteFileWithSuffix(dir, prefix, ext string, data []byte, perm os.FileMode, now time.Time) (string, string, error) {
+	sum := sha256.Sum256(data)
+	short := hex.EncodeToString(sum[:4])
+	ts := now.UTC().Format(time.RFC3339Nano)
+	name := fmt.Sprintf("%s-%s-%s.%s", prefix, ts, short, ext)
+	finalPath := filepath.Join(dir, name)
+	sha256hex := hex.EncodeToString(sum[:])
+
+	p, err := WriteFile(finalPath, data, perm)
+	if err != nil {
+		return "", "", err
+	}
+	return p, sha256hex, nil
 }

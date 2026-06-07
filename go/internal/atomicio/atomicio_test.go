@@ -3,12 +3,16 @@ package atomicio
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestWriteFile_HappyPath(t *testing.T) {
@@ -167,4 +171,85 @@ func formatInt(i int) string {
 		i /= 10
 	}
 	return string(b[j:])
+}
+
+func TestWriteFileWithSuffix_FilenameScheme(t *testing.T) {
+	dir := t.TempDir()
+	prefix := "prefix"
+	ext := "ext"
+	data := []byte("scheme test data")
+	now := time.Date(2026, time.June, 6, 12, 34, 56, 789012345, time.UTC)
+
+	gotPath, _, err := WriteFileWithSuffix(dir, prefix, ext, data, 0o600, now)
+	if err != nil {
+		t.Fatalf("WriteFileWithSuffix: %v", err)
+	}
+
+	re := regexp.MustCompile(`^prefix-\d{4}-.*-[0-9a-f]{8}\.ext$`)
+	base := filepath.Base(gotPath)
+	if !re.MatchString(base) {
+		t.Errorf("filename %q does not match ^prefix-\\d{4}-...-[0-9a-f]{8}\\.ext$", base)
+	}
+}
+
+func TestWriteFileWithSuffix_Sha256Matches(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte("sha test data for match")
+	now := time.Now()
+
+	_, gotHex, err := WriteFileWithSuffix(dir, "p", "e", data, 0o600, now)
+	if err != nil {
+		t.Fatalf("WriteFileWithSuffix: %v", err)
+	}
+
+	wantSum := sha256.Sum256(data)
+	wantHex := hex.EncodeToString(wantSum[:])
+	if gotHex != wantHex {
+		t.Errorf("sha256hex = %s, want %s", gotHex, wantHex)
+	}
+}
+
+func TestWriteFileWithSuffix_NoClobber(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte("clobber test data")
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	firstPath, _, err := WriteFileWithSuffix(dir, "pre", "json", data, 0o600, now)
+	if err != nil {
+		t.Fatalf("first WriteFileWithSuffix: %v", err)
+	}
+
+	_, _, err = WriteFileWithSuffix(dir, "pre", "json", data, 0o600, now)
+	if !errors.Is(err, ErrClobber) {
+		t.Fatalf("err = %v, want ErrClobber", err)
+	}
+
+	// first file untouched
+	got, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatalf("read first: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("first file was clobbered")
+	}
+}
+
+func TestWriteFileWithSuffix_HighResUnique(t *testing.T) {
+	dir := t.TempDir()
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		// vary data so sha disambiguates even on nano collision (per research/06)
+		data := []byte{byte(i)}
+		p, _, err := WriteFileWithSuffix(dir, "u", "bin", data, 0o600, time.Now())
+		if err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+		if seen[p] {
+			t.Errorf("duplicate path: %s", p)
+		}
+		seen[p] = true
+	}
+	if len(seen) != 100 {
+		t.Errorf("got %d unique paths, want 100", len(seen))
+	}
 }
