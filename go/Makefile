@@ -1,4 +1,4 @@
-.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc oracle-regen help
+.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc oracle-regen test-cross-validate help
 
 BIN     := bin/eth-deposit-gen
 BIN_TX  := bin/eth-deposit-tx
@@ -100,6 +100,11 @@ assert-no-zero-wc:
 ## oracle-regen: regenerate the committed fastssz-generated oracle_types_ssz.go from hand-written oracle_types.go (M1.2-4; supports `go generate ./...` too)
 oracle-regen:
 	GOWORK=off go generate ./internal/ssz/testdata
+
+## test-cross-validate: proxy for .github/workflows/cross-validate.yml (M1.7-3; FR-P1-G1/GO-059). Runs `go test -tags=cross_validate` (hoodi+mainnet) with CGO (proxies the CI extraction+test step). Full hermetic repro uses the docker run example in yml header comments (sanitized env per M1.1-7 inside the Go test). Local run without image/DEPOSIT_CLI_BIN will skip the real cross tests (see cross_validate_test.go).
+test-cross-validate:
+	@echo 'Proxying CI command: CGO_ENABLED=1 go test -tags=cross_validate -run CrossValidate ./cmd/eth-deposit-gen/... -count=1 -timeout=5m'
+	$(GOFLAGS) go test -tags=cross_validate -run CrossValidate ./cmd/eth-deposit-gen/... -count=1 -timeout=5m
 
 ## help: list available targets
 help:

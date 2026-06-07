@@ -29,7 +29,7 @@ on:
     branches: [develop]
   pull_request:
     branches: [develop]
-  # tagged trigger per arch §12.3 table (cross-validate-deposit-cli row); also manual
+  # tagged trigger or every PR per architecture §12.3 (table row `cross-validate-deposit-cli`); also manual workflow_dispatch
   workflow_dispatch:
 
 jobs:
@@ -54,7 +54,8 @@ jobs:
         # (Alternative patterns like full job-in-container would require a Go+python hybrid image;
         # extraction reuses existing runner + differential-oracle pin/cache style.)
         run: |
-          IMAGE="ghcr.io/rootwarp/eth-utils/cross-validate@sha256:REPLACE_WITH_ACTUAL_DIGEST_FROM_PINNED_BUILD"
+          # Image pulled by SHA-256 digest (M1.7-1 / arch §11.3); see "To update pin" process in header comments above + go/docs/SECURITY.md. (Actual CI green requires real pushed digest in GHCR.)
+          IMAGE="ghcr.io/rootwarp/eth-utils/cross-validate@sha256:0000000000000000000000000000000000000000000000000000000000000000"  # placeholder; replace per pin process after docker build/push of Dockerfile.cross-validate
           echo "Using cross-validate image: $IMAGE"
           docker create --name cli-extract "$IMAGE"
           docker cp cli-extract:/usr/local/bin/ethstaker-deposit-cli /usr/local/bin/ethstaker-deposit-cli
