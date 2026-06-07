@@ -104,7 +104,7 @@ type deps struct {
 
 	// scanner scans a keystore directory and returns a pubkey→path index.
 	// It is called once before the per-pubkey loop; no decryption occurs here.
-	scanner func(string) (keystore.DirectoryIndex, error)
+	scanner func(string, *slog.Logger) (keystore.DirectoryIndex, error)
 
 	// loader is used to load and decrypt the keystore.
 	loader keystore.KeyLoader
@@ -308,7 +308,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 
 	// Step 3: scan the keystore directory — no decryption yet.
 	log.Debug("keystore: scanning directory", "dir", cfg.KeystoreDir)
-	index, err := d.scanner(cfg.KeystoreDir)
+	index, err := d.scanner(cfg.KeystoreDir, log)
 	if err != nil {
 		log.Debug("keystore: scan failed", "error", err)
 		return err

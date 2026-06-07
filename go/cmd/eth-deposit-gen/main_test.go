@@ -91,7 +91,7 @@ type fakeScanner struct {
 	err   error
 }
 
-func (f *fakeScanner) scan(_ string) (keystore.DirectoryIndex, error) {
+func (f *fakeScanner) scan(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
 	return f.index, f.err
 }
 
@@ -272,7 +272,7 @@ func TestRunWithDeps_PubkeyMismatch_ExitCode2(t *testing.T) {
 	wrongPk[0] = 0xBB
 	wrongPkHex := fmt.Sprintf("%x", wrongPk[:])
 
-	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
+	d.scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
 		return keystore.DirectoryIndex{
 			wrongPkHex: "/fake/wrong-keystore.json",
 		}, nil
@@ -795,7 +795,7 @@ func TestPickPassphraseSource_TermSource(t *testing.T) {
 func TestRunWithDeps_ScannerError_ExitCode1(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
-	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
+	d.scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
 		return nil, errors.New("cannot read directory: permission denied")
 	}
 
@@ -814,9 +814,9 @@ func TestRunWithDeps_PubkeyNotInIndex_ExitCode2(t *testing.T) {
 	d := makeTestDeps(&summaryBuf, nil)
 
 	// Override scanner to return an empty index — pubkey won't be found.
-	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
-		return keystore.DirectoryIndex{}, nil
-	}
+	// (deduped one inline literal by reusing existing fakeScanner type)
+	fs := &fakeScanner{index: keystore.DirectoryIndex{}}
+	d.scanner = fs.scan
 
 	err := runWithDeps(context.Background(), makeCfg(), d)
 	if err == nil {
@@ -835,7 +835,7 @@ func TestRunWithDeps_ErrorMessageContainsPubkeyAndDir(t *testing.T) {
 	d := makeTestDeps(&summaryBuf, nil)
 
 	// Empty index so the lookup fails.
-	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
+	d.scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
 		return keystore.DirectoryIndex{}, nil
 	}
 
@@ -1271,7 +1271,7 @@ func makeMultiPubkeyDeps(summaryBuf *bytes.Buffer, pks [][48]byte) deps {
 
 	return deps{
 		initBLS:     func() error { return nil },
-		scanner:     func(_ string) (keystore.DirectoryIndex, error) { return idx, nil },
+		scanner:     func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) { return idx, nil },
 		loader:      &funcLoader{fn: loaderFunc},
 		newSigner:   newSignerFunc,
 		verifier:    &fakeVerifier{ok: true},
@@ -1718,7 +1718,7 @@ func makeNPubkeyDeps(n int, progressOut io.Writer, logBuf *bytes.Buffer) (deps, 
 	var summaryBuf bytes.Buffer
 	d := deps{
 		initBLS:          func() error { return nil },
-		scanner:          func(_ string) (keystore.DirectoryIndex, error) { return idx, nil },
+		scanner:          func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) { return idx, nil },
 		loader:           &funcLoader{fn: loaderFn},
 		newSigner:        newSignerFn,
 		verifier:         &fakeVerifier{ok: true},

@@ -1,10 +1,14 @@
 package keystore_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/rootwarp/eth-utils/go/internal/keystore"
@@ -44,7 +48,7 @@ func writeRawFile(t *testing.T, dir, filename string, content []byte) string {
 func TestScanDir(t *testing.T) {
 	t.Run("dir_does_not_exist", func(t *testing.T) {
 		nonExistent := filepath.Join(t.TempDir(), "no-such-dir")
-		_, err := keystore.ScanDir(nonExistent)
+		_, err := keystore.ScanDir(nonExistent, nil)
 		if err == nil {
 			t.Fatal("ScanDir(nonExistent) error = nil, want error")
 		}
@@ -52,7 +56,7 @@ func TestScanDir(t *testing.T) {
 
 	t.Run("empty_dir_returns_empty_index", func(t *testing.T) {
 		dir := t.TempDir()
-		idx, err := keystore.ScanDir(dir)
+		idx, err := keystore.ScanDir(dir, nil)
 		if err != nil {
 			t.Fatalf("ScanDir(empty dir) error = %v, want nil", err)
 		}
@@ -66,7 +70,7 @@ func TestScanDir(t *testing.T) {
 		const pubkey = "aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd"
 		wantPath := writeKeystoreFile(t, dir, "keystore.json", pubkey)
 
-		idx, err := keystore.ScanDir(dir)
+		idx, err := keystore.ScanDir(dir, nil)
 		if err != nil {
 			t.Fatalf("ScanDir error = %v, want nil", err)
 		}
@@ -89,7 +93,7 @@ func TestScanDir(t *testing.T) {
 		// Keystore file stores with 0x prefix (common in staking-deposit-cli output)
 		writeKeystoreFile(t, dir, "keystore.json", "0x"+bare)
 
-		idx, err := keystore.ScanDir(dir)
+		idx, err := keystore.ScanDir(dir, nil)
 		if err != nil {
 			t.Fatalf("ScanDir error = %v", err)
 		}
@@ -120,7 +124,7 @@ func TestScanDir(t *testing.T) {
 		// A non-.json file — should be ignored entirely
 		writeRawFile(t, dir, "notes.txt", []byte("just notes"))
 
-		idx, err := keystore.ScanDir(dir)
+		idx, err := keystore.ScanDir(dir, nil)
 		if err != nil {
 			t.Fatalf("ScanDir error = %v, want nil", err)
 		}
@@ -142,7 +146,7 @@ func TestScanDir(t *testing.T) {
 		const indexedPubkey = "aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd"
 		writeKeystoreFile(t, dir, "keystore.json", indexedPubkey)
 
-		idx, err := keystore.ScanDir(dir)
+		idx, err := keystore.ScanDir(dir, nil)
 		if err != nil {
 			t.Fatalf("ScanDir error = %v", err)
 		}
@@ -160,7 +164,7 @@ func TestScanDir(t *testing.T) {
 		path1 := writeKeystoreFile(t, dir, "validator1.json", pubkey1)
 		path2 := writeKeystoreFile(t, dir, "validator2.json", pubkey2)
 
-		idx, err := keystore.ScanDir(dir)
+		idx, err := keystore.ScanDir(dir, nil)
 		if err != nil {
 			t.Fatalf("ScanDir error = %v", err)
 		}
@@ -193,7 +197,7 @@ func TestScanDir(t *testing.T) {
 			t.Fatalf("Mkdir: %v", err)
 		}
 
-		idx, err := keystore.ScanDir(dir)
+		idx, err := keystore.ScanDir(dir, nil)
 		if err != nil {
 			t.Fatalf("ScanDir error = %v", err)
 		}
@@ -210,5 +214,38 @@ func TestErrKeystoreNotFound(t *testing.T) {
 	}
 	if !errors.Is(keystore.ErrKeystoreNotFound, keystore.ErrKeystoreNotFound) {
 		t.Fatal("errors.Is(ErrKeystoreNotFound, ErrKeystoreNotFound) = false")
+	}
+}
+
+// TestScanDir_ReadError_WarnLogged (mock unreadable dir entry): warning record present in injected logger.
+func TestScanDir_ReadError_WarnLogged(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("perm-based read error simulation via Chmod(0o000) requires POSIX owner bits for owner EACCES on os.ReadFile (Unix-oriented per AC2 test design)")
+	}
+	dir := t.TempDir()
+	// Create a .json file then make it unreadable to trigger the read-err path inside ScanDir.
+	badPath := writeRawFile(t, dir, "unreadable.json", []byte(`{"pubkey":"aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd","version":4}`))
+	if err := os.Chmod(badPath, 0o000); err != nil {
+		t.Fatalf("Chmod unreadable: %v", err)
+	}
+	defer func() { _ = os.Chmod(badPath, 0o600) }() // best-effort restore for cleanup
+
+	var logBuf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	idx, err := keystore.ScanDir(dir, lg)
+	if err != nil {
+		t.Fatalf("ScanDir error = %v, want nil (read err inside is skipped)", err)
+	}
+	if len(idx) != 0 {
+		t.Errorf("ScanDir len = %d, want 0 (unreadable entry skipped)", len(idx))
+	}
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, "WARN") && !strings.Contains(logs, "level=WARN") {
+		t.Errorf("expected WARN record in captured logger, got: %q", logs)
+	}
+	if !strings.Contains(logs, "skipping file (read error)") {
+		t.Errorf("expected read error warn msg, got: %q", logs)
 	}
 }

@@ -39,15 +39,18 @@ type pubkeyEnvelope struct {
 // are made; only the top-level "pubkey" JSON field is parsed.
 //
 // Files that lack a "pubkey" field or contain invalid JSON are silently skipped
-// (a slog.Debug message is emitted per skipped file). Directories and non-.json
-// entries are also skipped.
+// (a Debug message is emitted per skipped file if logger non-nil). Read errors
+// are logged at Warn. Directories and non-.json entries are also skipped.
 //
 // A non-nil error is returned only if dir cannot be listed at all (e.g. it does
 // not exist or the caller lacks read permission).
-func ScanDir(dir string) (DirectoryIndex, error) {
+//
+// (Internal signature break documented in MIGRATION.md per M1.4-2 / GO-028; all
+// in-tree callers were updated.)
+func ScanDir(dir string, logger *slog.Logger) (DirectoryIndex, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, err // bare return (pre-existing; GO-046 / %w audit deferred to M1.5 per narrow M1.4-2 scope + no %w changes decision)
 	}
 
 	index := make(DirectoryIndex, len(entries))
@@ -62,18 +65,24 @@ func ScanDir(dir string) (DirectoryIndex, error) {
 		path := filepath.Join(dir, e.Name())
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			slog.Debug("keystore.ScanDir: skipping file (read error)", "path", path, "error", err)
+			if logger != nil {
+				logger.Warn("keystore.ScanDir: skipping file (read error)", "path", path, "error", err)
+			}
 			continue
 		}
 
 		var env pubkeyEnvelope
 		if err := json.Unmarshal(raw, &env); err != nil {
-			slog.Debug("keystore.ScanDir: skipping file (invalid JSON)", "path", path, "error", err)
+			if logger != nil {
+				logger.Debug("keystore.ScanDir: skipping file (invalid JSON)", "path", path, "error", err)
+			}
 			continue
 		}
 
 		if env.Pubkey == "" {
-			slog.Debug("keystore.ScanDir: skipping file (missing pubkey field)", "path", path)
+			if logger != nil {
+				logger.Debug("keystore.ScanDir: skipping file (missing pubkey field)", "path", path)
+			}
 			continue
 		}
 
