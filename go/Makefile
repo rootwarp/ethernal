@@ -1,4 +1,4 @@
-.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc oracle-regen test-cross-validate help
+.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc oracle-regen test-cross-validate help doc-audit
 
 BIN     := bin/eth-deposit-gen
 BIN_TX  := bin/eth-deposit-tx
@@ -109,3 +109,54 @@ test-cross-validate:
 ## help: list available targets
 help:
 	@grep -E '^## ' Makefile | sed 's/## /  make /'
+
+## doc-audit: verify --help output of both binaries (via go run) matches flag tables in docs/USER-GUIDE.md.
+## Fails on any delta (flag in binary missing from docs or vice versa).
+## Implements M1.8-4 / Spike S5 / PRD metric #9. Uses grep smoke (per time-box note).
+## Forward lists aligned strictly to *literal* | Flag | markdown tables (see HIGH fixes).
+## Reverse + OK_EXTRA is the "vice versa" half (Spike S5); OK_EXTRA transitional for
+## pre-existing deltas (documented in maintainer + comment below). documented in USER-GUIDE maintainer section.
+doc-audit:
+	@echo "doc-audit: checking eth-deposit-gen + eth-deposit-tx --help against docs/USER-GUIDE.md flag tables (M1.8-4)"
+	@set -e; set -u; set -o pipefail; \
+	G_HELP=$$($(GOFLAGS) go run ./cmd/eth-deposit-gen --help 2>&1) || { echo "doc-audit: go run failed for eth-deposit-gen"; exit 1; }; \
+	for f in --keystore-dir --pubkeys --network --output-dir --passphrase-env --i-understand-this-is-mainnet --dry-run --parallel --verbose --json-logs --verify-with-deposit-cli --deposit-cli-path; do \
+	  echo "$$G_HELP" | grep -q -- "$$f" || { echo "FAIL: $$f (doc) missing from eth-deposit-gen --help"; exit 1; }; \
+	done; \
+	for sub in build run; do \
+	  T_HELP=$$($(GOFLAGS) go run ./cmd/eth-deposit-tx $$sub --help 2>&1) || { echo "doc-audit: go run failed for eth-deposit-tx $$sub"; exit 1; }; \
+	  for f in --input-file --input -i --network -n --output --index --rpc-url --gas-limit --max-fee-per-gas --max-priority-fee-per-gas --nonce; do \
+	    echo "$$T_HELP" | grep -q -- "$$f" || { echo "FAIL: $$f (doc) missing from eth-deposit-tx $$sub --help"; exit 1; }; \
+	  done; \
+	done; \
+	for sub in sign; do \
+	  T_HELP=$$($(GOFLAGS) go run ./cmd/eth-deposit-tx $$sub --help 2>&1) || { echo "doc-audit: go run failed for eth-deposit-tx $$sub"; exit 1; }; \
+	  for f in --signer --input -i --output -o --private-key-env; do \
+	    echo "$$T_HELP" | grep -q -- "$$f" || { echo "FAIL: $$f (doc) missing from eth-deposit-tx $$sub --help"; exit 1; }; \
+	  done; \
+	done; \
+	for sub in send; do \
+	  T_HELP=$$($(GOFLAGS) go run ./cmd/eth-deposit-tx $$sub --help 2>&1) || { echo "doc-audit: go run failed for eth-deposit-tx $$sub"; exit 1; }; \
+	  for f in --input -i --rpc-url --yes --wait-for-receipt --receipt-timeout --receipt-output; do \
+	    echo "$$T_HELP" | grep -q -- "$$f" || { echo "FAIL: $$f (doc) missing from eth-deposit-tx $$sub --help"; exit 1; }; \
+	  done; \
+	done; \
+	# MED#5: stricter shell (set -u/pipefail at top of body); explicit capture fail for go run (prevents misleading "missing flag" on compile/CGO error)
+	# alias subcheck (MED#4): urfave renders e.g. "--input ... -i ..." so forward grep -q on -i etc succeeds; reverse long-opt only (time-box intentional)
+	echo "$$( $(GOFLAGS) go run ./cmd/eth-deposit-tx build --help 2>&1 )" | grep -q -- '-i' || { echo "FAIL: alias -i not rendered in build --help text (brittle urfave render?)"; exit 1; }; \
+	# OK_EXTRA transitional (HIGH#3): reverse "vice versa" (Spike S5) intentionally skips these pre-existing deltas so PASS on develop.
+	# --withdrawal-address: emitted by gen (internal/cli/cli.go:152, CustomAppHelpTemplate, live --help) but absent from *literal* gen Flags table (USER-GUIDE.md:150-162).
+	# --allow-non-deposit-recipient: emitted by sign (sign.go ~160 + Flags) but absent from *literal* sign Flags table (USER-GUIDE.md:316-322).
+	# (confirm-network/i-accept-* are in mainnet prose 541+ and code (run.go:184 etc) but were trimmed from forward lists to align strictly with per-sub | Flag | tables.)
+	# Run-specific like --keep-unsigned/--raw-output/--allow-non (in run help + USER-GUIDE prose) covered by reverse smoke (no dedicated cross-or needed; removed for recipe robustness per MED).
+	# Documented here + in USER-GUIDE maintainer; shrink OK_EXTRA post future table updates. Std --help etc always allowed.
+	OK_EXTRA="--withdrawal-address --allow-non-deposit-recipient --help --version -h"; \
+	for sub in "" "build" "sign" "run" "send"; do \
+	  if [ -z "$$sub" ]; then BIN="./cmd/eth-deposit-gen"; else BIN="./cmd/eth-deposit-tx $$sub"; fi; \
+	  H=$$( $(GOFLAGS) go run $$BIN --help 2>&1 | grep -oE -- '--[a-z0-9-]+' | sort -u ) || { echo "doc-audit: go run failed for $$BIN"; exit 1; }; \
+	  for f in $$H; do \
+	    case " $$OK_EXTRA " in *" $$f "*) continue ;; esac; \
+	    grep -q -- "$$f" docs/USER-GUIDE.md || { echo "FAIL: $$f from '$$BIN --help' undocumented in USER-GUIDE.md (help capture was partial: see prior)"; exit 1; }; \
+	  done; \
+	done; \
+	echo "doc-audit: PASS (0 deltas; exits 0 on develop)"

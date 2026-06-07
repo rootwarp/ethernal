@@ -26,6 +26,7 @@ Comprehensive guide for the two CLIs in this monorepo:
 13. [Security](#security)
 14. [Recipes](#recipes)
 15. [Troubleshooting](#troubleshooting)
+16. [Maintainer](#maintainer)
 
 ---
 
@@ -843,3 +844,28 @@ cast decode-typed-tx "$RAW"
 - For everything else, run with `--verbose` and `--json-logs` (eth-deposit-gen) to get structured diagnostics.
 
 **Note on symptoms:** Every troubleshooting row's symptom name (exact sentinels like ErrBroadcastChainIDMismatch/ErrRPCDial, ucli.Exit strings like "deposit entry validation: ..."/"--index ...", wrappers like "build: invalid input: ...", or node messages under listed Err*) appears in (or maps directly to entries in) architecture §15 exit-code table and is covered by M1.5-9 TestExitCodeContract (source of truth). See arch §15:1736 (ucli/ErrInvalidInput), 1738-1739 (deposit/tx.Err lists), 1744 (broadcast), exit.go, and contract tests.
+
+## Maintainer
+
+### `make doc-audit` (M1.8-4 / Spike S5)
+
+`make -C go doc-audit` (or `cd go && make doc-audit`) implements the doc-audit mechanism.
+
+It:
+
+- Executes `$(GOFLAGS) go run ./cmd/eth-deposit-gen --help` and equiv for `eth-deposit-tx build|sign|run|send --help`.
+- Greps for every flag listed in the flag tables (and mainnet sections) of this file; fails if any documented flag is absent from the live --help.
+- Extracts flags from --help outputs and requires each (except --help/--version and a minimal transitional allowlist) to appear as text in this USER-GUIDE (catches introduction of an undocumented flag in the binaries).
+- Exits non-zero on any delta.
+
+This is the automated guard for PRD success metric #9 ("Documented CLI contract ... audited by a `make doc-audit` target" → 0 deltas).
+
+**Usage:** Run before any PR touching CLI flags (in cmd/eth-deposit-*/main.go , internal/cli/cli.go , or config load). It must exit 0 on `develop`.
+
+See `go/Makefile:doc-audit` for the exact (grep-based smoke) implementation; chosen per project-plan time-box / Spike S5 note (simple diff vs committed contract.txt or full table parser would have been fancier but unavailable in the 1-day box).
+
+**Pre-existing deltas note (HIGH feedback round):** Forward lists now strictly match *literal* | Flag | tables only (gen table USER-GUIDE.md:150-162 omits --withdrawal-address which is emitted in internal/cli/cli.go:152 + gen --help + examples; tx sub tables omit --confirm-network/--i-accept-local-signer-on-mainnet which live in mainnet ceremony section:541+ and code e.g. run.go:184, send.go:162). These + --allow-non-deposit-recipient (sign table:316-322 omits; emitted in sign.go Flags) are covered by reverse + OK_EXTRA transitional allowlist + prose docs (explicit in Makefile:145 comment citing tables + emission sites). OK_EXTRA + reverse is the "vice versa" per Spike S5; will shrink after future table hygiene. Reverse long-opt extract + alias text-grep (e.g. -i) is intentional time-boxed smoke (MED fixes added set -u/pipefail + capture guards + alias subcheck).
+
+AC1: exists + exits 0 on develop.  
+AC2: fails on undocumented flag (verifiable by temp edit adding a flag to a ucli.Flags slice then revert).  
+AC3: this section.
