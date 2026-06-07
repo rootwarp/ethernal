@@ -1,4 +1,4 @@
-.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc help
+.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc oracle-regen help
 
 BIN     := bin/eth-deposit-gen
 BIN_TX  := bin/eth-deposit-tx
@@ -97,6 +97,10 @@ assert-no-zero-wc:
 	  echo "found zero WC (expected until M0.10)"; \
 	  false; \
 	fi
+
+## oracle-regen: regenerate the committed fastssz-generated oracle_types_ssz.go from hand-written oracle_types.go (M1.2-4; supports `go generate ./...` too)
+oracle-regen:
+	GOWORK=off go generate ./internal/ssz/testdata
 
 ## help: list available targets
 help:
