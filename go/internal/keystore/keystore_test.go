@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -99,7 +100,7 @@ func generateFixture(t *testing.T, cipher string, secret []byte, passphrase stri
 func writeFixture(t *testing.T, data []byte) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "keystore.json")
+	path := filepath.Join(dir, "json")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestLoad_WrongPassphrase(t *testing.T) {
 
 func TestLoad_MissingFile(t *testing.T) {
 	loader := keystore.NewLoader()
-	_, err := loader.Load(context.Background(), "/nonexistent/path/keystore.json", newBytesSource(testPassphrase))
+	_, err := loader.Load(context.Background(), "/nonexistent/path/json", newBytesSource(testPassphrase))
 	if err == nil {
 		t.Fatal("Load() error = nil, want ErrKeystoreMissing")
 	}
@@ -181,7 +182,7 @@ func TestLoader_CtxCancelBeforeRead_NoFileIO(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := loader.Load(ctx, "/nonexistent/path/keystore.json", newBytesSource(testPassphrase))
+	_, err := loader.Load(ctx, "/nonexistent/path/json", newBytesSource(testPassphrase))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Load err = %v, want context.Canceled (proves no os.ReadFile attempted)", err)
 	}
@@ -189,7 +190,7 @@ func TestLoader_CtxCancelBeforeRead_NoFileIO(t *testing.T) {
 
 func TestLoad_MalformedJSON(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "keystore.json")
+	path := filepath.Join(dir, "json")
 	if err := os.WriteFile(path, []byte("not-json{{{"), 0600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestLoad_VersionNotFour(t *testing.T) {
 	}
 	data, _ := json.Marshal(ks)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "keystore.json")
+	path := filepath.Join(dir, "json")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -352,7 +353,7 @@ func TestLoad_UnreadableFile(t *testing.T) {
 		t.Skip("running as root; chmod 000 has no effect")
 	}
 	dir := t.TempDir()
-	path := filepath.Join(dir, "keystore.json")
+	path := filepath.Join(dir, "json")
 	if err := os.WriteFile(path, []byte(`{}`), 0000); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -568,4 +569,68 @@ func TestLoad_ErrString_DoesNotContainKeystorePayloadBytes(t *testing.T) {
 	// Re-uses bad-cipher construction (crypto present but no "checksum");
 	// reaches Decrypt → ErrKeystoreCipherText. (Malformed not hit here;
 	// AC2 asserts the sentinel; AC4 only requires the leak check.)
+}
+
+// --- M1.4-3 acceptance criteria tests (32-byte secret length + zeroize) ---
+
+// TestLoad_ShortSecret_31_Reject_Zeroized: 31-byte secret after decrypt
+// (via generateFixture with short input) → ErrKeystoreMalformed; the
+// buffer (instrumented via TestSecretBuffer) is zero post-rejection.
+// Follows exact style of M1.4-1 error tests (writeFixture, errors.Is, t.Fatal/t.Errorf)
+// and M1.1 instrumented zeroize tests ("secret bytes zeroed" hygiene message).
+// Uses exported TestSecretBuffer (tradeoff for external black-box test style in
+// M1.4-1 ACs + cross _test.go helper sharing; see var godoc + wontfix response).
+func TestLoad_ShortSecret_31_Reject_Zeroized(t *testing.T) {
+	short := make([]byte, 31)
+	for i := range short {
+		short[i] = byte(i + 1)
+	}
+	data := generateFixture(t, "pbkdf2", short, testPassphrase)
+	path := writeFixture(t, data)
+
+	loader := keystore.NewLoader()
+	_, err := loader.Load(context.Background(), path, newBytesSource(testPassphrase))
+	if err == nil {
+		t.Fatal("Load() error = nil, want ErrKeystoreMalformed")
+	}
+	if !errors.Is(err, keystore.ErrKeystoreMalformed) {
+		t.Errorf("Load() error = %v, want errors.Is ErrKeystoreMalformed", err)
+	}
+
+	// Inspect instrumented buffer (set by Load on this path before zeroizeBytes).
+	// keystore.TestSecretBuffer may alias zeroed secret-derived alloc (retention risk per review);
+	// we explicitly nil after + KeepAlive for observability during AC check.
+	if keystore.TestSecretBuffer == nil {
+		t.Fatal("TestSecretBuffer was not populated (instrumentation in test build missing)")
+	}
+	for i, b := range keystore.TestSecretBuffer {
+		if b != 0x00 {
+			t.Errorf("secret buffer[%d] = 0x%02x after rejection, want 0x00 (secret bytes zeroed per M1.4-3)", i, b)
+		}
+	}
+	runtime.KeepAlive(keystore.TestSecretBuffer) // comment + KeepAlive per review feedback for buffer observability in test
+	keystore.TestSecretBuffer = nil              // explicit cleanup after inspect: bounds retention of zeroed buffer header; improves test isolation / addresses mutable global lifetime
+}
+
+// TestLoad_HappyPath_32Byte exercises that a normal 32-byte secret still
+// decrypts successfully with len unchanged (AC; pairs with short-secret reject test).
+// Style matches existing happy-path fixture tests (e.g. TestLoad_ScryptFixtureFile)
+// and their len==32 asserts.
+func TestLoad_HappyPath_32Byte(t *testing.T) {
+	data := generateFixture(t, "pbkdf2", testSecret, testPassphrase)
+	path := writeFixture(t, data)
+
+	loader := keystore.NewLoader()
+	key, err := loader.Load(context.Background(), path, newBytesSource(testPassphrase))
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	defer key.Zeroize()
+
+	if len(key.Secret) != 32 {
+		t.Errorf("Load() Secret length = %d, want 32", len(key.Secret))
+	}
+	if !bytes.Equal(key.Secret, testSecret) {
+		t.Errorf("Load() Secret = %x, want %x", key.Secret, testSecret)
+	}
 }
