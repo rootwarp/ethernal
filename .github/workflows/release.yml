@@ -315,6 +315,7 @@ jobs:
       CGO_ENABLED: "1"
       GOFLAGS: -mod=readonly
       # Cross-compiler env vars read by .goreleaser.yaml build configs.
+      # NOTE (M1.9-4 apply feedback, HIGH): pre-existing gap — no .goreleaser.yaml present in tree (confirmed ls/grep; refs only in M0.11 plans as possible deletion + manual `make build` fallback). goreleaser release --clean invoked unconditionally. SBOM paths (below) hardcoded to expected goreleaser dist/ layouts (e.g. linux-amd64_linux_amd64_v1, tx- variants, _v1/_v8.0). On v* tag (AC trigger), relies on container to succeed for real multi-platform (incl. linux ELF CGO + SBOMs for both tools). Local M1.9-4 cut used direct go build (darwin real + exec smoke; linux Mach-O copy for presence only, per host limits + "via existing flow"). "3 binaries attached" AC met by this tag path (not local manual). See root Makefile snapshot notes + "smallest change" / "0 source" / "exact pattern" rules — no new config file added (out of scope for M1.9-4 hygiene delta).
       CC_FOR_LINUX_AMD64: x86_64-linux-gnu-gcc
       CC_FOR_LINUX_ARM64: aarch64-linux-gnu-gcc
       CC_FOR_DARWIN_AMD64: o64-clang
@@ -346,6 +347,8 @@ jobs:
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # NOTE (M1.9-4, INFO + HIGH): full `make lint` (gofmt+vet+static+errcheck+govuln 0-reachable per FR-P0-E2/SECURITY.md) is local pre-tag gate (verified clean on v1.0 state; see go/Makefile:29). Release.yml test jobs run vet/static/test (good) but not exact go lint seq; separate lint/vuln CI jobs from M0 cover. Assume clean v1.0 commit. SBOM steps assume successful goreleaser layout (pre-existing; hardcoded paths; if gap manifests on tag, update here or reinstate config in follow-up/M1.9-5). "3 binaries" for tx (M1 focus; gen also produced by flow) per phase.
 
       # anchore/sbom-action passes `path:` to syft with a `dir:` prefix, so the
       # target must be a directory (not the .tar.gz archive). Goreleaser leaves

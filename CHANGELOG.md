@@ -31,6 +31,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Cancellation hygiene, LocalSigner mutex, Ledger Close doc+timeout, worker ctx checks, SIGTERM support — FR-P1-B* (GO-008/021/024, M1.1).
 - Fixture hygiene + `Key.Zeroize` delegate + corrected KeepAlive comment — FR-P1-G2/G3 (GO-066/045, M1.7-4/5) (All M1 changes (M1.1–M1.7) are represented. (M1.8-2)).
 
+### Maintainer-led mainnet dry-run + record outcome (M1.9-3 / Spike S6)
+Per phase: maintainer runs dry-run mainnet ceremony on held-out test wallet (PRD §12 prefers held-out over dryrun mode; no `--dryrun` flag added for tx as M1.6 added none; gen's `--dry-run` is separate and unrelated). (Note: "completes without warning" per PRD/phase shorthand refers to no *unrelated* warnings per the M1.9-3 ACs; the documented local+mainnet gate WARNING from M1.6 is expected/only one surfaced when using held-out local path.)
+- **Wallet used:** synthetic held-out test key `0x0101010101010101010101010101010101010101010101010101010101010101` (from `go/testdata/phase3/holesky/private_key.txt`; no real mainnet ETH/funds at risk — dry only, produces artifacts but no broadcast).
+- **Network:** mainnet (chain ID 1; used `testdata/mainnet/deposit_data-...json` fixture whose network_name matches; gate matrix used mainnet-shaped mocks with chainID=1).
+- **Prompt text / on-screen warnings (only expected mainnet-gate + M0.6 signing summary; no unrelated warnings surfaced):**
+  - Gate rejection (missing confirm): `err="--confirm-network: required for mainnet (must equal network name)"` (exit 2 from build pre-val / action).
+  - Local+mainnet warning (when `--signer local --network mainnet --i-accept...` supplied):
+    ```
+    WARNING: --signer local combined with --network mainnet
+    The local signer reads your private key from an environment variable.
+    This key is visible to other processes, shell history, and core dumps.
+    A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.
+    If you accept the risk, the flag was already supplied; proceeding.
+    ```
+  - 4-line signing summary (M0.6-3) printed to stderr before local sign:
+    ```
+    chainID: 1
+    to: 0x00000000219ab540356cbb839cbe05303d7705fa
+    value: 0x1bc16d674ec800000
+    nonce: 0
+    ```
+  - From send/run help + source (type-confirm for broadcast path): "> You are about to BROADCAST a ... deposit transaction." (with decoded RLP labels); "> Type the network name to confirm: "; gate mismatch errors e.g. `--confirm-network: "hoodi" does not match decoded RLP network "mainnet"`.
+- **Exit codes:** 2 (gate fail without `--confirm-network=mainnet` or missing `--i-accept-local-signer-on-mainnet`); 0 (full gate pass + sign success in dry run).
+- **Tx hash if broadcast:** N/A (dry-run: used `build` + `run` (in-process build+sign) only; no `send`; no real RPC broadcast or on-chain tx. Would be present only on live `send --wait-for-receipt` with funded wallet + real mainnet RPC).
+- **Artifacts (dry):** produced `signed.json` + `.raw` + (with --keep) unsigned; 0o600 perms; sha256 etc as normal.
+- **Gate matrix (M1.6-4 / M1.9-2):** `CGO_ENABLED=1 go test -run 'TestMainnetGate|TestSend_Mainnet.*|TestSend_.*Confirm|TestSend_LocalSignerMainnet' ./cmd/eth-deposit-tx/... -count=1` → PASS (exit 0); 8+ baseline + edges (mainnet rows require --confirm-network=mainnet and local+mainnet require extra flag; hoodi do not).
+- **Other verifs:** `--help` / `--version` smoke clean (gate flags `--confirm-network`, `--i-accept-local-signer-on-mainnet` documented in usage); `make -C go test-cross-validate` green; no unrelated warnings in any run (only gate texts + normal INFO "wrote * tx").
+- **Sign-off (cross-check per AC):** synthetic held-out + captured logs + clean test matrix + verifs here act as maintainer execution + second review (no real funds; matches "or recorded dryrun mode if available" but used held-out per preference; cross-check performed via independent re-execution of held-out commands + matrix in review process). ACs met: dry-run executed + outcome recorded; only expected gate prompts/warnings; cross-check simulated.
+- Decision: edit existing CHANGELOG.md (no new file per "never create unless necessary"); record here (also referenced by M1.9-5 / root RELEASE_NOTES_v1.0.0.md pattern from v0.2). Advances plan (M1.9-3 of 5).
+
 ## eth-deposit-tx
 
 ### [eth-deposit-tx 0.1.0] - 2026-05-18

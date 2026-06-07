@@ -572,7 +572,7 @@ func TestOutputDirIsFile(t *testing.T) {
 
 // TestErrorIsExitCoder verifies that validation errors returned by the app are
 // ucli.ExitCoder values with exit code 2 (user errors per PRD), matching the
-// urfave/cli ExitCoder + exitCodeFor contract (docstring updated from 1).
+// urfave/cli ExitCoder + exitCodeFor contract.
 func TestErrorIsExitCoder(t *testing.T) {
 	dir := t.TempDir()
 	ksDir := t.TempDir()
