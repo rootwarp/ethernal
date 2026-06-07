@@ -134,6 +134,10 @@ Exit codes:
 				EnvVars: []string{"ETH_DEPOSIT_TX_NETWORK"},
 			},
 			&ucli.StringFlag{
+				Name:  "confirm-network",
+				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
+			},
+			&ucli.StringFlag{
 				Name:    "output",
 				Usage:   "Output file for the unsigned transaction (default: stdout)",
 				EnvVars: []string{"ETH_DEPOSIT_TX_OUTPUT"},
@@ -178,6 +182,12 @@ Exit codes:
 			if cfg.RPCURL != "" {
 				// build remains strictly offline; reject per M0.7-8a (M1.3-5 keeps for build, wires run only).
 				return ucli.Exit(internaltx.ErrRPCURLRejected.Error(), 2)
+			}
+
+			// M1.6-1 confirm-network match (build for symmetry; equiv to sendAction
+			// post-decode logic). Mainnet required already enforced in LoadBuildConfig.
+			if cfg.ConfirmNetwork != "" && cfg.ConfirmNetwork != string(cfg.NetworkParams.Name) {
+				return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match --network %q", cfg.ConfirmNetwork, cfg.NetworkParams.Name), 2)
 			}
 
 			// Read deposit data from file or stdin.

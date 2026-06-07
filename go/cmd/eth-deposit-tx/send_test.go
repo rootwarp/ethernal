@@ -16,11 +16,13 @@ import (
 
 	ucli "github.com/urfave/cli/v2"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
+	"math/big"
 )
 
 // mockBroadcaster is a test double for EthBroadcaster using the function-field pattern.
@@ -1028,3 +1030,179 @@ func TestSend_BroadcasterChainIDCanceled_ExitCanceled(t *testing.T) {
 		t.Fatal("timeout waiting for BroadcasterChainID cancel to surface")
 	}
 }
+
+// The following 4 named tests are the M1.6-1 AC tests (using existing send test
+// helpers/mocks/app.Run/OsExiter/ExitCodeFor/withMockBroadcaster/newSendTestApp +
+// got/want style + --yes + override of validateSignedAgainstRLP for mainnet-shaped
+// decoded RLP chain while fixture remains holesky; follows M1.5-1/6/7/9 patterns exactly
+// for pre-val coverage via Load + named AC + Is-not-needed-here + smallest + verif -run filter).
+// Flag presence tested via --help in verif step (not new test here).
+
+func TestSend_MainnetWithYesButNoConfirm_Reject(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	// Override validate to return mainnet-shaped decoded RLP (chainID=1) so RPC
+	// guard can pass when mock also returns 1; the input fixture's RLP is not used.
+	origValidate := validateSignedAgainstRLP
+	validateSignedAgainstRLP = func(*signer.SignedTx, network.Params) (*types.Transaction, error) {
+		to := common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+		val := new(big.Int)
+		val.SetString("32000000000000000000", 10)
+		return types.NewTx(&types.DynamicFeeTx{
+			ChainID:   big.NewInt(1),
+			Nonce:     0,
+			GasTipCap: big.NewInt(1_000_000_000),
+			GasFeeCap: big.NewInt(20_000_000_000),
+			Gas:       250000,
+			To:        &to,
+			Value:     val,
+			Data:      nil,
+		}), nil
+	}
+	t.Cleanup(func() { validateSignedAgainstRLP = origValidate })
+
+	broadcastCalled := false
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return 1, nil }, // mainnet-shaped RPC
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) {
+			broadcastCalled = true
+			return fakeTxHash, nil
+		},
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+		// deliberately no --confirm-network
+	})
+	if err == nil {
+		t.Fatal("expected error for missing --confirm-network on mainnet, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	if broadcastCalled {
+		t.Error("broadcast should not have been called")
+	}
+}
+
+func TestSend_ConfirmNetworkMismatchRPC_Reject(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	origValidate := validateSignedAgainstRLP
+	validateSignedAgainstRLP = func(*signer.SignedTx, network.Params) (*types.Transaction, error) {
+		to := common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+		val := new(big.Int)
+		val.SetString("32000000000000000000", 10)
+		return types.NewTx(&types.DynamicFeeTx{
+			ChainID:   big.NewInt(1),
+			Nonce:     0,
+			GasTipCap: big.NewInt(1_000_000_000),
+			GasFeeCap: big.NewInt(20_000_000_000),
+			Gas:       250000,
+			To:        &to,
+			Value:     val,
+			Data:      nil,
+		}), nil
+	}
+	t.Cleanup(func() { validateSignedAgainstRLP = origValidate })
+
+	broadcastCalled := false
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return 1, nil }, // mainnet-shaped RPC
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) {
+			broadcastCalled = true
+			return fakeTxHash, nil
+		},
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+		"--confirm-network", "hoodi", // mismatches the mainnet (RPC+decoded)
+	})
+	if err == nil {
+		t.Fatal("expected error for confirm-network mismatch, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	if broadcastCalled {
+		t.Error("broadcast should not have been called")
+	}
+}
+
+func TestSend_ConfirmNetworkMatch_Allow(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	origValidate := validateSignedAgainstRLP
+	validateSignedAgainstRLP = func(*signer.SignedTx, network.Params) (*types.Transaction, error) {
+		to := common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+		val := new(big.Int)
+		val.SetString("32000000000000000000", 10)
+		return types.NewTx(&types.DynamicFeeTx{
+			ChainID:   big.NewInt(1),
+			Nonce:     0,
+			GasTipCap: big.NewInt(1_000_000_000),
+			GasFeeCap: big.NewInt(20_000_000_000),
+			Gas:       250000,
+			To:        &to,
+			Value:     val,
+			Data:      nil,
+		}), nil
+	}
+	t.Cleanup(func() { validateSignedAgainstRLP = origValidate })
+
+	broadcastCalled := false
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(_ context.Context) (uint64, error) { return 1, nil },
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) {
+			broadcastCalled = true
+			return fakeTxHash, nil
+		},
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--yes",
+		"--confirm-network", "mainnet", // matches decoded+RPC
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on matching confirm-network: %v", err)
+	}
+	if !broadcastCalled {
+		t.Error("broadcast should have been called on allow")
+	}
+	if !strings.Contains(out.String(), fakeTxHash) {
+		t.Errorf("output missing tx hash on allow; got: %s", out.String())
+	}
+}
+
+// 4th AC is flag visibility in --help (verified in post-edit verif step via `eth-deposit-tx send --help` etc.; no dedicated test func per smallest + M1.5 patterns for flag-in-help).

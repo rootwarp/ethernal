@@ -166,6 +166,11 @@ Exit codes:
 			if err != nil {
 				return err
 			}
+			// M1.6-1 confirm-network match for run (equiv to build/sendAction logic).
+			// (Mainnet required pre-validated inside LoadBuildConfig called by LoadRunConfig.)
+			if cfg.Build.ConfirmNetwork != "" && cfg.Build.ConfirmNetwork != string(cfg.Build.NetworkParams.Name) {
+				return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match --network %q", cfg.Build.ConfirmNetwork, cfg.Build.NetworkParams.Name), 2)
+			}
 			return runAction(c, cfg)
 		},
 	}
@@ -186,6 +191,10 @@ func buildFlags() []ucli.Flag {
 			Usage:   "Target network (mainnet, hoodi, sepolia, holesky)",
 			Value:   "hoodi",
 			EnvVars: []string{"ETH_DEPOSIT_TX_NETWORK"},
+		},
+		&ucli.StringFlag{
+			Name:  "confirm-network",
+			Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
 		},
 		&ucli.StringFlag{
 			Name:    "output",

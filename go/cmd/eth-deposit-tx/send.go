@@ -49,6 +49,11 @@ type SendConfig struct {
 	ReceiptTimeout time.Duration
 	// ReceiptOutputFile is an optional file path to write the receipt JSON.
 	ReceiptOutputFile string
+
+	// ConfirmNetwork is the --confirm-network value (mainnet ack gate).
+	// Pre-validated for syntactic validity here; full match + mainnet-required
+	// checked in sendAction after RLP decode + RPC (per M1.6-1).
+	ConfirmNetwork string
 }
 
 // LoadSendConfig parses and validates send subcommand flags.
@@ -71,6 +76,13 @@ func LoadSendConfig(c *ucli.Context) (*SendConfig, error) {
 	receiptOutput := c.String("receipt-output")
 	waitForReceipt := c.Bool("wait-for-receipt") || receiptOutput != ""
 
+	confirmNet := c.String("confirm-network")
+	if confirmNet != "" {
+		if _, err := network.ParseFlag(confirmNet); err != nil {
+			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
+		}
+	}
+
 	return &SendConfig{
 		InputFile:         inputFile,
 		RPCURL:            rpcURL,
@@ -78,6 +90,7 @@ func LoadSendConfig(c *ucli.Context) (*SendConfig, error) {
 		WaitForReceipt:    waitForReceipt,
 		ReceiptTimeout:    timeout,
 		ReceiptOutputFile: receiptOutput,
+		ConfirmNetwork:    confirmNet,
 	}, nil
 }
 
@@ -132,6 +145,10 @@ Exit codes:
 			&ucli.BoolFlag{
 				Name:  "yes",
 				Usage: "Skip the interactive confirmation prompt (for non-interactive automation; use with caution)",
+			},
+			&ucli.StringFlag{
+				Name:  "confirm-network",
+				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match decoded RLP network name and RPC-derived name where available; --yes does not bypass)",
 			},
 			&ucli.BoolFlag{
 				Name:  "wait-for-receipt",
@@ -220,6 +237,31 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 		netParams = network.Params{
 			Name:    network.Network(fmt.Sprintf("chain-%d", rpcChainID)),
 			ChainID: rpcChainID,
+		}
+	}
+
+	// M1.6-1: --confirm-network gate (after validateSignedAgainstRLP for
+	// decoded-RLP net name, after RPC chainID guard for RPC-derived name).
+	// Value must equal both (they agree post-guard). Mainnet requires it;
+	// otherwise optional-but-match-if-set. --yes does NOT bypass. Pre-val in
+	// Load*Config only does "required for mainnet (build/run)" + name syntax.
+	decodedNetName := string(netParams.Name)
+	if p, err := network.LookupByChainID(rlpTx.ChainId().Uint64()); err == nil {
+		decodedNetName = string(p.Name)
+	}
+	rpcNetName := string(netParams.Name)
+	confirm := cfg.ConfirmNetwork
+	if confirm != "" {
+		if confirm != decodedNetName {
+			return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match decoded RLP network %q", confirm, decodedNetName), 2)
+		}
+		if confirm != rpcNetName {
+			return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match RPC network %q", confirm, rpcNetName), 2)
+		}
+	}
+	if decodedNetName == "mainnet" || rpcNetName == "mainnet" {
+		if confirm == "" {
+			return ucli.Exit("--confirm-network: required for mainnet (value must equal network name)", 2)
 		}
 	}
 

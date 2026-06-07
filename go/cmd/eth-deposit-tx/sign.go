@@ -12,6 +12,7 @@ import (
 	ucli "github.com/urfave/cli/v2"
 
 	"github.com/rootwarp/eth-utils/go/internal/cli"
+	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
@@ -36,6 +37,10 @@ type SignConfig struct {
 	// deposit-contract address cross-check for the ChainID (the 42-char
 	// IsHexAddress check is never skipped). Default false (strict).
 	AllowNonDepositRecipient bool
+
+	// ConfirmNetwork is the --confirm-network value (for symmetry / pre-val).
+	// (Sign has no broadcast so no 3-way compare; mainnet gate on run/send/build.)
+	ConfirmNetwork string
 }
 
 // LoadSignConfig parses and validates sign subcommand flags.
@@ -67,12 +72,20 @@ func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
 
 	allowNonDeposit := c.Bool("allow-non-deposit-recipient")
 
+	confirmNet := c.String("confirm-network")
+	if confirmNet != "" {
+		if _, err := network.ParseFlag(confirmNet); err != nil {
+			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
+		}
+	}
+
 	return &SignConfig{
 		Signer:                   signerType,
 		InputFile:                inputFile,
 		OutputFile:               c.String("output"),
 		PrivateKeyEnvVar:         envVar,
 		AllowNonDepositRecipient: allowNonDeposit,
+		ConfirmNetwork:           confirmNet,
 	}, nil
 }
 
@@ -126,6 +139,10 @@ Exit codes:
 				Name:    "output",
 				Aliases: []string{"o"},
 				Usage:   "Output file for the signed transaction (default: stdout)",
+			},
+			&ucli.StringFlag{
+				Name:  "confirm-network",
+				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
 			},
 			&ucli.StringFlag{
 				Name:  "private-key-env",

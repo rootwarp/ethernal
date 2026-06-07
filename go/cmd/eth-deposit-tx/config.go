@@ -53,6 +53,12 @@ type Config struct {
 
 	// Nonce is an optional explicit nonce override. Nil means fetch from RPC or require manual flag.
 	Nonce *uint64
+
+	// ConfirmNetwork is the value of --confirm-network (explicit mainnet ack gate).
+	// Required for --network mainnet; if set must match the target network name
+	// (and decoded-RLP / RPC-derived name where applicable). Pre-validated here
+	// per M1.5-1 pattern. --yes does not bypass.
+	ConfirmNetwork string
 }
 
 // LoadBuildConfig resolves flag > env > defaults into a typed Config.
@@ -78,6 +84,19 @@ func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 	params, err := network.Lookup(net)
 	if err != nil {
 		return nil, ucli.Exit(fmt.Sprintf("--network: %v", err), 2)
+	}
+
+	// Pre-validate --confirm-network (M1.6-1 / M1.5-1 pattern): mainnet requires it;
+	// if set must be a supported network name. (Value match vs RLP/RPC happens
+	// later in actions.)
+	confirmNet := c.String("confirm-network")
+	if net == network.Mainnet && confirmNet == "" {
+		return nil, ucli.Exit("--confirm-network: required for mainnet (must equal network name)", 2)
+	}
+	if confirmNet != "" {
+		if _, err := network.ParseFlag(confirmNet); err != nil {
+			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
+		}
 	}
 
 	// 2. Gas limit — string flag so env-var override works alongside flag.
@@ -140,6 +159,7 @@ func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 		MaxFeePerGas:         maxFee,
 		MaxPriorityFeePerGas: maxPrioFee,
 		Nonce:                nonce,
+		ConfirmNetwork:       confirmNet,
 	}
 	return cfg, nil
 }
