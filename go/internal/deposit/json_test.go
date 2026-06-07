@@ -231,6 +231,20 @@ func TestValidate_Valid(t *testing.T) {
 	e.NetworkName = network.Hoodi
 	e.WithdrawalCredentials[0] = 0x01 // canonical shape (0x01 + 11x00 + addr)
 
+	msg := ssz.DepositMessage{
+		Pubkey:                e.Pubkey,
+		WithdrawalCredentials: e.WithdrawalCredentials,
+		Amount:                e.Amount,
+	}
+	e.DepositMessageRoot = msg.HashTreeRoot()
+	data := ssz.DepositData{
+		Pubkey:                e.Pubkey,
+		WithdrawalCredentials: e.WithdrawalCredentials,
+		Amount:                e.Amount,
+		Signature:             e.Signature,
+	}
+	e.DepositDataRoot = data.HashTreeRoot()
+
 	if err := e.Validate(); err != nil {
 		t.Errorf("Validate() on valid entry: unexpected error: %v", err)
 	}
@@ -306,7 +320,6 @@ func TestEntry_Validate_WC_Reject(t *testing.T) {
 		var e Entry
 		e.Pubkey[0] = 0xAB
 		e.Signature[0] = 0xCD
-		e.DepositDataRoot[0] = 0xEF
 		e.Amount = 32_000_000_000
 		e.NetworkName = network.Hoodi
 		e.WithdrawalCredentials[0] = 0x01 // base good; mutFn will override for reject cases
@@ -387,6 +400,20 @@ func TestEntry_Validate_WC_Accept(t *testing.T) {
 	// bytes 1-11 stay zero (default)
 	e.WithdrawalCredentials[12] = 0x01 // start of "addr" part
 	e.WithdrawalCredentials[31] = 0x02 // some non-zero in addr part
+
+	msg := ssz.DepositMessage{
+		Pubkey:                e.Pubkey,
+		WithdrawalCredentials: e.WithdrawalCredentials,
+		Amount:                e.Amount,
+	}
+	e.DepositMessageRoot = msg.HashTreeRoot()
+	data := ssz.DepositData{
+		Pubkey:                e.Pubkey,
+		WithdrawalCredentials: e.WithdrawalCredentials,
+		Amount:                e.Amount,
+		Signature:             e.Signature,
+	}
+	e.DepositDataRoot = data.HashTreeRoot()
 
 	if err := e.Validate(); err != nil {
 		t.Errorf("Validate() on canonical 0x01 WC entry: unexpected error: %v", err)
@@ -489,5 +516,71 @@ func TestValidateForNetwork_HappyPath(t *testing.T) {
 	e := validSignedEntryForParams(t, pHoodi)
 	if err := e.ValidateForNetwork(pHoodi, bls.DefaultVerifier()); err != nil {
 		t.Errorf("ValidateForNetwork(well-formed hoodi entry vs hoodi params) unexpected error: %v", err)
+	}
+}
+
+func TestEntryValidate_SignatureTampered_DataRootMismatch(t *testing.T) {
+	tests := []struct{ name string }{{name: "sig"}}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			pHoodi := hoodiParams()
+			e := validSignedEntryForParams(t, pHoodi)
+			data := ssz.DepositData{
+				Pubkey:                e.Pubkey,
+				WithdrawalCredentials: e.WithdrawalCredentials,
+				Amount:                e.Amount,
+				Signature:             e.Signature,
+			}
+			e.DepositDataRoot = data.HashTreeRoot()
+			e.Signature[0] ^= 0x01
+			if err := e.Validate(); !errors.Is(err, ErrDepositDataRootMismatch) {
+				t.Errorf("Validate(flipped signature) error = %v, want errors.Is(ErrDepositDataRootMismatch)", err)
+			}
+		})
+	}
+}
+
+func TestEntryValidate_PubkeyTampered_MessageRootMismatch(t *testing.T) {
+	tests := []struct{ name string }{{name: "pubkey"}}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			pHoodi := hoodiParams()
+			e := validSignedEntryForParams(t, pHoodi)
+			data := ssz.DepositData{
+				Pubkey:                e.Pubkey,
+				WithdrawalCredentials: e.WithdrawalCredentials,
+				Amount:                e.Amount,
+				Signature:             e.Signature,
+			}
+			e.DepositDataRoot = data.HashTreeRoot()
+			e.Pubkey[0] ^= 0x01
+			if err := e.Validate(); !errors.Is(err, ErrDepositMessageRootMismatch) {
+				t.Errorf("Validate(flipped pubkey) error = %v, want errors.Is(ErrDepositMessageRootMismatch)", err)
+			}
+		})
+	}
+}
+
+func TestEntryValidate_AmountTampered_MessageRootMismatch(t *testing.T) {
+	tests := []struct{ name string }{{name: "amount"}}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			pHoodi := hoodiParams()
+			e := validSignedEntryForParams(t, pHoodi)
+			data := ssz.DepositData{
+				Pubkey:                e.Pubkey,
+				WithdrawalCredentials: e.WithdrawalCredentials,
+				Amount:                e.Amount,
+				Signature:             e.Signature,
+			}
+			e.DepositDataRoot = data.HashTreeRoot()
+			e.Amount ^= 1
+			if err := e.Validate(); !errors.Is(err, ErrDepositMessageRootMismatch) {
+				t.Errorf("Validate(tampered amount) error = %v, want errors.Is(ErrDepositMessageRootMismatch)", err)
+			}
+		})
 	}
 }

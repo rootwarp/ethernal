@@ -24,3 +24,13 @@ var ErrForkVersionMismatch = errors.New("entry fork_version does not match targe
 // BLS signature fails to verify against the deposit domain computed from
 // the target's GenesisForkVersion and ZeroGenesisValidatorsRoot.
 var ErrBLSSignatureInvalid = errors.New("BLS signature does not verify against deposit domain")
+
+// ErrDepositMessageRootMismatch is returned by Entry.Validate when the
+// stored DepositMessageRoot does not equal the value recomputed via
+// ssz.DepositMessage{Pubkey, WithdrawalCredentials, Amount}.HashTreeRoot().
+var ErrDepositMessageRootMismatch = errors.New("computed deposit_message_root does not match entry")
+
+// ErrDepositDataRootMismatch is returned by Entry.Validate when the
+// stored DepositDataRoot does not equal the value recomputed via
+// ssz.DepositData{Pubkey, WithdrawalCredentials, Amount, Signature}.HashTreeRoot().
+var ErrDepositDataRootMismatch = errors.New("computed deposit_data_root does not match entry")

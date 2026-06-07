@@ -137,6 +137,10 @@ func EntriesFromJSON(data []byte) ([]Entry, error) {
 //   - Amount must be > 0
 //   - NetworkName must be a recognised network
 //   - WithdrawalCredentials: 0x00 all-zero body rejected (ErrZeroWithdrawal00); 0x01/0x02 bytes 1-11 must be zero (ErrInvalidWCFormat); other prefixes invalid
+//   - DepositMessageRoot must equal the SSZ recompute from (Pubkey, WithdrawalCredentials, Amount)
+//     else ErrDepositMessageRootMismatch (data integrity / tamper detection, GO-012)
+//   - DepositDataRoot must equal the SSZ recompute from (Pubkey, WithdrawalCredentials, Amount, Signature)
+//     else ErrDepositDataRootMismatch (data integrity / tamper detection, GO-012)
 func (e Entry) Validate() error {
 	// WC shape checks (DiD for hand-crafted JSON that bypasses the gen flag).
 	// (a) 0x00 + all-zero body → ErrZeroWithdrawal00
@@ -172,6 +176,26 @@ func (e Entry) Validate() error {
 	}
 	if _, err := network.Lookup(e.NetworkName); err != nil {
 		return fmt.Errorf("deposit: validate: network_name %q is not recognised: %w", e.NetworkName, err)
+	}
+
+	msg := ssz.DepositMessage{
+		Pubkey:                e.Pubkey,
+		WithdrawalCredentials: e.WithdrawalCredentials,
+		Amount:                e.Amount,
+	}
+	msgRoot := msg.HashTreeRoot()
+	if msgRoot != e.DepositMessageRoot {
+		return ErrDepositMessageRootMismatch
+	}
+	data := ssz.DepositData{
+		Pubkey:                e.Pubkey,
+		WithdrawalCredentials: e.WithdrawalCredentials,
+		Amount:                e.Amount,
+		Signature:             e.Signature,
+	}
+	dataRoot := data.HashTreeRoot()
+	if dataRoot != e.DepositDataRoot {
+		return ErrDepositDataRootMismatch
 	}
 	return nil
 }
