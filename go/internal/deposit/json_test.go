@@ -451,7 +451,7 @@ func validSignedEntryForParams(t *testing.T, p network.Params) Entry {
 		Amount:                amount,
 	}
 	msgRoot := msg.HashTreeRoot()
-	domain := ssz.ComputeDomain(network.DomainDeposit, p.GenesisForkVersion, network.ZeroGenesisValidatorsRoot)
+	domain := ssz.ComputeDomain(network.DomainDeposit(), p.GenesisForkVersion, network.ZeroGenesisValidatorsRoot())
 	signingRoot := ssz.ComputeSigningRoot(msgRoot, domain)
 
 	sig, err := snr.Sign(signingRoot)

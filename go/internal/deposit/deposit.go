@@ -70,18 +70,18 @@ type Entry struct {
 type Generator struct {
 	signer   bls.Signer
 	verifier bls.Verifier
-	domain   [32]byte       // precomputed: ComputeDomain(DomainDeposit, forkVersion, ZeroGVR)
+	domain   [32]byte       // precomputed: ComputeDomain(DomainDeposit(), forkVersion, ZeroGenesisValidatorsRoot())
 	params   network.Params // stored for ForkVersion and NetworkName in entries
 }
 
 // NewGenerator constructs a Generator that signs with s, verifies with v, and
 // uses the network parameters in params. The deposit domain is computed once
-// here using network.DomainDeposit and network.ZeroGenesisValidatorsRoot.
+// here using network.DomainDeposit() and network.ZeroGenesisValidatorsRoot().
 func NewGenerator(s bls.Signer, v bls.Verifier, params network.Params) *Generator {
 	domain := ssz.ComputeDomain(
-		network.DomainDeposit,
+		network.DomainDeposit(),
 		params.GenesisForkVersion,
-		network.ZeroGenesisValidatorsRoot,
+		network.ZeroGenesisValidatorsRoot(),
 	)
 	return &Generator{
 		signer:   s,

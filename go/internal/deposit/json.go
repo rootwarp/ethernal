@@ -208,7 +208,7 @@ func (e Entry) Validate() error {
 //   - entry.ForkVersion == target.GenesisForkVersion    → ErrForkVersionMismatch
 //   - bls.ValidatePubkeyBytes(entry.Pubkey)             → error from ValidatePubkeyBytes (bls.ErrPubkeyInvalid after M1.2-2)
 //   - signature verifies over DepositMessage HTR using
-//     compute_domain(DOMAIN_DEPOSIT, target.GenesisForkVersion, ZeroGenesisValidatorsRoot)
+//     compute_domain(DOMAIN_DEPOSIT, target.GenesisForkVersion, ZeroGenesisValidatorsRoot())
 //     → ErrBLSSignatureInvalid
 //
 // The verifier is supplied by the caller (typically bls.DefaultVerifier());
@@ -226,9 +226,9 @@ func (e Entry) ValidateForNetwork(target network.Params, v bls.Verifier) error {
 	}
 
 	domain := ssz.ComputeDomain(
-		network.DomainDeposit,
+		network.DomainDeposit(),
 		target.GenesisForkVersion,
-		network.ZeroGenesisValidatorsRoot,
+		network.ZeroGenesisValidatorsRoot(),
 	)
 
 	msg := ssz.DepositMessage{

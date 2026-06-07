@@ -54,12 +54,20 @@ func (p Params) DepositContractAddressHex() string {
 	return "0x" + hex.EncodeToString(p.DepositContractAddress[:])
 }
 
-// DomainDeposit is the 4-byte SSZ domain type for deposits (consensus spec constant).
-var DomainDeposit = [4]byte{0x03, 0x00, 0x00, 0x00}
+// domainDeposit is the 4-byte SSZ domain type for deposits (consensus spec constant).
+// Exported via DomainDeposit() per architecture §6.1 / §15 (GO-038).
+var domainDeposit = [4]byte{0x03, 0x00, 0x00, 0x00}
 
-// ZeroGenesisValidatorsRoot is the genesis_validators_root used for deposit
+// zeroGenesisValidatorsRoot is the genesis_validators_root used for deposit
 // signing — always 32 zero bytes per the consensus spec.
-var ZeroGenesisValidatorsRoot = [32]byte{}
+// Exported via ZeroGenesisValidatorsRoot() per architecture §6.1 / §15 (GO-038).
+var zeroGenesisValidatorsRoot = [32]byte{}
+
+// DomainDeposit returns the deposit domain by value (callers cannot mutate source).
+func DomainDeposit() [4]byte { return domainDeposit }
+
+// ZeroGenesisValidatorsRoot returns the zero genesis_validators_root by value (callers cannot mutate source).
+func ZeroGenesisValidatorsRoot() [32]byte { return zeroGenesisValidatorsRoot }
 
 // MinDepositAmountGwei is the minimum deposit amount in Gwei (MIN_ACTIVATION_BALANCE per EIP-7251).
 const MinDepositAmountGwei uint64 = 32_000_000_000

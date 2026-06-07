@@ -11,15 +11,15 @@ import (
 func TestConstants(t *testing.T) {
 	t.Run("DomainDeposit", func(t *testing.T) {
 		want := [4]byte{0x03, 0x00, 0x00, 0x00}
-		if network.DomainDeposit != want {
-			t.Errorf("DomainDeposit = %v, want %v", network.DomainDeposit, want)
+		if network.DomainDeposit() != want {
+			t.Errorf("DomainDeposit = %v, want %v", network.DomainDeposit(), want)
 		}
 	})
 
 	t.Run("ZeroGenesisValidatorsRoot", func(t *testing.T) {
 		var want [32]byte // all zeros
-		if network.ZeroGenesisValidatorsRoot != want {
-			t.Errorf("ZeroGenesisValidatorsRoot = %v, want all zeros", network.ZeroGenesisValidatorsRoot)
+		if network.ZeroGenesisValidatorsRoot() != want {
+			t.Errorf("ZeroGenesisValidatorsRoot = %v, want all zeros", network.ZeroGenesisValidatorsRoot())
 		}
 	})
 }

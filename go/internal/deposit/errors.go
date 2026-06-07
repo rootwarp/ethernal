@@ -22,7 +22,7 @@ var ErrForkVersionMismatch = errors.New("entry fork_version does not match targe
 
 // ErrBLSSignatureInvalid is returned by Entry.ValidateForNetwork when the
 // BLS signature fails to verify against the deposit domain computed from
-// the target's GenesisForkVersion and ZeroGenesisValidatorsRoot.
+// the target's GenesisForkVersion and ZeroGenesisValidatorsRoot().
 var ErrBLSSignatureInvalid = errors.New("BLS signature does not verify against deposit domain")
 
 // ErrDepositMessageRootMismatch is returned by Entry.Validate when the
