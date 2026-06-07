@@ -160,6 +160,7 @@ eth-deposit-gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-di
 | `--json-logs` | Emit logs as JSON objects | `false` |
 | `--verify-with-deposit-cli` | Cross-check output with `staking-deposit-cli >= 2.7.0` | `false` |
 | `--deposit-cli-path PATH` | Path to `deposit` binary for verification | `deposit` (PATH) |
+| `--withdrawal-prefix 0x01|0x02` | 0x01 (standard) or 0x02 (EIP-7251 compounding) for --withdrawal-address | `0x01` |
 
 ### Example — Hoodi single validator
 
@@ -171,8 +172,10 @@ export KEYSTORE_PASS=my-keystore-passphrase
   --keystore-dir ./keystores/ \
   --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
   --output-dir ./out \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-env KEYSTORE_PASS \
+  --withdrawal-prefix 0x01
 ```
+(For EIP-7251 0x02 compounding use `--withdrawal-prefix 0x02 --withdrawal-address ...`; amount range 32-2048 ETH honored in Validate paths per M2.4-1.)
 
 ### Example — multiple validators, parallel signing
 
