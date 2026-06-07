@@ -425,3 +425,147 @@ func TestLoad_PubkeyNormalized(t *testing.T) {
 		t.Errorf("PubkeyHex = %q, want %q", key.PubkeyHex, testPubkeyHex)
 	}
 }
+
+// --- M1.4-1 acceptance criteria tests (structural vs checksum classification) ---
+
+// TestLoad_StructuralMissingField_ErrKeystoreMalformed: missing JSON field
+// (top-level "crypto") → ErrKeystoreMalformed (pre-decrypt shape check).
+func TestLoad_StructuralMissingField_ErrKeystoreMalformed(t *testing.T) {
+	ks := map[string]any{
+		"pubkey":  testPubkeyHex,
+		"version": 4,
+		"uuid":    "00000000-0000-0000-0000-000000000007",
+		"path":    "",
+		// deliberately missing "crypto" field
+	}
+	data, _ := json.Marshal(ks)
+	path := writeFixture(t, data)
+
+	loader := keystore.NewLoader()
+	_, err := loader.Load(context.Background(), path, newBytesSource(testPassphrase))
+	if err == nil {
+		t.Fatal("Load() error = nil, want ErrKeystoreMalformed")
+	}
+	if !errors.Is(err, keystore.ErrKeystoreMalformed) {
+		t.Errorf("Load() error = %v, want errors.Is ErrKeystoreMalformed", err)
+	}
+}
+
+// TestLoad_StructuralBadCipherText_ErrKeystoreCipherText: bad cipher text
+// structure (crypto present but no "checksum") → ErrKeystoreCipherText.
+// Uses good passphrase so mismatch cannot be the cause. Also verifies
+// regression AC: error string contains no keystore payload bytes.
+func TestLoad_StructuralBadCipherText_ErrKeystoreCipherText(t *testing.T) {
+	// crypto map with cipher but deliberately omits the "checksum" key
+	// (and minimal other fields) so Decrypt returns "no checksum".
+	badCrypto := map[string]any{
+		"cipher": map[string]any{
+			"function": "aes-128-ctr",
+			"params":   map[string]any{"iv": "00000000000000000000000000000000"},
+			"message":  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+		"kdf": map[string]any{
+			"function": "scrypt",
+			"params": map[string]any{
+				"dklen": 32,
+				"n":     262144,
+				"p":     1,
+				"r":     8,
+				"salt":  "0000000000000000000000000000000000000000000000000000000000000000",
+			},
+		},
+		// no "checksum" → structural bad cipher text
+	}
+	ks := map[string]any{
+		"crypto":  badCrypto,
+		"pubkey":  testPubkeyHex,
+		"version": 4,
+		"uuid":    "00000000-0000-0000-0000-000000000008",
+		"path":    "",
+	}
+	data, _ := json.Marshal(ks)
+	path := writeFixture(t, data)
+
+	// Use a distinctive payload fragment that exists in the keystore JSON
+	// (the cipher message hex) — it must not appear in the error string.
+	payloadFragment := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	loader := keystore.NewLoader()
+	_, err := loader.Load(context.Background(), path, newBytesSource(testPassphrase))
+	if err == nil {
+		t.Fatal("Load() error = nil, want ErrKeystoreCipherText")
+	}
+	if !errors.Is(err, keystore.ErrKeystoreCipherText) {
+		t.Errorf("Load() error = %v, want errors.Is ErrKeystoreCipherText", err)
+	}
+	if strings.Contains(err.Error(), payloadFragment) ||
+		strings.Contains(err.Error(), testPubkeyHex) ||
+		strings.Contains(err.Error(), "testpassword") {
+		t.Errorf("error string leaked keystore payload bytes: %v", err)
+	}
+}
+
+// TestLoad_ChecksumMismatch_ErrWrongPassphrase: bad passphrase on otherwise
+// valid cipher text → only ErrWrongPassphrase (not CipherText or Malformed).
+func TestLoad_ChecksumMismatch_ErrWrongPassphrase(t *testing.T) {
+	data := generateFixture(t, "pbkdf2", testSecret, testPassphrase)
+	path := writeFixture(t, data)
+
+	loader := keystore.NewLoader()
+	_, err := loader.Load(context.Background(), path, newBytesSource("wrongpassword"))
+	if err == nil {
+		t.Fatal("Load() error = nil, want ErrWrongPassphrase")
+	}
+	if !errors.Is(err, keystore.ErrWrongPassphrase) {
+		t.Errorf("Load() error = %v, want errors.Is ErrWrongPassphrase", err)
+	}
+	// Ensure it is not misclassified as the new sentinel.
+	if errors.Is(err, keystore.ErrKeystoreCipherText) {
+		t.Errorf("Load() error = %v, must not be ErrKeystoreCipherText for checksum mismatch", err)
+	}
+}
+
+// TestLoad_ErrString_DoesNotContainKeystorePayloadBytes covers the regression
+// AC ("Error string does not contain any keystore payload bytes").
+func TestLoad_ErrString_DoesNotContainKeystorePayloadBytes(t *testing.T) {
+	// Reuse a structural bad-cipher case (no checksum) to produce a
+	// non-WrongPassphrase error whose string must be free of payload.
+	badCrypto := map[string]any{
+		"cipher": map[string]any{
+			"function": "aes-128-ctr",
+			"params":   map[string]any{"iv": "00000000000000000000000000000000"},
+			"message":  "cafed00dfeedfacecafed00dfeedfacecafed00dfeedfacecafed00dfeedface",
+		},
+		"kdf": map[string]any{
+			"function": "scrypt",
+			"params": map[string]any{
+				"dklen": 32, "n": 2, "p": 1, "r": 8,
+				"salt": "0000000000000000000000000000000000000000000000000000000000000000",
+			},
+		},
+	}
+	ks := map[string]any{
+		"crypto":  badCrypto,
+		"pubkey":  testPubkeyHex,
+		"version": 4,
+		"uuid":    "00000000-0000-0000-0000-000000000009",
+		"path":    "",
+	}
+	data, _ := json.Marshal(ks)
+	path := writeFixture(t, data)
+
+	payloadFragment := "cafed00dfeedfacecafed00dfeedfacecafed00dfeedfacecafed00dfeedface"
+
+	loader := keystore.NewLoader()
+	_, err := loader.Load(context.Background(), path, newBytesSource(testPassphrase))
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if strings.Contains(err.Error(), payloadFragment) ||
+		strings.Contains(err.Error(), testPubkeyHex) {
+		t.Errorf("error string leaked keystore payload bytes: %v", err)
+	}
+	// Re-uses bad-cipher construction (crypto present but no "checksum");
+	// reaches Decrypt → ErrKeystoreCipherText. (Malformed not hit here;
+	// AC2 asserts the sentinel; AC4 only requires the leak check.)
+}

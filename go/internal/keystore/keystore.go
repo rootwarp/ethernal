@@ -23,6 +23,12 @@ var (
 	// as valid EIP-2335 JSON.
 	ErrKeystoreMalformed = errors.New("keystore JSON malformed")
 
+	// ErrKeystoreCipherText is returned for structural problems inside the
+	// "crypto" object (e.g. missing "checksum" or "cipher", unsupported KDF,
+	// invalid IV, bad hex). Only the checksum mismatch on a well-formed
+	// ciphertext maps to ErrWrongPassphrase.
+	ErrKeystoreCipherText = errors.New("keystore cipher text invalid")
+
 	// ErrKeystoreVersion is returned when the version field is not 4.
 	ErrKeystoreVersion = errors.New("keystore version must be 4")
 
@@ -34,6 +40,15 @@ var (
 	// variable is unset or empty. This maps to exit code 2 (user error).
 	ErrEnvVarEmpty = errors.New("passphrase environment variable is unset or empty")
 )
+
+// wealdtechInvalidChecksum is the exact string returned *only* by
+// wealdtech/go-eth2-wallet-encryptor-keystorev4@v1.4.1/decrypt.go:168
+// (in confirmChecksum, after successful KDF+key derive) for the
+// wrong-passphrase case. All other Decrypt errors are structural and
+// must map to ErrKeystoreCipherText (see arch §6.4/§8.2/§15, M1.4-1).
+// Centralized here (not substring) to reduce brittleness on lib bump;
+// the literal is never exposed to callers (fixed sentinels + path only).
+const wealdtechInvalidChecksum = "invalid checksum"
 
 // Key holds the decrypted key material returned by a KeyLoader.
 // Callers must call Zeroize after use; the garbage collector does not
@@ -103,7 +118,9 @@ func NewLoader() KeyLoader {
 //   - file not found            → ErrKeystoreMissing
 //   - invalid JSON / schema     → ErrKeystoreMalformed
 //   - version field != 4        → ErrKeystoreVersion
-//   - wrong passphrase          → ErrWrongPassphrase
+//   - bad cipher text structure → ErrKeystoreCipherText
+//   - checksum mismatch on well-formed ciphertext → ErrWrongPassphrase
+//     (all other Decrypt structural failures → ErrKeystoreCipherText)
 func (l *loader) Load(ctx context.Context, path string, pw PassphraseSource) (Key, error) {
 	if err := ctx.Err(); err != nil {
 		return Key{}, err
@@ -159,7 +176,18 @@ func (l *loader) Load(ctx context.Context, path string, pw PassphraseSource) (Ke
 	enc := keystorev4.New()
 	secret, err := enc.Decrypt(envelope.Crypto, passString)
 	if err != nil {
-		return Key{}, fmt.Errorf("%w: %v", ErrWrongPassphrase, err)
+		// Per architecture §6.4 / §8.2 / §15 and M1.4-1: only the exact
+		// wealdtechInvalidChecksum from a well-formed ciphertext means wrong
+		// passphrase (exit 3). All other Decrypt failures (structural
+		// problems with the cipher text) map to the fixed sentinel
+		// ErrKeystoreCipherText (exit 2). We never %w the decoder error
+		// itself (it or its wrappers might embed secret material in some
+		// implementations). %w used for the (safe, non-secret) inner on
+		// WrongPassphrase per arch rule 2 for non-secret errors.
+		if err.Error() == wealdtechInvalidChecksum {
+			return Key{}, fmt.Errorf("%w: %w", ErrWrongPassphrase, err)
+		}
+		return Key{}, fmt.Errorf("%w: %s", ErrKeystoreCipherText, path)
 	}
 
 	pubkeyHex := strings.ToLower(strings.TrimPrefix(envelope.Pubkey, "0x"))

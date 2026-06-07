@@ -582,6 +582,8 @@ func TestExitCodeFor_ErrorCodes(t *testing.T) {
 		{"ErrKeystoreMissing wrapped", fmt.Errorf("wrap: %w", keystore.ErrKeystoreMissing), 2},
 		{"ErrKeystoreMalformed", keystore.ErrKeystoreMalformed, 2},
 		{"ErrKeystoreVersion", keystore.ErrKeystoreVersion, 2},
+		{"ErrKeystoreCipherText", keystore.ErrKeystoreCipherText, 2},
+		{"ErrKeystoreCipherText wrapped", fmt.Errorf("wrap: %w", keystore.ErrKeystoreCipherText), 2},
 		{"ErrEnvVarEmpty", keystore.ErrEnvVarEmpty, 2},
 		{"ErrEnvVarEmpty wrapped", fmt.Errorf("passphrase source: %w", keystore.ErrEnvVarEmpty), 2},
 		{"ErrKeystoreNotFound", keystore.ErrKeystoreNotFound, 2},

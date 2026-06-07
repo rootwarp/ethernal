@@ -515,6 +515,7 @@ func exitCodeFor(err error) int {
 	if errors.Is(err, keystore.ErrKeystoreMissing) ||
 		errors.Is(err, keystore.ErrKeystoreMalformed) ||
 		errors.Is(err, keystore.ErrKeystoreVersion) ||
+		errors.Is(err, keystore.ErrKeystoreCipherText) ||
 		errors.Is(err, keystore.ErrEnvVarEmpty) ||
 		errors.Is(err, keystore.ErrKeystoreNotFound) ||
 		errors.Is(err, deposit.ErrPubkeyMismatch) ||
