@@ -16,6 +16,7 @@
 package signer
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -201,6 +202,34 @@ func (s *LedgerSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx)
 	}
 
 	signedTx := r.signed
+
+	// Cross-check per M0.2-3 (GO-023), architecture §6.9/§15:
+	// recover sender using the *returned* tx's ChainId() (not request p.chainID),
+	// compare against s.account.Address; also field-compare all specified fields
+	// on the parsed *types.Transaction (accessors, not raw RLP) vs the requested
+	// unsignedTx we built. Any mismatch -> ErrSenderMismatch (exit 3).
+	recovered, recErr := types.Sender(types.LatestSignerForChainID(signedTx.ChainId()), signedTx)
+	if recErr != nil {
+		return nil, fmt.Errorf("sender recovery failed: %w", recErr)
+	}
+	if recovered != s.account.Address {
+		return nil, ErrSenderMismatch
+	}
+	// Field compares (nonce/to/value/data/chainID/maxFee/tip/gasLimit).
+	if signedTx.Nonce() != unsignedTx.Nonce() ||
+		signedTx.Gas() != unsignedTx.Gas() ||
+		signedTx.GasFeeCap().Cmp(unsignedTx.GasFeeCap()) != 0 ||
+		signedTx.GasTipCap().Cmp(unsignedTx.GasTipCap()) != 0 ||
+		signedTx.Value().Cmp(unsignedTx.Value()) != 0 ||
+		signedTx.ChainId().Cmp(unsignedTx.ChainId()) != 0 ||
+		!bytes.Equal(signedTx.Data(), unsignedTx.Data()) {
+		return nil, ErrSenderMismatch
+	}
+	reqTo, retTo := unsignedTx.To(), signedTx.To()
+	if (reqTo == nil) != (retTo == nil) || (reqTo != nil && *reqTo != *retTo) {
+		return nil, ErrSenderMismatch
+	}
+
 	ethSigner := types.LatestSignerForChainID(p.chainID)
 
 	v, rVal, sVal := signedTx.RawSignatureValues()

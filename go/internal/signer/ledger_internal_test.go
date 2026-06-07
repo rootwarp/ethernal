@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
@@ -113,7 +114,7 @@ func synthSignedTx(t *testing.T, unsigned internaltx.UnsignedTx) (*types.Transac
 		data, _ = hex.DecodeString(dh)
 	}
 
-	to := gethcrypto.PubkeyToAddress(priv.PublicKey) // arbitrary non-zero address
+	to := common.HexToAddress(unsigned.To)
 	dynTx := &types.DynamicFeeTx{
 		ChainID:   chainID,
 		Nonce:     unsigned.Nonce,
@@ -822,5 +823,162 @@ func TestLedgerSigner_Sign_ConfirmationPrompt(t *testing.T) {
 	prompt := buf.String()
 	if !strings.Contains(strings.ToLower(prompt), "ledger") && !strings.Contains(strings.ToLower(prompt), "confirm") {
 		t.Errorf("confirmation prompt %q does not contain 'ledger' or 'confirm'", prompt)
+	}
+}
+
+// --- M0.2-3 cross-check tests (sender + all fields) ---
+
+func TestLedgerSigner_Sign_SenderMismatch(t *testing.T) {
+	unsigned := internaltxUnsigned()
+	// Derive will return goodAcc; SignTxFn returns tx recovered to a different addr.
+	privGood, err := gethcrypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey good: %v", err)
+	}
+	addrGood := gethcrypto.PubkeyToAddress(privGood.PublicKey)
+	goodAcc := accounts.Account{Address: addrGood}
+
+	badSynth, _ := synthSignedTx(t, unsigned) // different key inside synth
+
+	w := &mockWallet{
+		DeriveFn: func(_ accounts.DerivationPath, _ bool) (accounts.Account, error) {
+			return goodAcc, nil
+		},
+		SignTxFn: func(_ accounts.Account, _ *types.Transaction, _ *big.Int) (*types.Transaction, error) {
+			return badSynth, nil
+		},
+	}
+	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
+
+	s, err := NewLedgerSigner()
+	if err != nil {
+		t.Fatalf("NewLedgerSigner: %v", err)
+	}
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
+	s.setConfirmationPrompt(&bytes.Buffer{})
+
+	_, err = s.Sign(context.Background(), unsigned)
+	if !errors.Is(err, ErrSenderMismatch) {
+		t.Fatalf("expected ErrSenderMismatch, got %v", err)
+	}
+}
+
+func TestLedgerSigner_Sign_FieldMismatch(t *testing.T) {
+	unsigned := internaltxUnsigned()
+
+	// Gen one good key; Derive returns its addr; all bad txs below are signed by it
+	// so sender recovery matches (field mismatch is what triggers ErrSenderMismatch).
+	privGood, err := gethcrypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey good: %v", err)
+	}
+	addrGood := gethcrypto.PubkeyToAddress(privGood.PublicKey)
+	goodAcc := accounts.Account{Address: addrGood}
+
+	chainID := new(big.Int).SetUint64(unsigned.ChainID)
+	value, _ := new(big.Int).SetString(strings.TrimPrefix(unsigned.Value, "0x"), 16)
+	maxFee, _ := new(big.Int).SetString(strings.TrimPrefix(unsigned.MaxFeePerGas, "0x"), 16)
+	maxPrio, _ := new(big.Int).SetString(strings.TrimPrefix(unsigned.MaxPriorityFeePerGas, "0x"), 16)
+	var data []byte
+	if dh := strings.TrimPrefix(unsigned.Data, "0x"); dh != "" {
+		data, _ = hex.DecodeString(dh)
+	}
+	to := common.HexToAddress(unsigned.To)
+
+	makeBad := func(t *testing.T, mod func(*types.DynamicFeeTx)) *types.Transaction {
+		dyn := &types.DynamicFeeTx{
+			ChainID:   new(big.Int).Set(chainID),
+			Nonce:     unsigned.Nonce,
+			GasTipCap: new(big.Int).Set(maxPrio),
+			GasFeeCap: new(big.Int).Set(maxFee),
+			Gas:       unsigned.Gas,
+			To:        &to,
+			Value:     new(big.Int).Set(value),
+			Data:      append([]byte(nil), data...),
+		}
+		mod(dyn)
+		tx := types.NewTx(dyn)
+		signer := types.LatestSignerForChainID(dyn.ChainID) // use (possibly modded) chain for this bad tx
+		signed, signErr := types.SignTx(tx, signer, privGood)
+		if signErr != nil {
+			t.Fatalf("SignTx for bad: %v", signErr)
+		}
+		return signed
+	}
+
+	cases := []struct {
+		name string
+		mod  func(*types.DynamicFeeTx)
+	}{
+		{"nonce", func(d *types.DynamicFeeTx) { d.Nonce++ }},
+		{"to", func(d *types.DynamicFeeTx) {
+			o := common.HexToAddress("0x000000000000000000000000000000000000beef")
+			d.To = &o
+		}},
+		{"value", func(d *types.DynamicFeeTx) { d.Value = new(big.Int).Add(d.Value, big.NewInt(1)) }},
+		{"chainID", func(d *types.DynamicFeeTx) { d.ChainID = new(big.Int).Add(d.ChainID, big.NewInt(1)) }},
+		{"maxFee", func(d *types.DynamicFeeTx) { d.GasFeeCap = new(big.Int).Add(d.GasFeeCap, big.NewInt(1)) }},
+		{"tip", func(d *types.DynamicFeeTx) { d.GasTipCap = new(big.Int).Add(d.GasTipCap, big.NewInt(1)) }},
+		{"gasLimit", func(d *types.DynamicFeeTx) { d.Gas++ }},
+		{"data", func(d *types.DynamicFeeTx) { d.Data = append(d.Data, 0x01) }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			badTx := makeBad(t, tc.mod)
+			w := &mockWallet{
+				DeriveFn: func(_ accounts.DerivationPath, _ bool) (accounts.Account, error) {
+					return goodAcc, nil
+				},
+				SignTxFn: func(_ accounts.Account, _ *types.Transaction, _ *big.Int) (*types.Transaction, error) {
+					return badTx, nil
+				},
+			}
+			withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
+
+			s, nerr := NewLedgerSigner()
+			if nerr != nil {
+				t.Fatalf("NewLedgerSigner: %v", nerr)
+			}
+			defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
+			s.setConfirmationPrompt(&bytes.Buffer{})
+
+			_, serr := s.Sign(context.Background(), unsigned)
+			if !errors.Is(serr, ErrSenderMismatch) {
+				t.Fatalf("expected ErrSenderMismatch for field %s, got %v", tc.name, serr)
+			}
+		})
+	}
+}
+
+func TestLedgerSigner_Sign_Success_CrossCheck(t *testing.T) {
+	// Happy path: synth produces tx matching the requested fields + signed by the Derive acc.
+	// After cross-check (sender + fields) this must return (*SignedTx, nil) i.e. no ErrSenderMismatch.
+	unsigned := internaltxUnsigned()
+	synth, acc := synthSignedTx(t, unsigned)
+
+	w := &mockWallet{
+		DeriveFn: func(_ accounts.DerivationPath, _ bool) (accounts.Account, error) {
+			return acc, nil
+		},
+		SignTxFn: func(_ accounts.Account, _ *types.Transaction, _ *big.Int) (*types.Transaction, error) {
+			return synth, nil
+		},
+	}
+	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
+
+	s, err := NewLedgerSigner()
+	if err != nil {
+		t.Fatalf("NewLedgerSigner: %v", err)
+	}
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
+	s.setConfirmationPrompt(&bytes.Buffer{})
+
+	result, err := s.Sign(context.Background(), unsigned)
+	if err != nil {
+		t.Fatalf("Sign happy cross-check: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil SignedTx on happy-path matching fields/sender")
 	}
 }

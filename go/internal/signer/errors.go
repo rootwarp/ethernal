@@ -17,6 +17,13 @@ var (
 	// The real usbwallet error is wrapped with %w for cause recovery.
 	ErrDeviceUnavailable = errors.New("ledger device present but unavailable")
 
+	// ErrSenderMismatch indicates after Ledger signs and returns the tx,
+	// either the sender recovered via types.Sender(types.LatestSignerForChainID(returned.ChainId()), returned)
+	// does not equal s.account.Address, or any of the fields nonce/to/value/data/chainID/maxFee/tip/gasLimit
+	// diverged from the requested tx (using types.Transaction accessors).
+	// Exit code 3 per architecture §15.
+	ErrSenderMismatch = errors.New("recovered sender does not match key/account address")
+
 	// ErrAppNotOpen indicates a Ledger is connected but the Ethereum app
 	// is not open.
 	ErrAppNotOpen = errors.New("ledger Ethereum app is not open")
