@@ -12,9 +12,9 @@ import (
 	"github.com/rootwarp/eth-utils/go/internal/ssz"
 )
 
-// validRawEntry returns a jsonEntry with valid values for all fields.
-func validRawEntry() jsonEntry {
-	return jsonEntry{
+// validRawEntry returns a JSONEntry with valid values for all fields.
+func validRawEntry() JSONEntry {
+	return JSONEntry{
 		Pubkey:                strings.Repeat("ab", 48),
 		WithdrawalCredentials: strings.Repeat("cd", 32),
 		Amount:                32_000_000_000,
@@ -27,14 +27,14 @@ func validRawEntry() jsonEntry {
 	}
 }
 
-func marshalJSONArray(rs []jsonEntry) ([]byte, error) {
+func marshalJSONArray(rs []JSONEntry) ([]byte, error) {
 	return json.Marshal(rs)
 }
 
 // TestEntriesFromJSON_Array verifies parsing a JSON array of entries.
 func TestEntriesFromJSON_Array(t *testing.T) {
 	raw := validRawEntry()
-	data, err := marshalJSONArray([]jsonEntry{raw, raw})
+	data, err := marshalJSONArray([]JSONEntry{raw, raw})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestEntriesFromJSON_InvalidEntry(t *testing.T) {
 	bad := validRawEntry()
 	bad.Pubkey = strings.Repeat("ZZ", 48)
 
-	data, err := marshalJSONArray([]jsonEntry{good, bad})
+	data, err := marshalJSONArray([]JSONEntry{good, bad})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

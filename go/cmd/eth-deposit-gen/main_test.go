@@ -1208,7 +1208,7 @@ func TestRunWithDeps_E2E_HappyPath_JSONHas01WC(t *testing.T) {
 		t.Fatalf("withdrawal_credentials not string: %T", wcFieldIface)
 	}
 	addrHex := strings.ToLower(strings.TrimPrefix(cfg.WithdrawalAddress, "0x"))
-	// The JSON value is 64 lowercase hex chars (no 0x prefix per output.toJSONEntry).
+	// The JSON value is 64 lowercase hex chars (no 0x prefix per output.toJSONEntry / deposit.JSONEntry).
 	// Per AC and arch: starts with 01 (for 0x01 byte) + 22 '0' (for 0x00*11) + 40-char addr.
 	wantStart := "01" + strings.Repeat("0", 22) + addrHex
 	if !strings.HasPrefix(wcField, "01"+strings.Repeat("0", 22)) {

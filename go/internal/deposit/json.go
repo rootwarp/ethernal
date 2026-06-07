@@ -14,10 +14,10 @@ import (
 	"github.com/rootwarp/eth-utils/go/internal/ssz"
 )
 
-// jsonEntry is the wire representation of a single entry in a Launchpad
-// deposit_data-*.json file. Field names and types must match exactly what
-// eth-deposit-gen and the official staking-deposit-cli produce.
-type jsonEntry struct {
+// JSONEntry is the canonical wire representation (shared with internal/output)
+// of a single entry in a Launchpad deposit_data-*.json file. Field names, types,
+// and JSON tag order are the schema source of truth (architecture §10.4).
+type JSONEntry struct {
 	Pubkey                string `json:"pubkey"`
 	WithdrawalCredentials string `json:"withdrawal_credentials"`
 	Amount                uint64 `json:"amount"`
@@ -49,9 +49,9 @@ func decodeFixedHex(field, s string, wantLen int) ([]byte, error) {
 	return b, nil
 }
 
-// entryFromRaw converts a decoded jsonEntry to an Entry, enforcing all length
+// entryFromRaw converts a decoded JSONEntry to an Entry, enforcing all length
 // invariants.
-func entryFromRaw(raw jsonEntry) (Entry, error) {
+func entryFromRaw(raw JSONEntry) (Entry, error) {
 	pubkeyBytes, err := decodeFixedHex("pubkey", raw.Pubkey, 48)
 	if err != nil {
 		return Entry{}, err
@@ -94,7 +94,7 @@ func entryFromRaw(raw jsonEntry) (Entry, error) {
 // EntriesFromJSON parses a Launchpad deposit_data-*.json file, which is a
 // JSON array of entry objects.
 func EntriesFromJSON(data []byte) ([]Entry, error) {
-	var raws []jsonEntry
+	var raws []JSONEntry
 	if err := json.Unmarshal(data, &raws); err != nil {
 		return nil, fmt.Errorf("deposit: unmarshal entries array: %w", err)
 	}
