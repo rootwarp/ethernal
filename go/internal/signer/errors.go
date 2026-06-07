@@ -11,6 +11,12 @@ var (
 	// ErrNoDevice indicates no Ledger device was found.
 	ErrNoDevice = errors.New("no Ledger device found")
 
+	// ErrDeviceUnavailable indicates a Ledger device was enumerated (wallets
+	// list non-empty) but Open or Status failed for a reason other than the
+	// Ethereum app not being open (e.g. USB error, permissions, device busy).
+	// The real usbwallet error is wrapped with %w for cause recovery.
+	ErrDeviceUnavailable = errors.New("ledger device present but unavailable")
+
 	// ErrAppNotOpen indicates a Ledger is connected but the Ethereum app
 	// is not open.
 	ErrAppNotOpen = errors.New("ledger Ethereum app is not open")

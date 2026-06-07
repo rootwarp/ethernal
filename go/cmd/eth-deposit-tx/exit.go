@@ -54,6 +54,7 @@ func ExitCodeFor(err error) int {
 	// Exit code 3: signer / crypto errors.
 	if errors.Is(err, signer.ErrSignerClosed) ||
 		errors.Is(err, signer.ErrNoDevice) ||
+		errors.Is(err, signer.ErrDeviceUnavailable) ||
 		errors.Is(err, signer.ErrAppNotOpen) ||
 		errors.Is(err, signer.ErrInvalidKey) ||
 		errors.Is(err, signer.ErrInvalidChainID) ||

@@ -177,8 +177,8 @@ func TestLedgerSigner_StatusFailure_Generic(t *testing.T) {
 	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
 
 	_, err := NewLedgerSigner()
-	if !errors.Is(err, ErrNoDevice) {
-		t.Fatalf("expected ErrNoDevice (wrapped) for generic status error, got %v", err)
+	if !errors.Is(err, ErrDeviceUnavailable) {
+		t.Fatalf("expected ErrDeviceUnavailable (with real cause) for generic status error, got %v", err)
 	}
 }
 
@@ -189,8 +189,65 @@ func TestLedgerSigner_OpenFailure_Generic(t *testing.T) {
 	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
 
 	_, err := NewLedgerSigner()
-	if !errors.Is(err, ErrNoDevice) {
-		t.Fatalf("expected ErrNoDevice (wrapped), got %v", err)
+	if !errors.Is(err, ErrDeviceUnavailable) {
+		t.Fatalf("expected ErrDeviceUnavailable (with real cause), got %v", err)
+	}
+}
+
+// TestNewLedgerSigner_OpenFailed_DeviceUnavailable verifies the AC for M0.2-2:
+// when Open fails (device was enumerated) with a non-app-not-open error, we
+// return ErrDeviceUnavailable (not ErrNoDevice), the real cause from usbwallet
+// is attached via %w (recoverable via errors.Is and unwrap logic), and per
+// spec we call w.Close() on the Open failure branch (though this test does not
+// assert the close count; see Status test).
+func TestNewLedgerSigner_OpenFailed_DeviceUnavailable(t *testing.T) {
+	openErr := errors.New("usb: device busy (held by Ledger Live or udev)")
+	w := &mockWallet{
+		OpenFn: func(_ string) error { return openErr },
+	}
+	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
+
+	_, err := NewLedgerSigner()
+	if !errors.Is(err, ErrDeviceUnavailable) {
+		t.Fatalf("expected ErrDeviceUnavailable, got %v", err)
+	}
+	// underlying cause is unwrappable (via errors.Is on the chain, which
+	// walks Unwrap()error / Unwrap()[]error ; also call errors.Unwrap for the
+	// AC phrasing).
+	if !errors.Is(err, openErr) {
+		t.Fatalf("underlying cause not recoverable via unwrap chain; err=%v", err)
+	}
+	if u := errors.Unwrap(err); u != nil {
+		// for double-%w (wrapErrors) this is nil; Is above already verified attachment
+		if !errors.Is(u, openErr) {
+			// ignore for multi case
+		}
+	}
+}
+
+// TestNewLedgerSigner_StatusFailed_DeviceUnavailable verifies the AC:
+// Status fails after successful Open -> ErrDeviceUnavailable with real cause;
+// and that w.Close() *was* invoked (counted via mock CloseFn).
+func TestNewLedgerSigner_StatusFailed_DeviceUnavailable(t *testing.T) {
+	statusErr := errors.New("usb: status read failed, device present but unavailable")
+	closeCalls := 0
+	w := &mockWallet{
+		OpenFn:   func(_ string) error { return nil },
+		StatusFn: func() (string, error) { return "", statusErr },
+		CloseFn:  func() error { closeCalls++; return nil },
+	}
+	withMockHub(t, &mockHub{wallets: []ledgerWallet{w}})
+
+	_, err := NewLedgerSigner()
+	if !errors.Is(err, ErrDeviceUnavailable) {
+		t.Fatalf("expected ErrDeviceUnavailable, got %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("w.Close() was not invoked (or not exactly once); calls=%d", closeCalls)
+	}
+	// cause attached (via Is which uses unwrap)
+	if !errors.Is(err, statusErr) {
+		t.Fatalf("underlying status cause not attached; err=%v", err)
 	}
 }
 

@@ -64,9 +64,11 @@ func NewLedgerSigner() (*LedgerSigner, error) {
 
 	if err := w.Open(""); err != nil {
 		if isAppNotOpenErr(err) {
+			_ = w.Close()
 			return nil, ErrAppNotOpen
 		}
-		return nil, fmt.Errorf("ledger init failed: %w", ErrNoDevice)
+		_ = w.Close()
+		return nil, fmt.Errorf("ledger init failed: %w: %w", ErrDeviceUnavailable, err)
 	}
 
 	// Check Status — Open can succeed even when the Ethereum app isn't active.
@@ -77,7 +79,7 @@ func NewLedgerSigner() (*LedgerSigner, error) {
 			return nil, ErrAppNotOpen
 		}
 		_ = w.Close()
-		return nil, fmt.Errorf("ledger status check failed: %w", ErrNoDevice)
+		return nil, fmt.Errorf("ledger status check failed: %w: %w", ErrDeviceUnavailable, statusErr)
 	}
 
 	acc, err := w.Derive(accounts.DefaultBaseDerivationPath, true)
