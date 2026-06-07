@@ -1337,3 +1337,141 @@ func TestSend_LedgerOnMainnet_NoAcceptFlag_Required(t *testing.T) {
 		t.Error("local-signer warning should not appear for ledger path")
 	}
 }
+
+// TestEachConfigLoader_MainnetGate_Reject (M1.6-3 ACs): pre-validation of the two
+// mainnet gates (--confirm-network required on mainnet; --i-accept-local-signer-on-mainnet
+// for local+mainnet) consolidated in *all four* Load*Config (LoadBuildConfig, LoadRunConfig,
+// LoadSignConfig, LoadSendConfig) so rejection before any setup (early ucli.Exit(2)).
+// Uses existing send_test helper newSendTestApp + OsExiter + ExitCodeFor + app.Run +
+// got/want t.Errorf + strings.Contains on msgs (like M1.6-1/2 ACs + M1.5-1 Load tests).
+// Verifies error messages identical across loaders (syntax errs from build/sign/send;
+// req errs from build/run via delegate; local from run). Syntax pre-val exercised on
+// sign/send (no --network at load); require pre-val on build/run per M1.6-3 note.
+// Follows M1.5-1 early pre-val pattern + named AC style exactly. Smallest (test only + prior edits).
+func TestEachConfigLoader_MainnetGate_Reject(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	// 1. LoadBuildConfig (build): mainnet without confirm-network triggers confirm req gate (pre-val early).
+	err := app.Run([]string{
+		"eth-deposit-tx", "build",
+		"--network", "mainnet",
+		"--input-file", "deposit.json",
+		// no --confirm-network
+	})
+	if err == nil {
+		t.Fatal("expected error from LoadBuildConfig mainnet confirm gate, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("build loader exit= %d, want 2; err=%v", got, err)
+	}
+	buildConfirmReq := fmt.Sprintf("%v", err)
+	if !strings.Contains(buildConfirmReq, "confirm-network: required for mainnet") {
+		t.Errorf("build confirm gate err missing want; got: %s", buildConfirmReq)
+	}
+
+	// 2. LoadRunConfig (run): delegates to LoadBuild so same confirm req; also exercises local gate.
+	// Use ledger + mainnet + *omit* confirm to hit confirm req gate from LoadBuild inside LoadRun (ledger avoids local gate).
+	// No gas/nonce needed; Load rejects before reaching action or mismatch.
+	err = app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "mainnet",
+		"--input-file", fixtureAbsPath(t),
+		"--signer", "ledger",
+		// deliberately no --confirm-network
+	})
+	if err == nil {
+		t.Fatal("expected error from LoadRunConfig (via Build) confirm gate, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("run loader (confirm) exit= %d, want 2; err=%v", got, err)
+	}
+	runConfirmReq := fmt.Sprintf("%v", err)
+	if runConfirmReq != buildConfirmReq {
+		t.Errorf("confirm req err not identical across build/run loaders:\n build: %s\n run: %s", buildConfirmReq, runConfirmReq)
+	}
+
+	// 3. LoadRunConfig local gate: mainnet + local + confirm (to pass build) + no i-accept.
+	// (env name valid for regex; value unset ok as gate fires in Load before action key use.)
+	err = app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "mainnet",
+		"--input-file", fixtureAbsPath(t),
+		"--signer", "local",
+		"--private-key-env", "TEST_M1_6_3_GATE",
+		"--confirm-network", "mainnet",
+		// deliberately no --i-accept-local-signer-on-mainnet
+	})
+	if err == nil {
+		t.Fatal("expected error from LoadRunConfig local+mainnet gate, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("run loader (local gate) exit= %d, want 2; err=%v", got, err)
+	}
+	runLocalGate := fmt.Sprintf("%v", err)
+	wantLocalGate := "--i-accept-local-signer-on-mainnet: required when --signer local and --network mainnet"
+	if !strings.Contains(runLocalGate, "i-accept-local-signer-on-mainnet: required when --signer local and --network mainnet") {
+		t.Errorf("run local gate err missing want; got: %s", runLocalGate)
+	}
+
+	// 4. LoadSignConfig: exercise confirm syntax pre-val gate (no --network on sign; use bad value).
+	err = app.Run([]string{
+		"eth-deposit-tx", "sign",
+		"--signer", "local",
+		"--input", "unsigned.json",
+		"--private-key-env", "TEST_M1_6_3_GATE",
+		"--confirm-network", "badnet",
+	})
+	if err == nil {
+		t.Fatal("expected error from LoadSignConfig confirm syntax gate, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("sign loader exit= %d, want 2; err=%v", got, err)
+	}
+	signSyntax := fmt.Sprintf("%v", err)
+
+	// 5. LoadSendConfig: same confirm syntax pre-val gate (identical msg).
+	err = app.Run([]string{
+		"eth-deposit-tx", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://localhost:8545",
+		"--confirm-network", "badnet",
+	})
+	if err == nil {
+		t.Fatal("expected error from LoadSendConfig confirm syntax gate, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("send loader exit= %d, want 2; err=%v", got, err)
+	}
+	sendSyntax := fmt.Sprintf("%v", err)
+
+	// Error messages identical across loaders for syntax gate (build/sign/send).
+	// Trigger syntax on build too (non-mainnet + bad confirm value).
+	err = app.Run([]string{
+		"eth-deposit-tx", "build",
+		"--network", "hoodi",
+		"--input-file", "deposit.json",
+		"--confirm-network", "badnet",
+	})
+	if err == nil {
+		t.Fatal("expected error from LoadBuildConfig confirm syntax, got nil")
+	}
+	buildSyntax := fmt.Sprintf("%v", err)
+	if signSyntax != sendSyntax || signSyntax != buildSyntax {
+		t.Errorf("confirm syntax err msgs not identical across loaders (build/sign/send):\n build: %s\n sign: %s\n send: %s", buildSyntax, signSyntax, sendSyntax)
+	}
+	if !strings.Contains(signSyntax, "--confirm-network:") {
+		t.Errorf("syntax err missing --confirm-network prefix; got: %s", signSyntax)
+	}
+
+	// Also verif local gate msg is the standardized one (matches action after our hygiene).
+	if !strings.Contains(runLocalGate, wantLocalGate) {
+		t.Errorf("local gate msg not the expected identical one; got: %s want contain: %s", runLocalGate, wantLocalGate)
+	}
+}

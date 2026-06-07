@@ -65,6 +65,19 @@ func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
 		return nil, ucli.Exit("--input: required flag not set", 2)
 	}
 
+	// Consolidated pre-val for the two mainnet gates (M1.6-3): syntax check for --confirm-network
+	// (if set) + capture for --i-accept-local-signer-on-mainnet. Early (right after requireds,
+	// before env regex / other processing) per exact M1.5-1 pre-val pattern. Require for
+	// local+mainnet stays in signAction (net derived from unsigned tx per M1.6-3 note); ledger exempt.
+	// Consistent error msgs with the other three loaders.
+	confirmNet := c.String("confirm-network")
+	if confirmNet != "" {
+		if _, err := network.ParseFlag(confirmNet); err != nil {
+			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
+		}
+	}
+	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
+
 	envVar := c.String("private-key-env")
 	if !posixEnvVarName.MatchString(envVar) {
 		_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: the rejected value should be treated as compromised\n")
@@ -75,16 +88,6 @@ func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
 	}
 
 	allowNonDeposit := c.Bool("allow-non-deposit-recipient")
-
-	confirmNet := c.String("confirm-network")
-	if confirmNet != "" {
-		if _, err := network.ParseFlag(confirmNet); err != nil {
-			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
-		}
-	}
-
-	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-	// M1.6-2 pre-val capture (for "all four" hygiene per reviewer high finding on Loads + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Require for local+mainnet happens in signAction (net from unsigned); ledger exempt. Capture here per M1.5-1 / M1.6-2 / M1.6-3 pattern.
 
 	return &SignConfig{
 		Signer:                      signerType,
@@ -202,7 +205,7 @@ func signAction(c *ucli.Context, cfg *SignConfig) error {
 	if cfg.Signer == "local" {
 		if p, lookupErr := network.LookupByChainID(unsigned.ChainID); lookupErr == nil && p.Name == network.Mainnet {
 			if !cfg.IAcceptLocalSignerOnMainnet {
-				return ucli.Exit("--i-accept-local-signer-on-mainnet: required when --signer local and target network is mainnet", 2)
+				return ucli.Exit("--i-accept-local-signer-on-mainnet: required when --signer local and --network mainnet", 2)
 			}
 			if c.App.ErrWriter != nil {
 				_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: --signer local combined with --network mainnet\n")

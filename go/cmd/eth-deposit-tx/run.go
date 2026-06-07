@@ -75,8 +75,10 @@ func LoadRunConfig(c *ucli.Context) (*RunConfig, error) {
 	}
 
 	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-	// M1.6-2 pre-val (M1.5-1 pattern + M1.6-3 note): require when local + mainnet.
-	// (Happens early, before FS/RPC/build/sign work in runAction.) Hygiene for "all four" Loads per reviewer high + M1.6-1 apply.
+	// M1.6-2/M1.6-3 pre-val (M1.5-1 pattern + M1.6-3 note): require when local + mainnet.
+	// (Happens early, before FS/RPC/build/sign work in runAction; after LoadBuild which does confirm gate.)
+	// Hygiene/consolidation for "all four" Loads per reviewer high + M1.6-1 apply + M1.6-3.
+	// (Full local+mainnet require for sign stays in action per M1.6-3 note, as net derived from unsigned.)
 	if signerType == "local" && buildCfg.Network == network.Mainnet && !acceptLocal {
 		return nil, ucli.Exit("--i-accept-local-signer-on-mainnet: required when --signer local and --network mainnet", 2)
 	}

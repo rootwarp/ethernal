@@ -93,7 +93,9 @@ func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 
 	// Pre-validate --confirm-network (M1.6-1 / M1.5-1 pattern): mainnet requires it;
 	// if set must be a supported network name. (Value match vs RLP/RPC happens
-	// later in actions.)
+	// later in actions.) Consolidated pre-val for both mainnet gates here and in
+	// the other three Load*Config per M1.6-3 (early ucli.Exit(2) before setup; reuse
+	// M1.5-1 required-flag pre-val pattern exactly; consistent msgs; no dupe lists).
 	confirmNet := c.String("confirm-network")
 	if net == network.Mainnet && confirmNet == "" {
 		return nil, ucli.Exit("--confirm-network: required for mainnet (must equal network name)", 2)
@@ -105,7 +107,7 @@ func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 	}
 
 	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-	// M1.6-2 pre-val capture (for "all four" hygiene per reviewer high finding on Loads + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Require for local+mainnet is in LoadRun (where signer known) + action checks (sign); ledger exempt. Store below.
+	// M1.6-2/M1.6-3 pre-val capture (for "all four" hygiene per reviewer high + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Require for local+mainnet is in LoadRun (where signer known) + action checks (sign); ledger exempt. Store below. Early before gas/etc per M1.5-1.
 
 	// 2. Gas limit — string flag so env-var override works alongside flag.
 	gasLimit := defaultGasLimit

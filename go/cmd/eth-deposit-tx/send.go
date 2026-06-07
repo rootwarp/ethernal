@@ -73,6 +73,19 @@ func LoadSendConfig(c *ucli.Context) (*SendConfig, error) {
 		return nil, ucli.Exit("--rpc-url: required flag not set", 2)
 	}
 
+	// Consolidated pre-val for the two mainnet gates (M1.6-3): syntax check for --confirm-network
+	// (if set) + capture for --i-accept-local-signer-on-mainnet. Early (right after requireds,
+	// before timeout/processing) per exact M1.5-1 pre-val pattern. (Mainnet-require for confirm
+	// when derived from tx is in sendAction; local+mainnet require stays at sign/run per M1.6-3 note.)
+	// Consistent error msgs across the four loaders.
+	confirmNet := c.String("confirm-network")
+	if confirmNet != "" {
+		if _, err := network.ParseFlag(confirmNet); err != nil {
+			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
+		}
+	}
+	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
+
 	timeout := c.Duration("receipt-timeout")
 	if timeout == 0 {
 		timeout = 60 * time.Second
@@ -80,16 +93,6 @@ func LoadSendConfig(c *ucli.Context) (*SendConfig, error) {
 
 	receiptOutput := c.String("receipt-output")
 	waitForReceipt := c.Bool("wait-for-receipt") || receiptOutput != ""
-
-	confirmNet := c.String("confirm-network")
-	if confirmNet != "" {
-		if _, err := network.ParseFlag(confirmNet); err != nil {
-			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
-		}
-	}
-
-	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-	// M1.6-2 pre-val capture (for "all four" hygiene per reviewer high finding on Loads + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Full gate enforced at sign/run (local+mainnet); send carries for symmetry (post-sign, no require here, ledger mainnet send does not require per AC). Capture here per M1.5-1 pattern.
 
 	return &SendConfig{
 		InputFile:                   inputFile,
@@ -274,7 +277,7 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 	}
 	if decodedNetName == "mainnet" || rpcNetName == "mainnet" {
 		if confirm == "" {
-			return ucli.Exit("--confirm-network: required for mainnet (value must equal network name)", 2)
+			return ucli.Exit("--confirm-network: required for mainnet (must equal network name)", 2)
 		}
 	}
 
