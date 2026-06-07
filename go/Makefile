@@ -48,6 +48,7 @@ fuzz:
 	$(GOFLAGS) go test -fuzz FuzzMerkleize   -fuzztime 30s ./internal/ssz/
 	$(GOFLAGS) go test -fuzz FuzzUint64Chunk -fuzztime 30s ./internal/ssz/
 	$(GOFLAGS) go test -fuzz FuzzParsePubkeys -fuzztime 30s ./internal/cli/
+	$(GOFLAGS) go test -fuzz FuzzPackDeposit_AgainstGethABI -fuzztime 60s ./internal/tx/
 
 ## refresh-golden: regenerate testdata/hoodi/* and testdata/mainnet/* fixtures from the fixed secret
 refresh-golden:
