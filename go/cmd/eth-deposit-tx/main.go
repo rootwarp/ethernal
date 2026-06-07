@@ -7,7 +7,7 @@
 //	1 — unexpected / internal error
 //	2 — user / configuration error (bad input, unknown network, missing file, etc.)
 //	3 — signer / crypto error (bad key, no device, app not open, chain ID mismatch)
-//	4 — user abort (SIGINT or Ledger rejection)
+//	4 — user abort (SIGINT/SIGTERM or Ledger rejection)
 //	5 — broadcast / RPC error (dial failure, eth_sendRawTransaction error)
 package main
 
@@ -40,7 +40,8 @@ var (
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	go func() { <-ctx.Done(); stop() }()
 	defer stop()
 
 	app := &ucli.App{

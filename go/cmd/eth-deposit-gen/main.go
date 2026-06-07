@@ -468,14 +468,14 @@ func printSummary(w io.Writer, path, sha256hex string, n int, net network.Networ
 //	0 — success (nil)
 //	2 — user / configuration errors (bad input, validation)
 //	3 — signer / crypto errors (wrong passphrase, BLS failure)
-//	4 — user abort (SIGINT / context.Canceled)
+//	4 — user abort (SIGINT/SIGTERM / context.Canceled)
 //	1 — fallback for any other error
 func exitCodeFor(err error) int {
 	if err == nil {
 		return 0
 	}
 
-	// Exit code 4: context cancellation (SIGINT).
+	// Exit code 4: context cancellation (SIGINT/SIGTERM).
 	if errors.Is(err, context.Canceled) {
 		return 4
 	}
@@ -517,8 +517,14 @@ func exitCodeFor(err error) int {
 }
 
 func main() {
-	// Set up a context that cancels on SIGINT so the pipeline can exit gracefully.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT)
+	// Set up a context that cancels on SIGINT/SIGTERM so the pipeline can exit gracefully.
+	// Watchdog ensures stop() (unregister) is called on first Done so second signal uses default
+	// handler for force-terminate (per arch §9.4, M1.1-2 ACs). On abrupt/force paths (default
+	// handler after watchdog, or external kill -9), defers (stop, zeroizes, Closes) may be
+	// skipped; Go/C-side secrets (e.g. bls scalars, per ADR-006) rely on OS process exit reclaim.
+	// (Full graceful zeroize/env-unset hygiene is in M1.1-5/M1.1-6.)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	go func() { <-ctx.Done(); stop() }()
 	defer stop()
 
 	app := cli.NewApp(run)

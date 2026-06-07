@@ -26,7 +26,7 @@ import (
 // Wrap low-level errors with WrapInputErr so ExitCodeFor maps them correctly.
 var ErrInvalidInput = errors.New("invalid input")
 
-// ErrUserAborted is the sentinel for SIGINT / context cancellation (exit code 4).
+// ErrUserAborted is the sentinel for SIGINT/SIGTERM / context cancellation (exit code 4).
 var ErrUserAborted = errors.New("user aborted")
 
 // ExitCodeFor maps err to an exit code per the eth-deposit-tx convention.
@@ -34,7 +34,7 @@ func ExitCodeFor(err error) int {
 	if err == nil {
 		return 0
 	}
-	// Exit code 4: context cancellation (SIGINT) or explicit abort.
+	// Exit code 4: context cancellation (SIGINT/SIGTERM) or explicit abort.
 	if errors.Is(err, context.Canceled) || errors.Is(err, ErrUserAborted) {
 		return 4
 	}
