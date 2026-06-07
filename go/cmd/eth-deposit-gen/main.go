@@ -539,6 +539,7 @@ func exitCodeFor(err error) int {
 	if errors.Is(err, keystore.ErrWrongPassphrase) ||
 		errors.Is(err, deposit.ErrSelfVerifyFailed) ||
 		errors.Is(err, errBLSInit) ||
+		errors.Is(err, bls.ErrSecretZero) ||
 		errors.Is(err, ErrDepositCLIFailed) {
 		return 3
 	}

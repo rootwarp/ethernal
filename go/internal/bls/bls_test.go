@@ -2,6 +2,7 @@ package bls_test
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/rootwarp/eth-utils/go/internal/bls"
@@ -41,6 +42,23 @@ func TestNewSignerRejectsWrongLength(t *testing.T) {
 				t.Errorf("NewSigner(%d bytes) returned nil error, want error", len(tc.secret))
 			}
 		})
+	}
+}
+
+// TestNewSigner_ZeroScalar_Reject verifies that NewSigner rejects a 32-byte
+// all-zero secret with the sentinel ErrSecretZero (M1.2-1 AC).
+func TestNewSigner_ZeroScalar_Reject(t *testing.T) {
+	if err := bls.Init(); err != nil {
+		t.Fatalf("Init() = %v", err)
+	}
+
+	secret := bytes.Repeat([]byte{0}, 32)
+	_, err := bls.NewSigner(secret)
+	if err == nil {
+		t.Error("NewSigner(zero secret) returned nil error, want ErrSecretZero")
+	}
+	if !errors.Is(err, bls.ErrSecretZero) {
+		t.Errorf("NewSigner(zero) = %v, want %v", err, bls.ErrSecretZero)
 	}
 }
 

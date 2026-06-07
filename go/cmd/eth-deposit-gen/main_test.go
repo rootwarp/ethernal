@@ -212,6 +212,23 @@ func TestRunWithDeps_BLSInitError_ExitCode3(t *testing.T) {
 	}
 }
 
+func TestRunWithDeps_ZeroScalarBLS_ExitCode3(t *testing.T) {
+	var summaryBuf bytes.Buffer
+	d := makeTestDeps(&summaryBuf, nil)
+	d.newSigner = func(_ []byte) (bls.Signer, error) { return nil, bls.ErrSecretZero }
+
+	err := runWithDeps(context.Background(), makeCfg(), d)
+	if err == nil {
+		t.Fatal("runWithDeps() returned nil error, want bls zero scalar error")
+	}
+	if !errors.Is(err, bls.ErrSecretZero) {
+		t.Errorf("error = %v, want bls.ErrSecretZero", err)
+	}
+	if code := exitCodeFor(err); code != 3 {
+		t.Errorf("exitCodeFor(bls zero scalar error) = %d, want 3", code)
+	}
+}
+
 func TestRunWithDeps_KeystoreLoadError_ExitCode2(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
@@ -586,6 +603,8 @@ func TestExitCodeFor_ErrorCodes(t *testing.T) {
 		{"ErrSelfVerifyFailed", deposit.ErrSelfVerifyFailed, 3},
 		{"ErrSelfVerifyFailed wrapped", fmt.Errorf("wrap: %w", deposit.ErrSelfVerifyFailed), 3},
 		{"errBLSInit", blsInitErr, 3},
+		{"bls.ErrSecretZero", bls.ErrSecretZero, 3},
+		{"bls.ErrSecretZero wrapped", fmt.Errorf("wrap: %w", bls.ErrSecretZero), 3},
 
 		// --- exit code 4 ---
 		{"context.Canceled", context.Canceled, 4},

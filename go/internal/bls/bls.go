@@ -22,6 +22,10 @@ var (
 	initErr  error
 )
 
+// ErrSecretZero is returned by NewSigner when the 32-byte secret is the
+// all-zero scalar (after successful Deserialize). Per M1.2-1 / architecture §15 / GO-036.
+var ErrSecretZero = errors.New("bls: secret key is zero")
+
 // Init initialises the herumi BLS library for the BLS12-381 curve.
 // The explicit SetETHmode(EthModeDraft07) call is redundant with what herumi's
 // Init does internally (EthModeDraft07 == EthModeLatest == 3), but is kept for
@@ -71,7 +75,8 @@ type signer struct {
 // loads it into herumi, and immediately zeroizes the local copy — but it
 // never modifies the caller's slice.
 //
-// Returns an error if len(secret) != 32 or herumi rejects the key material.
+// Returns an error if len(secret) != 32, the secret is the zero scalar
+// (ErrSecretZero, per architecture §15 / M1.2-1), or herumi rejects the key material.
 func NewSigner(secret []byte) (Signer, error) {
 	if err := Init(); err != nil {
 		return nil, fmt.Errorf("bls: not initialized: %w", err)
@@ -92,7 +97,10 @@ func NewSigner(secret []byte) (Signer, error) {
 
 	s := &signer{}
 	if err := s.sk.Deserialize(localCopy); err != nil {
-		return nil, fmt.Errorf("bls: Deserialize: %w", err)
+		return nil, fmt.Errorf("bls: Deserialize failed")
+	}
+	if s.sk.IsZero() {
+		return nil, ErrSecretZero
 	}
 	return s, nil
 }
