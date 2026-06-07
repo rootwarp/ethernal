@@ -27,6 +27,12 @@ import (
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
+// newRPCClient is the factory used to obtain an EthRPC for hybrid --rpc-url on `run` only (M1.3-5).
+// build always rejects --rpc-url (M0.7-8a path). Tests override to supply mocks.
+var newRPCClient = func(ctx context.Context, rpcURL string) (internaltx.EthRPC, error) {
+	return internaltx.NewEthClient(ctx, rpcURL)
+}
+
 // version, commit, and date are set at build time via -ldflags.
 // Default values are used for local/dev builds.
 // Canonical first release: v0.1.0 — signals first usable release, not yet
@@ -87,8 +93,8 @@ func buildCommand() *ucli.Command {
 		Description: `Reads a deposit_data JSON file (produced by eth-deposit-gen or the Ethereum Launchpad)
 and produces an unsigned EIP-1559 transaction for the Beacon Chain deposit contract.
 
-Supports offline/air-gapped mode (no --rpc-url required) when all gas and nonce
-flags are supplied explicitly, and hybrid mode when --rpc-url is provided.
+Supports offline/air-gapped mode (no --rpc-url required; --rpc-url is rejected for build per M0.7-8a — use "run" for hybrid) when all gas and nonce
+flags are supplied explicitly.
 Output is written to stdout by default; use --output FILE or --output - for explicit stdout.
 
 Examples:
@@ -141,7 +147,7 @@ Exit codes:
 			},
 			&ucli.StringFlag{
 				Name:    "rpc-url",
-				Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional; when omitted, all gas and nonce flags must be supplied explicitly)",
+				Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (rejected for build; use `run` for hybrid or supply --nonce + fees explicitly)",
 				EnvVars: []string{"ETH_DEPOSIT_TX_RPC_URL"},
 			},
 			&ucli.StringFlag{
@@ -170,6 +176,10 @@ Exit codes:
 			if err != nil {
 				return err
 			}
+			if cfg.RPCURL != "" {
+				// build remains strictly offline; reject per M0.7-8a (M1.3-5 keeps for build, wires run only).
+				return ucli.Exit(internaltx.ErrRPCURLRejected.Error(), 2)
+			}
 
 			// Read deposit data from file or stdin.
 			var rawData []byte
@@ -182,7 +192,7 @@ Exit codes:
 				return ucli.Exit(fmt.Sprintf("--input-file: %v", err), 2)
 			}
 
-			unsignedTx, err := buildUnsignedTx(c.Context, cfg, rawData)
+			unsignedTx, err := buildUnsignedTx(c.Context, cfg, rawData, nil, [20]byte{})
 			if err != nil {
 				return err
 			}
@@ -208,7 +218,8 @@ Exit codes:
 
 // buildUnsignedTx converts raw deposit data bytes + build config into an UnsignedTx.
 // It is extracted so runAction can call it without re-reading from disk.
-func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte) (*internaltx.UnsignedTx, error) {
+// rpc and from are threaded only for run's hybrid --rpc-url path (M1.3-5); build passes nil/zero.
+func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte, rpc internaltx.EthRPC, from [20]byte) (*internaltx.UnsignedTx, error) {
 	entries, err := deposit.EntriesFromJSON(rawData)
 	if err != nil {
 		return nil, ucli.Exit(fmt.Sprintf("--input-file: invalid JSON: %v", err), 2)
@@ -228,23 +239,28 @@ func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte) (*interna
 	buildCfg := internaltx.BuildConfig{
 		NetworkParams:        cfg.NetworkParams,
 		RPCURL:               cfg.RPCURL,
+		RPC:                  rpc,
+		From:                 from,
 		GasLimit:             cfg.GasLimit,
 		MaxFeePerGas:         cfg.MaxFeePerGas,
 		MaxPriorityFeePerGas: cfg.MaxPriorityFeePerGas,
 		Nonce:                cfg.Nonce,
 	}
-	if buildCfg.MaxFeePerGas == nil {
-		buildCfg.MaxFeePerGas = defaultMaxFeePerGas()
-	}
-	if buildCfg.MaxPriorityFeePerGas == nil {
-		buildCfg.MaxPriorityFeePerGas = defaultMaxPriorityFeePerGas()
-	}
-	if buildCfg.GasLimit == 0 {
-		buildCfg.GasLimit = defaultGasLimit
-	}
-	if buildCfg.Nonce == nil {
-		var z uint64
-		buildCfg.Nonce = &z
+	// Fill defaults ONLY for static (offline) path. RPC path (run hybrid) leaves nils/0 so resolveRPC fills nonce/fees (and gas if 0).
+	if rpc == nil {
+		if buildCfg.MaxFeePerGas == nil {
+			buildCfg.MaxFeePerGas = defaultMaxFeePerGas()
+		}
+		if buildCfg.MaxPriorityFeePerGas == nil {
+			buildCfg.MaxPriorityFeePerGas = defaultMaxPriorityFeePerGas()
+		}
+		if buildCfg.GasLimit == 0 {
+			buildCfg.GasLimit = defaultGasLimit
+		}
+		if buildCfg.Nonce == nil {
+			var z uint64
+			buildCfg.Nonce = &z
+		}
 	}
 
 	builder := internaltx.NewBuilder()

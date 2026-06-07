@@ -279,3 +279,60 @@ func TestE2E_SendMock_ReceiptPolling(t *testing.T) {
 		t.Errorf("output missing receipt status; got: %s", out.String())
 	}
 }
+
+// TestRun_HoodiEndToEnd_RPCURL (e2e tag, real hoodi): run with --rpc-url against real hoodi RPC
+// (no --nonce/fees) succeeds end-to-end (M1.3-5 AC). Uses real dial + resolveRPC path + local sign.
+// Sender key is test-only; no broadcast is performed.
+func TestRun_HoodiEndToEnd_RPCURL(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	key := readPhase3Key(t)
+	const envVar = "E2E_RUN_HOODI_RPC_KEY"
+	t.Setenv(envVar, key)
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "signed-hoodi-rpc.json")
+
+	app := newE2EApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	// Use the committed hoodi deposit_data fixture (network matches --network hoodi).
+	absDepositFixture, err := filepath.Abs("../../testdata/hoodi/deposit_data-2026-06-07T06:11:44.170453Z-4f7dc6a8.json")
+	if err != nil {
+		t.Fatalf("resolve hoodi deposit fixture: %v", err)
+	}
+
+	// Public hoodi RPC used for M0.11/M1.3 e2e (per release notes + plan).
+	const hoodiRPC = "https://rpc.hoodi.ethpandaops.io"
+	err = app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "hoodi",
+		"--input-file", absDepositFixture,
+		"--signer", "local",
+		"--output", outFile,
+		"--private-key-env", envVar,
+		"--rpc-url", hoodiRPC,
+		// no --nonce / --max-fee* : resolved via real RPC (chainID guard + fees + nonce)
+	})
+	if err != nil {
+		t.Fatalf("run --rpc-url against real hoodi failed: %v\nstderr: %s", err, errOut.String())
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("signed.json not written: %v", err)
+	}
+	var signed map[string]interface{}
+	if err := json.Unmarshal(data, &signed); err != nil {
+		t.Fatalf("signed.json not valid JSON: %v\n%s", err, data)
+	}
+	for _, field := range []string{"unsigned", "from", "hash", "r", "s", "v", "rawRLP"} {
+		if _, ok := signed[field]; !ok {
+			t.Errorf("signed.json missing field %q", field)
+		}
+	}
+}

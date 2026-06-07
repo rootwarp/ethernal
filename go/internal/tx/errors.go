@@ -33,4 +33,8 @@ var (
 	ErrReceiptReverted          = errors.New("on-chain deposit reverted (status=0)")
 	ErrReceiptTimeout           = errors.New("receipt unavailable before deadline")
 	ErrNoBaseFee                = errors.New("RPC block has no baseFee (non-EIP-1559 block)")
+
+	// ErrRPCURLRejected is returned (exit 2) when --rpc-url is passed to build (air-gapped only).
+	// run wires the hybrid (M1.3-5); retained from M0.7-8a.
+	ErrRPCURLRejected = errors.New("--rpc-url is reserved for v1; provide --nonce and fees explicitly")
 )

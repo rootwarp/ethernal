@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	ucli "github.com/urfave/cli/v2"
 
 	"github.com/rootwarp/eth-utils/go/internal/signer"
+
+	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
 func TestRunCommand_LocalSigner_HappyPath(t *testing.T) {
@@ -521,5 +525,107 @@ func TestLoadRunConfig_RejectKeyValueNoLeak(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "treated as compromised") {
 		t.Errorf("warning not visible on stderr: %s", buf.String())
+	}
+}
+
+// mockEthRPC is a local test double (modeled on send_test's mockBroadcaster and internal/tx mockRPC)
+// so that TestRun_RPCURL_* can exercise the hybrid wiring without a live node (M1.3-5 AC).
+type mockEthRPC struct {
+	SuggestGasTipCapFn func(context.Context) (*big.Int, error)
+	BlockBaseFeeFn     func(context.Context) (*big.Int, error)
+	PendingNonceAtFn   func(context.Context, [20]byte) (uint64, error)
+	EstimateGasFn      func(context.Context, internaltx.CallMsg) (uint64, error)
+	ChainIDFn          func(context.Context) (*big.Int, error)
+	CloseFn            func()
+}
+
+func (m *mockEthRPC) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
+	if m.SuggestGasTipCapFn == nil {
+		panic("mockEthRPC.SuggestGasTipCap not set")
+	}
+	return m.SuggestGasTipCapFn(ctx)
+}
+func (m *mockEthRPC) BlockBaseFee(ctx context.Context) (*big.Int, error) {
+	if m.BlockBaseFeeFn == nil {
+		panic("mockEthRPC.BlockBaseFee not set")
+	}
+	return m.BlockBaseFeeFn(ctx)
+}
+func (m *mockEthRPC) PendingNonceAt(ctx context.Context, account [20]byte) (uint64, error) {
+	if m.PendingNonceAtFn == nil {
+		panic("mockEthRPC.PendingNonceAt not set")
+	}
+	return m.PendingNonceAtFn(ctx, account)
+}
+func (m *mockEthRPC) EstimateGas(ctx context.Context, msg internaltx.CallMsg) (uint64, error) {
+	if m.EstimateGasFn == nil {
+		panic("mockEthRPC.EstimateGas not set")
+	}
+	return m.EstimateGasFn(ctx, msg)
+}
+func (m *mockEthRPC) ChainID(ctx context.Context) (*big.Int, error) {
+	if m.ChainIDFn == nil {
+		panic("mockEthRPC.ChainID not set")
+	}
+	return m.ChainIDFn(ctx)
+}
+func (m *mockEthRPC) Close() {
+	if m.CloseFn != nil {
+		m.CloseFn()
+	}
+}
+
+var _ internaltx.EthRPC = (*mockEthRPC)(nil)
+
+// withMockRPC overrides newRPCClient for the duration of t (restored on cleanup).
+func withMockRPC(t *testing.T, m *mockEthRPC) {
+	t.Helper()
+	orig := newRPCClient
+	newRPCClient = func(ctx context.Context, _ string) (internaltx.EthRPC, error) {
+		return m, nil
+	}
+	t.Cleanup(func() { newRPCClient = orig })
+}
+
+// TestRun_RPCURL_ResolvesNonceAndFees (mock RPC): eth-deposit-tx run --rpc-url (no --nonce/fees) succeeds (M1.3-5 AC).
+func TestRun_RPCURL_ResolvesNonceAndFees(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	envVar := "TEST_RUN_RPCURL_RESOLVES_" + randomSuffix(t)
+	t.Setenv(envVar, "0x"+generateTestPrivKey(t))
+
+	app := newTestApp()
+	var out bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &bytes.Buffer{}
+
+	// Mock returns values that exercise resolveRPC path (fees from tip+base, nonce, gas if was 0).
+	mock := &mockEthRPC{
+		ChainIDFn: func(context.Context) (*big.Int, error) {
+			return big.NewInt(17000), nil // holesky matches fixture
+		},
+		SuggestGasTipCapFn: func(context.Context) (*big.Int, error) { return big.NewInt(2_000_000_000), nil },
+		BlockBaseFeeFn:     func(context.Context) (*big.Int, error) { return big.NewInt(10_000_000_000), nil },
+		PendingNonceAtFn:   func(context.Context, [20]byte) (uint64, error) { return 123, nil },
+		EstimateGasFn:      func(context.Context, internaltx.CallMsg) (uint64, error) { return 200_000, nil },
+	}
+	withMockRPC(t, mock)
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "holesky",
+		"--input-file", fixtureAbsPath(t),
+		"--signer", "local",
+		"--private-key-env", envVar,
+		"--rpc-url", "http://mock.invalid",
+		// deliberately omit --nonce, --max-fee-per-gas, --max-priority-fee-per-gas (gas uses load default)
+	})
+	if err != nil {
+		t.Fatalf("run --rpc-url (no nonce/fees) failed: %v", err)
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Errorf("output not valid JSON: %s", out.String())
 	}
 }

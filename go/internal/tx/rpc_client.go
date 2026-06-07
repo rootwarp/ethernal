@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+
+	"github.com/rootwarp/eth-utils/go/internal/cli"
 )
 
 // EthBroadcaster broadcasts a signed transaction via JSON-RPC.
@@ -52,11 +54,14 @@ type ethClient struct {
 }
 
 // NewEthClient dials the given RPC URL and returns an ethClient.
+// The rpcURL (which may contain API keys) is redacted via cli.Redact in error strings
+// to prevent leakage in logs, stderr, or crash reports (addresses GO-049; now exercised
+// by run hybrid via newRPCClient).
 // Returns an error wrapping ErrRPCDial on connection failure.
 func NewEthClient(ctx context.Context, rpcURL string) (*ethClient, error) {
 	c, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %v", ErrRPCDial, rpcURL, err)
+		return nil, fmt.Errorf("%w: %s: %v", ErrRPCDial, cli.Redact(rpcURL, 16), err)
 	}
 	return &ethClient{client: c}, nil
 }

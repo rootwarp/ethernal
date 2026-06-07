@@ -379,3 +379,32 @@ func fixtureAbsPath(t *testing.T) string {
 	}
 	return abs
 }
+
+// TestBuild_RPCURL_StillRejected verifies M0.7-8a reject path is unchanged for build (M1.3-5 AC).
+// run is the only path that wires --rpc-url (hybrid).
+func TestBuild_RPCURL_StillRejected(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	app := newTestApp()
+	var buf bytes.Buffer
+	app.Writer = &buf
+	app.ErrWriter = &buf
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "build",
+		"--network", "holesky",
+		"--input-file", fixtureAbsPath(t),
+		"--rpc-url", "http://example.invalid",
+	})
+	if err == nil {
+		t.Fatal("expected build --rpc-url to be rejected, got nil")
+	}
+	if code := ExitCodeFor(err); code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(err.Error(), "reserved for v1") {
+		t.Errorf("error should contain reject guidance: %v", err)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	ucli "github.com/urfave/cli/v2"
 
 	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
+	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
 // RunConfig holds parsed, validated inputs for the run subcommand,
@@ -128,6 +131,8 @@ Examples:
     --output signed.json \
     --keep-unsigned
 
+  # Note: --signer ledger + --rpc-url (hybrid auto-nonce) requires explicit --nonce (device not opened until sign step).
+
 Exit codes:
   0  Success
   2  User / configuration error (missing file, bad --network, missing --signer)
@@ -196,7 +201,7 @@ func buildFlags() []ucli.Flag {
 		},
 		&ucli.StringFlag{
 			Name:    "rpc-url",
-			Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional; when omitted, all gas and nonce flags must be supplied explicitly)",
+			Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional on run for hybrid; when omitted, all gas and nonce flags must be supplied explicitly)",
 			EnvVars: []string{"ETH_DEPOSIT_TX_RPC_URL"},
 		},
 		&ucli.StringFlag{
@@ -236,13 +241,58 @@ func runAction(c *ucli.Context, cfg *RunConfig) error {
 		return ucli.Exit(fmt.Sprintf("--input-file: %v", err), 2)
 	}
 
-	// 2. Build unsigned tx (in-process, no disk write).
-	unsigned, err := buildUnsignedTx(c.Context, cfg.Build, rawData)
+	// 2. If --rpc-url provided (run only), construct client for auto nonce/fees (M1.3-5).
+	// build path rejects --rpc-url (see main.go); reuse resolveRPC via the EthRPC.
+	var rpcClient internaltx.EthRPC
+	if rpcURL := cfg.Build.RPCURL; rpcURL != "" {
+		rpcClient, err = newRPCClient(c.Context, rpcURL)
+		if err != nil {
+			return err
+		}
+		defer rpcClient.Close()
+	}
+
+	// 3. Build unsigned tx (in-process, no disk write). Thread rpc + from (for nonce) only on run hybrid.
+	var from [20]byte
+	if rpcClient != nil && cfg.Build.Nonce == nil && cfg.Signer == "local" {
+		// Derive sender addr from priv env (only for run+local+auto-nonce; ledger would require early device open).
+		// Avoids ErrMissingFromForNonce in resolveRPC. Follows signer zeroize/unset contract (M0.8/M1.1/GO-017): defer unset on read,
+		// zero decode buf b (and nil it) after use; see internal/signer/local.go:49 (NewFromHex) and :136 (Sign).
+		// Duplicates parse only for addr (no key retained); sign path still constructs full signer (which will re-read env before its unset).
+		hexKey := os.Getenv(cfg.PrivateKeyEnvVar)
+		nameForErr := cfg.PrivateKeyEnvVar
+		if len(nameForErr) > 32 {
+			nameForErr = cli.Redact(nameForErr, 4)
+		}
+		if hexKey == "" {
+			_ = os.Unsetenv(cfg.PrivateKeyEnvVar)
+			return fmt.Errorf("local signer: environment variable %q is not set or empty: %w", nameForErr, signer.ErrInvalidKey)
+		}
+		defer func() { _ = os.Unsetenv(cfg.PrivateKeyEnvVar) }()
+		stripped := strings.TrimPrefix(hexKey, "0x")
+		if b, decErr := hex.DecodeString(stripped); decErr == nil && len(b) == 32 {
+			defer func() {
+				for i := range b {
+					b[i] = 0
+				}
+				b = nil
+			}()
+			if priv, ecdErr := crypto.ToECDSA(b); ecdErr == nil {
+				addr := crypto.PubkeyToAddress(priv.PublicKey)
+				copy(from[:], addr[:])
+			} else {
+				return fmt.Errorf("local signer: environment variable %q: %w", nameForErr, signer.ErrInvalidKey)
+			}
+		} else {
+			return fmt.Errorf("local signer: environment variable %q: %w", nameForErr, signer.ErrInvalidKey)
+		}
+	}
+	unsigned, err := buildUnsignedTx(c.Context, cfg.Build, rawData, rpcClient, from)
 	if err != nil {
 		return err
 	}
 
-	// 3. Optionally write unsigned tx before signing (so it survives a sign failure).
+	// 4. Optionally write unsigned tx before signing (so it survives a sign failure).
 	if cfg.KeepUnsigned {
 		unsignedPath := unsignedPathFor(cfg.OutputFile)
 		unsignedJSON, err := json.MarshalIndent(unsigned, "", "  ")
@@ -256,7 +306,7 @@ func runAction(c *ucli.Context, cfg *RunConfig) error {
 		slog.Info("wrote unsigned tx", "path", unsignedPath)
 	}
 
-	// 4. Sign (in-process, no disk round-trip).
+	// 5. Sign (in-process, no disk round-trip).
 	signCfg := &SignConfig{
 		Signer:           cfg.Signer,
 		PrivateKeyEnvVar: cfg.PrivateKeyEnvVar,
@@ -266,14 +316,14 @@ func runAction(c *ucli.Context, cfg *RunConfig) error {
 		return err
 	}
 
-	// 5. Marshal signed tx.
+	// 6. Marshal signed tx.
 	signedJSON, err := json.MarshalIndent(signed, "", "  ")
 	if err != nil {
 		return fmt.Errorf("run: marshal signed: %w", err)
 	}
 	signedJSON = append(signedJSON, '\n')
 
-	// 6. Write output.
+	// 7. Write output.
 	if cfg.OutputFile == "" || cfg.OutputFile == "-" {
 		_, err = c.App.Writer.Write(signedJSON)
 		return err
