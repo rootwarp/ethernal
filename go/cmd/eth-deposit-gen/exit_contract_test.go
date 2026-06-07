@@ -43,8 +43,8 @@ func TestExitCodeContract(t *testing.T) {
 		{"keystore.ErrKeystoreCipherText", keystore.ErrKeystoreCipherText, 2, "M1"},
 		{"keystore.ErrEnvVarEmpty", keystore.ErrEnvVarEmpty, 2, ""},
 		{"deposit.ErrPubkeyMismatch", deposit.ErrPubkeyMismatch, 2, "arch §15 (gen-emitted; tx network/zero/fork/roots covered in tx contract)"},
-		{"errMainnetAckRequired", errMainnetAckRequired, 2, "gen local (M0 mainnet gate DiD)"},
-		{"ErrDepositCLINotFound", ErrDepositCLINotFound, 2, "M0 / M1.5-6 (maps to 2 not 3 per code)"},
+		{"errMainnetAckRequired", cli.ErrMainnetAckRequired, 2, "gen local (M0 mainnet gate DiD)"},
+		{"ErrDepositCLINotFound", cli.ErrDepositCLINotFound, 2, "M0 / M1.5-6 (maps to 2 not 3 per code)"},
 		{"ucli.ExitCoder code 2", ucli.Exit("bad flag", 2), 2, ""},
 		{"required flag substr singular", fmt.Errorf(`Required flag "withdrawal-address" not set`), 2, "M1.5-1 + M0.4 pre-val safety net"},
 		{"required flag substr plural", fmt.Errorf(`Required flags "keystore-dir, pubkeys" not set`), 2, "M1.5-1"},
@@ -54,8 +54,8 @@ func TestExitCodeContract(t *testing.T) {
 		{"keystore.ErrWrongPassphrase", keystore.ErrWrongPassphrase, 3, "arch §15"},
 		{"deposit.ErrSelfVerifyFailed", deposit.ErrSelfVerifyFailed, 3, "arch §15"},
 		{"bls.ErrSecretZero", bls.ErrSecretZero, 3, "M1 / arch §15"},
-		{"errBLSInit", errBLSInit, 3, "gen internal sentinel (herumi init wrap)"},
-		{"ErrDepositCLIFailed", ErrDepositCLIFailed, 3, "M0/M1.5-6 (crypto verify step)"},
+		{"errBLSInit", cli.ErrBLSInit, 3, "gen internal sentinel (herumi init wrap)"},
+		{"ErrDepositCLIFailed", cli.ErrDepositCLIFailed, 3, "M0/M1.5-6 (crypto verify step)"},
 
 		// fallback 1 for anything else (writer errs etc map here unless wrapped to sentinels above)
 		{"unknown error", errors.New("some disk full or network hiccup"), 1, "arch §15 fallback"},
@@ -90,7 +90,7 @@ func TestExitCodeContract(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := exitCodeFor(tc.err)
+			got := cli.ExitCodeFor(tc.err)
 			if got != tc.want {
 				t.Errorf("exitCodeFor(%v) = %d, want %d %s", tc.err, got, tc.want, tc.comment)
 			}
@@ -110,7 +110,7 @@ func TestExitCodeContract(t *testing.T) {
 // Revert the temp edit before final declare (gofmt/vet/test clean).
 func TestExitCodeContract_deliberateBreakageTrigger(t *testing.T) {
 	unmapped := errors.New("TEST-ONLY deliberate breakage sentinel (M1.5-9 split-watch); failure here or on row must mention 'update contract' or 'TestExitCodeContract'")
-	if got := exitCodeFor(unmapped); got != 1 {
+	if got := cli.ExitCodeFor(unmapped); got != 1 {
 		t.Errorf("deliberate unmapped exitCodeFor = %d, want 1; update the TestExitCodeContract table (see go/plan/architecture.md §15 + M1.5-9 AC + prior M1.5 Is/got-want patterns)", got)
 	}
 }
