@@ -53,4 +53,18 @@ var (
 	// or the address is not the deposit contract for unsigned.ChainID (via network.LookupByChainID).
 	// Exit code 2 (input validation) per architecture §15 and M0.6-1.
 	ErrInvalidToAddress = errors.New("to is not a valid 0x-prefixed 42-char address")
+
+	// ErrInvalidInput indicates a user/configuration error such as a negative
+	// numeric field inside an unsigned tx. Field-specific wrappers (e.g.
+	// "value: negative: %w") allow callers to errors.Is the broad class.
+	// Exit code 2 per M1.5-2 / FR-P1-F2.
+	// NOTE (naming collision): dual with cmd/eth-deposit-tx.ErrInvalidInput (same string,
+	// different pkgs); pre-existing after this addition (to enable exact %w style + export
+	// for tests/contract without cycles). Full unification + ExitCodeFor Is(signer.Err*)
+	// deferred to M1.5-9 per "smallest" scope. (See also ErrUnsupportedTxType below.)
+	ErrInvalidInput = errors.New("invalid input")
+
+	// ErrUnsupportedTxType indicates parseUnsignedTx saw Type != "0x2".
+	// Exit code 2 (input validation) per architecture §15 and M1.5-2.
+	ErrUnsupportedTxType = errors.New("unsupported tx type (expected 0x2)")
 )

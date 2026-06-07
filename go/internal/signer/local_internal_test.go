@@ -204,3 +204,40 @@ func TestSign_ZeroizesIntermediates(t *testing.T) {
 		}
 	}
 }
+
+// TestParseUnsignedTx_NegativeFields_Reject (M1.5-2 AC table-driven): value, maxFee, tip
+// .Sign()<0 rejected with "field: negative: %w" ErrInvalidInput so Is works.
+func TestParseUnsignedTx_NegativeFields_Reject(t *testing.T) {
+	base := localUnsigned()
+	tests := []struct {
+		name string
+		set  func(*internaltx.UnsignedTx)
+	}{
+		{"value", func(u *internaltx.UnsignedTx) { u.Value = "0x-1" }},
+		{"maxFee", func(u *internaltx.UnsignedTx) { u.MaxFeePerGas = "0x-4a817c800" }},
+		{"tip", func(u *internaltx.UnsignedTx) { u.MaxPriorityFeePerGas = "0x-3b9aca00" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := base
+			tt.set(&u)
+			_, err := parseUnsignedTx(u)
+			if err == nil {
+				t.Fatalf("expected error for %s negative field", tt.name)
+			}
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected errors.Is(ErrInvalidInput) for %s neg, got %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestParseUnsignedTx_LegacyTxType_Reject (M1.5-2 AC): Type:"0x0" yields ErrUnsupportedTxType.
+func TestParseUnsignedTx_LegacyTxType_Reject(t *testing.T) {
+	unsigned := localUnsigned()
+	unsigned.Type = "0x0"
+	_, err := parseUnsignedTx(unsigned)
+	if !errors.Is(err, ErrUnsupportedTxType) {
+		t.Fatalf("expected ErrUnsupportedTxType for Type 0x0, got %v", err)
+	}
+}
