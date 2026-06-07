@@ -19,6 +19,12 @@ import (
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
+// parallelismMultiplier is the factor by which runtime.NumCPU() is multiplied
+// to compute the maximum value accepted for the --parallel flag (and the
+// upper bound on the worker pool size). 4 permits modest oversubscription for
+// the keystore I/O + BLS signing path per architecture §6.10 (FR-P2-A8 / GO-063).
+const parallelismMultiplier = 4
+
 // Config holds the validated, parsed inputs from the CLI flags.
 type Config struct {
 	// KeystoreDir is the filesystem path to the directory containing EIP-2335 JSON keystore files.
@@ -66,8 +72,8 @@ type Config struct {
 	JSONLogs bool
 
 	// Parallel is the number of concurrent worker goroutines used to process
-	// pubkeys. Valid range: 1 to runtime.NumCPU()*4. Default is 1 (sequential).
-	// Values <= 0 or > runtime.NumCPU()*4 are rejected with a usage error (exit code 2).
+	// pubkeys. Valid range: 1 to runtime.NumCPU()*parallelismMultiplier. Default is 1 (sequential).
+	// Values <= 0 or > runtime.NumCPU()*parallelismMultiplier are rejected with a usage error (exit code 2).
 	Parallel int
 	// VerifyWithDepositCLI enables optional post-generation cross-check by shelling
 	// out to the user's installed staking-deposit-cli. Off by default; opt-in via
@@ -175,7 +181,7 @@ OPTIONS:
 		},
 		&ucli.IntFlag{
 			Name:  "parallel",
-			Usage: fmt.Sprintf("Number of concurrent signing workers (1–%d); values ≤0 or >%d are rejected", runtime.NumCPU()*4, runtime.NumCPU()*4),
+			Usage: fmt.Sprintf("Number of concurrent signing workers (1–%d); values ≤0 or >%d are rejected", runtime.NumCPU()*parallelismMultiplier, runtime.NumCPU()*parallelismMultiplier),
 			Value: 1,
 		},
 		&ucli.BoolFlag{
@@ -258,14 +264,14 @@ OPTIONS:
 			return ucli.Exit(fmt.Sprintf("--output-dir: %v", err), 2)
 		}
 
-		// 5. Validate --parallel: must be in [1, runtime.NumCPU()*4].
+		// 5. Validate --parallel: must be in [1, runtime.NumCPU()*parallelismMultiplier].
 		parallel := c.Int("parallel")
-		maxParallel := runtime.NumCPU() * 4
+		maxParallel := runtime.NumCPU() * parallelismMultiplier
 		if parallel <= 0 {
 			return ucli.Exit(fmt.Sprintf("--parallel: value %d is invalid; must be >= 1", parallel), 2)
 		}
 		if parallel > maxParallel {
-			return ucli.Exit(fmt.Sprintf("--parallel: value %d exceeds maximum of %d (runtime.NumCPU()*4); reduce the value or it will oversubscribe the CPU", parallel, maxParallel), 2)
+			return ucli.Exit(fmt.Sprintf("--parallel: value %d exceeds maximum of %d (runtime.NumCPU()*parallelismMultiplier); reduce the value or it will oversubscribe the CPU", parallel, maxParallel), 2)
 		}
 
 		cfg := Config{
