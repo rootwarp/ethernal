@@ -364,7 +364,7 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 					Network:               cfg.Network,
 					Pubkeys:               [][48]byte{pk},
 					WithdrawalCredentials: withdrawalCreds,
-					AmountGwei:            32_000_000_000,
+					AmountGwei:            network.MinDepositAmountGwei,
 					DepositCLIVersion:     CLIVersion,
 				})
 				if err != nil {

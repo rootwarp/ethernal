@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/network"
+	"github.com/rootwarp/eth-utils/go/internal/ssz"
 )
 
 // jsonEntry is the wire representation of a single entry in a Launchpad
@@ -170,6 +172,52 @@ func (e Entry) Validate() error {
 	}
 	if _, err := network.Lookup(e.NetworkName); err != nil {
 		return fmt.Errorf("deposit: validate: network_name %q is not recognised: %w", e.NetworkName, err)
+	}
+	return nil
+}
+
+// ValidateForNetwork enforces that the Entry is bound to the supplied target
+// network parameters (per architecture §15 and ADR-002). It returns a sentinel
+// on mismatch:
+//
+//   - entry.NetworkName == target.Name                  → ErrNetworkMismatch
+//   - entry.ForkVersion == target.GenesisForkVersion    → ErrForkVersionMismatch
+//   - bls.ValidatePubkeyBytes(entry.Pubkey)             → error from ValidatePubkeyBytes (bls.ErrPubkeyInvalid after M1.2-2)
+//   - signature verifies over DepositMessage HTR using
+//     compute_domain(DOMAIN_DEPOSIT, target.GenesisForkVersion, ZeroGenesisValidatorsRoot)
+//     → ErrBLSSignatureInvalid
+//
+// The verifier is supplied by the caller (typically bls.DefaultVerifier());
+// ValidateForNetwork never constructs one. Network/fork checks happen before
+// pubkey or signature verification.
+func (e Entry) ValidateForNetwork(target network.Params, v bls.Verifier) error {
+	if e.NetworkName != target.Name {
+		return ErrNetworkMismatch
+	}
+	if e.ForkVersion != target.GenesisForkVersion {
+		return ErrForkVersionMismatch
+	}
+	if err := bls.ValidatePubkeyBytes(e.Pubkey); err != nil {
+		return err
+	}
+
+	domain := ssz.ComputeDomain(
+		network.DomainDeposit,
+		target.GenesisForkVersion,
+		network.ZeroGenesisValidatorsRoot,
+	)
+
+	msg := ssz.DepositMessage{
+		Pubkey:                e.Pubkey,
+		WithdrawalCredentials: e.WithdrawalCredentials,
+		Amount:                e.Amount,
+	}
+	msgRoot := msg.HashTreeRoot()
+	signingRoot := ssz.ComputeSigningRoot(msgRoot, domain)
+
+	ok, err := v.Verify(e.Pubkey, signingRoot, e.Signature)
+	if err != nil || !ok {
+		return ErrBLSSignatureInvalid
 	}
 	return nil
 }

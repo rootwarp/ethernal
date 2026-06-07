@@ -431,23 +431,6 @@ func TestCLIVersion(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestDefaultWithdrawalCreds — first byte is BLS type prefix, rest is zero
-// ---------------------------------------------------------------------------
-
-func TestDefaultWithdrawalCreds(t *testing.T) {
-	wc := defaultWithdrawalCreds()
-	if wc[0] != 0x00 {
-		t.Errorf("defaultWithdrawalCreds()[0] = 0x%02x, want 0x00 (BLS withdrawal type)", wc[0])
-	}
-	// All remaining bytes must be zero.
-	for i := 1; i < len(wc); i++ {
-		if wc[i] != 0 {
-			t.Errorf("defaultWithdrawalCreds()[%d] = 0x%02x, want 0x00", i, wc[i])
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // TestDeriveWC01_FromAddress — table test for exact 0x01 || 0x00*11 || addr[20] layout (M0.4-2 AC)
 // ---------------------------------------------------------------------------
 

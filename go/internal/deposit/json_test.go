@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/network"
+	"github.com/rootwarp/eth-utils/go/internal/ssz"
 )
 
 // validRawEntry returns a jsonEntry with valid values for all fields.
@@ -388,5 +390,104 @@ func TestEntry_Validate_WC_Accept(t *testing.T) {
 
 	if err := e.Validate(); err != nil {
 		t.Errorf("Validate() on canonical 0x01 WC entry: unexpected error: %v", err)
+	}
+}
+
+// validSignedEntryForParams constructs a minimal Entry whose pubkey is a
+// real on-curve BLS G1 point (derived via NewSigner) and whose signature
+// is a real signature over the DepositMessage for the target's deposit
+// domain. The resulting entry satisfies the BLS parts of
+// ValidateForNetwork(target, bls.DefaultVerifier()).
+func validSignedEntryForParams(t *testing.T, p network.Params) Entry {
+	t.Helper()
+
+	// Small fixed secret produces a deterministic valid pubkey (see cli_test.go pattern).
+	secret := make([]byte, 32)
+	secret[0] = 0x42
+	snr, err := bls.NewSigner(secret)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	pub, err := snr.PublicKey()
+	if err != nil {
+		t.Fatalf("PublicKey: %v", err)
+	}
+
+	wc := [32]byte{}
+	wc[0] = 0x01
+	wc[31] = 0x02 // non-zero tail ok for 0x01
+	amount := uint64(32_000_000_000)
+
+	msg := ssz.DepositMessage{
+		Pubkey:                pub,
+		WithdrawalCredentials: wc,
+		Amount:                amount,
+	}
+	msgRoot := msg.HashTreeRoot()
+	domain := ssz.ComputeDomain(network.DomainDeposit, p.GenesisForkVersion, network.ZeroGenesisValidatorsRoot)
+	signingRoot := ssz.ComputeSigningRoot(msgRoot, domain)
+
+	sig, err := snr.Sign(signingRoot)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	var e Entry
+	e.Pubkey = pub
+	e.WithdrawalCredentials = wc
+	e.Amount = amount
+	e.Signature = sig
+	e.DepositMessageRoot = msgRoot
+	copy(e.ForkVersion[:], p.GenesisForkVersion[:])
+	e.NetworkName = p.Name
+	e.DepositCLIVersion = "2.7.0"
+	return e
+}
+
+// ---------------------------------------------------------------------------
+// ValidateForNetwork tests (M0.5-1)
+// ---------------------------------------------------------------------------
+
+func TestValidateForNetwork_NetworkMismatch(t *testing.T) {
+	pHoodi := hoodiParams()
+	pMain, err := network.Lookup(network.Mainnet)
+	if err != nil {
+		t.Fatalf("Lookup mainnet: %v", err)
+	}
+	e := validSignedEntryForParams(t, pHoodi)
+	if err := e.ValidateForNetwork(pMain, bls.DefaultVerifier()); !errors.Is(err, ErrNetworkMismatch) {
+		t.Errorf("ValidateForNetwork(hoodi entry, mainnet params) error = %v, want errors.Is(ErrNetworkMismatch)", err)
+	}
+}
+
+func TestValidateForNetwork_ForkVersionMismatch(t *testing.T) {
+	pHoodi := hoodiParams()
+	e := validSignedEntryForParams(t, pHoodi)
+	// Tamper the fork version bytes (any change triggers mismatch).
+	e.ForkVersion[0] ^= 0xff
+	if err := e.ValidateForNetwork(pHoodi, bls.DefaultVerifier()); !errors.Is(err, ErrForkVersionMismatch) {
+		t.Errorf("ValidateForNetwork(tampered fork_version) error = %v, want errors.Is(ErrForkVersionMismatch)", err)
+	}
+}
+
+func TestValidateForNetwork_BadBLSSig(t *testing.T) {
+	pHoodi := hoodiParams()
+	e := validSignedEntryForParams(t, pHoodi)
+	// Byte-flip in the signature field.
+	e.Signature[0] ^= 0x01
+	err := e.ValidateForNetwork(pHoodi, bls.DefaultVerifier())
+	if err == nil {
+		t.Fatal("ValidateForNetwork(flipped signature) = nil, want ErrBLSSignatureInvalid")
+	}
+	if !errors.Is(err, ErrBLSSignatureInvalid) {
+		t.Errorf("ValidateForNetwork(flipped signature) error = %v, want errors.Is(ErrBLSSignatureInvalid)", err)
+	}
+}
+
+func TestValidateForNetwork_HappyPath(t *testing.T) {
+	pHoodi := hoodiParams()
+	e := validSignedEntryForParams(t, pHoodi)
+	if err := e.ValidateForNetwork(pHoodi, bls.DefaultVerifier()); err != nil {
+		t.Errorf("ValidateForNetwork(well-formed hoodi entry vs hoodi params) unexpected error: %v", err)
 	}
 }
