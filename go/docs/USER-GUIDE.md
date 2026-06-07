@@ -742,8 +742,8 @@ cast decode-typed-tx "$RAW"
 | Symptom | Cause / fix |
 |---|---|
 | `--index N: out of bounds (file has M entries)` (exit 2) | Your deposit data JSON has fewer entries than the index you requested. |
-| `deposit entry validation: ...` (exit 2) | The deposit data JSON is malformed (zero pubkey, bad withdrawal credentials prefix, etc.). Regenerate with `eth-deposit-gen`. |
-| `value mismatch ...` (exit 2) | The entry's `amount` is not 32 ETH in Gwei. Only 32 ETH first deposits are supported in v0.1.0. |
+| `deposit entry validation: ...` (exit 2) | The deposit data JSON is malformed (from `internal/deposit.Entry.Validate` at main.go:249; e.g. zero pubkey, WC format/roots, amount==0 per json.go:144-201). tx.Validate DiD surfaces as 'build: invalid input: ...' (WrapInputErr main.go:282). Regenerate with `eth-deposit-gen`. |
+| `build: invalid input: deposit amount must be exactly MinDepositAmountGwei Gwei (32 ETH)` (ErrInvalidAmount via tx.Validate; exit 2) | The entry's `amount` != 32 ETH (tx/validation.go:24-25 check + builder.go:19 sentinel, wrapped in main.go:282 BuildUnsigned + WrapInputErr). Only 32 ETH first deposits supported. |
 
 ### `eth-deposit-tx sign` errors
 
@@ -761,8 +761,8 @@ cast decode-typed-tx "$RAW"
 
 | Symptom | Cause / fix |
 |---|---|
-| `RPC chain ID does not match configured network` (exit 5) | The RPC endpoint reports a different chain ID than the signed tx. You're pointing at the wrong network. Do NOT use `--yes` to bypass. |
-| `dial RPC: ...` (exit 5) | Bad `--rpc-url` or network connectivity issue. |
+| `signed tx chain ID does not match RPC chain ID; refusing to broadcast: signed tx has chain ID ... but RPC reports ...` (ErrBroadcastChainIDMismatch) (exit 5) | The RPC endpoint reports a different chain ID than the (decoded RLP) signed tx (full from send.go:247 %w after guard). You're pointing at the wrong network. Do NOT use `--yes` to bypass. (emitted by send) |
+| `failed to dial RPC endpoint` (ErrRPCDial) (exit 5) | Bad `--rpc-url` or network connectivity issue (exact from tx/errors.go:30 + §15). |
 | `eth_sendRawTransaction: nonce too low` (exit 5) | The sender's actual nonce is higher than what you signed. Rebuild with a correct `--nonce`, re-sign, retry. |
 | `eth_sendRawTransaction: insufficient funds` (exit 5) | The sender address doesn't have 32 ETH + gas. Fund it. |
 | `eth_sendRawTransaction: known transaction` (exit 5) | This exact tx was already broadcast. Check the explorer for the receipt. |
@@ -772,3 +772,5 @@ cast decode-typed-tx "$RAW"
 - If `make e2e-mock` passes but real testnet broadcast fails, the gap is usually nonce or insufficient funds.
 - For Ledger error-string mismatches (the heuristics aren't real-hardware-validated in v0.1.0), file an issue with the exact error text.
 - For everything else, run with `--verbose` and `--json-logs` (eth-deposit-gen) to get structured diagnostics.
+
+**Note on symptoms:** Every troubleshooting row's symptom name (exact sentinels like ErrBroadcastChainIDMismatch/ErrRPCDial, ucli.Exit strings like "deposit entry validation: ..."/"--index ...", wrappers like "build: invalid input: ...", or node messages under listed Err*) appears in (or maps directly to entries in) architecture §15 exit-code table and is covered by M1.5-9 TestExitCodeContract (source of truth). See arch §15:1736 (ucli/ErrInvalidInput), 1738-1739 (deposit/tx.Err lists), 1744 (broadcast), exit.go, and contract tests.
