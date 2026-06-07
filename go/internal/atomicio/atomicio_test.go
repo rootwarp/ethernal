@@ -253,3 +253,51 @@ func TestWriteFileWithSuffix_HighResUnique(t *testing.T) {
 		t.Errorf("got %d unique paths, want 100", len(seen))
 	}
 }
+
+// TestWriteFileWithSuffix_ParallelStress_1024 is the M0.3-3 acceptance for FR-P0-B3 (GO-011).
+// Spawns 1024 goroutines each calling WriteFileWithSuffix with shared dir/prefix/ext + time.Now()
+// and *varied* data so the sha256[:4] suffix component provides disambiguation on any
+// RFC3339Nano timestamp collisions (the real load for --parallel deposit gen or tx artifact writes).
+// Asserts exactly 1024 files created (via ReadDir), zero ErrClobber (or other errs), all contents match,
+// no name collisions (via sync.Map). Exercises the full atomic path (Lstat+CreateTemp+Write+Sync+Close+Rename+dirfsync)
+// concurrently. Bounded concurrency (1024), test-only (t.TempDir, no secrets, no prod paths).
+//
+// Gate: skipped under testing.Short() (for fast CI lanes); runs unconditionally under `make test`
+// (and -race lanes via direct go test -race). See Makefile test target + M0.3-3 ACs.
+func TestWriteFileWithSuffix_ParallelStress_1024(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long-running 1024-parallel stress under -short (runs in make test and -race)")
+	}
+
+	dir := t.TempDir()
+	var wg sync.WaitGroup
+	paths := sync.Map{}
+	const N = 1024
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		i := i
+		go func() {
+			defer wg.Done()
+			// Vary the data payload (per research/06 stress ex + "vary data" note and M0.3-3 impl notes).
+			// Different data => different sha256 => different short suffix => unique names even under same-ns timestamps.
+			data := []byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)}
+			p, _, err := WriteFileWithSuffix(dir, "deposit_data", "json", data, 0o600, time.Now())
+			if err != nil {
+				t.Errorf("write %d: %v", i, err)
+				return
+			}
+			if _, dup := paths.LoadOrStore(p, true); dup {
+				t.Errorf("collision: %s", p)
+			}
+			got, _ := os.ReadFile(p)
+			if !bytes.Equal(got, data) {
+				t.Errorf("mismatch %d", i)
+			}
+		}()
+	}
+	wg.Wait()
+	files, _ := os.ReadDir(dir)
+	if len(files) != N {
+		t.Fatalf("expected %d files, got %d", N, len(files))
+	}
+}
