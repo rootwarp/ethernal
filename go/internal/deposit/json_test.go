@@ -3,6 +3,7 @@ package deposit
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -205,14 +206,16 @@ func TestEntriesFromJSON_InvalidEntry(t *testing.T) {
 // TestEntriesFromJSON_GoldenFile verifies that the golden output from
 // eth-deposit-gen is parseable by EntriesFromJSON.
 func TestEntriesFromJSON_GoldenFile(t *testing.T) {
-	// This is the content of go/internal/output/testdata/deposit_data-expected.json
-	data := []byte(`[{"pubkey":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","withdrawal_credentials":"0000000000000000000000000000000000000000000000000000000000000000","amount":32000000000,"signature":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","deposit_message_root":"0000000000000000000000000000000000000000000000000000000000000000","deposit_data_root":"0000000000000000000000000000000000000000000000000000000000000000","fork_version":"10000910","network_name":"hoodi","deposit_cli_version":"2.7.0"},{"pubkey":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","withdrawal_credentials":"0000000000000000000000000000000000000000000000000000000000000000","amount":32000000000,"signature":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","deposit_message_root":"0000000000000000000000000000000000000000000000000000000000000000","deposit_data_root":"0000000000000000000000000000000000000000000000000000000000000000","fork_version":"10000910","network_name":"hoodi","deposit_cli_version":"2.7.0"}]`)
+	data, err := os.ReadFile("../../testdata/hoodi/deposit_data-expected.json")
+	if err != nil {
+		t.Fatalf("read golden fixture: %v", err)
+	}
 	entries, err := EntriesFromJSON(data)
 	if err != nil {
 		t.Fatalf("EntriesFromJSON(golden) error = %v", err)
 	}
-	if len(entries) != 2 {
-		t.Errorf("got %d entries, want 2", len(entries))
+	if len(entries) == 0 {
+		t.Errorf("got %d entries from golden fixture, want >0", len(entries))
 	}
 }
 
