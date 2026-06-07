@@ -11,7 +11,7 @@ require (
 	github.com/kisielk/errcheck v1.20.0
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.4.1
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/term v0.43.0
 	golang.org/x/vuln v1.3.0
 	honnef.co/go/tools v0.7.0
@@ -54,9 +54,9 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260421165255-392afab6f40e // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
