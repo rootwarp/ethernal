@@ -198,9 +198,9 @@ func emitProgress(d deps, cfg cli.Config, done, total int) {
 		return
 	}
 	if isTTY(d.progressOut) {
-		fmt.Fprintf(d.progressOut, "\rsigning: %d/%d", done, total)
+		_, _ = fmt.Fprintf(d.progressOut, "\rsigning: %d/%d", done, total) // ignore: best-effort progress to stderr; terminal write failure is non-fatal
 		if done == total {
-			fmt.Fprintln(d.progressOut) // newline so the summary line starts on a fresh line
+			_, _ = fmt.Fprintln(d.progressOut) // ignore: best-effort newline to stderr
 		}
 		return
 	}
@@ -445,7 +445,7 @@ func printSummary(w io.Writer, path, sha256hex string, n int, net network.Networ
 	if display == "" {
 		display = "<stdout>"
 	}
-	fmt.Fprintf(w, "wrote %s (sha256=%s, n=%d, network=%s)\n", display, sha256hex, n, net)
+	_, _ = fmt.Fprintf(w, "wrote %s (sha256=%s, n=%d, network=%s)\n", display, sha256hex, n, net) // ignore: best-effort summary write; failure does not affect success path
 }
 
 // exitCodeFor maps errors to exit codes per the PRD:
@@ -502,8 +502,8 @@ func main() {
 	app := cli.NewApp(run)
 	app.Version = version
 	ucli.VersionPrinter = func(c *ucli.Context) {
-		fmt.Fprintf(c.App.Writer, "%s version %s (commit=%s, built=%s)\n",
-			c.App.Name, c.App.Version, commit, date)
+		_, _ = fmt.Fprintf(c.App.Writer, "%s version %s (commit=%s, built=%s)\n",
+			c.App.Name, c.App.Version, commit, date) // ignore: best-effort version banner to stdout
 	}
 	if err := app.RunContext(ctx, os.Args); err != nil {
 		os.Exit(exitCodeFor(err))

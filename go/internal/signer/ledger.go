@@ -167,7 +167,7 @@ func (s *LedgerSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx)
 	}
 	unsignedTx := types.NewTx(dynTx)
 
-	fmt.Fprintf(s.confirmationPrompt, "Please confirm the transaction on your Ledger device...\n")
+	_, _ = fmt.Fprintf(s.confirmationPrompt, "Please confirm the transaction on your Ledger device...\n") // ignore: best-effort prompt to the (test-injectable) confirmation writer
 
 	type signResult struct {
 		signed *types.Transaction

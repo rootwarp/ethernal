@@ -899,7 +899,7 @@ func makeMultiPubkeyDeps(summaryBuf *bytes.Buffer, pks [][48]byte) deps {
 	loaderFunc := func(_ context.Context, path string, _ keystore.PassphraseSource) (keystore.Key, error) {
 		// Parse the index from the path "/fake/<i>.json".
 		var idx int
-		fmt.Sscanf(path, "/fake/%d.json", &idx)
+		_, _ = fmt.Sscanf(path, "/fake/%d.json", &idx) // ignore: synthetic test path always matches format (n=1, err=nil)
 		pk := pks[idx]
 		secret := make([]byte, 32)
 		secret[0] = pk[0] // encode which key this is
@@ -1040,7 +1040,7 @@ func TestRunWithDeps_ParallelWorkerError(t *testing.T) {
 			return keystore.Key{}, loaderErr
 		}
 		var idx int
-		fmt.Sscanf(path, "/fake/%d.json", &idx)
+		_, _ = fmt.Sscanf(path, "/fake/%d.json", &idx) // ignore: synthetic test path always matches format (n=1, err=nil)
 		pk := pks[idx]
 		secret := make([]byte, 32)
 		secret[0] = pk[0]
@@ -1260,7 +1260,7 @@ func makeNPubkeyDeps(n int, progressOut io.Writer, logBuf *bytes.Buffer) (deps, 
 
 	loaderFn := func(_ context.Context, path string, _ keystore.PassphraseSource) (keystore.Key, error) {
 		var i int
-		fmt.Sscanf(path, "/fake/%d.json", &i)
+		_, _ = fmt.Sscanf(path, "/fake/%d.json", &i) // ignore: synthetic test path always matches format (n=1, err=nil)
 		pk := pks[i]
 		secret := make([]byte, 32)
 		secret[0] = pk[0]
@@ -1472,7 +1472,7 @@ func TestNoSlogImportInSigningPackages(t *testing.T) {
 						path, lineNum, line)
 				}
 			}
-			f.Close() //nolint:errcheck
+			_ = f.Close() // ignore: close err on testdata file after scan (non-critical for lint check)
 			if err := sc.Err(); err != nil {
 				t.Fatalf("scan %q: %v", path, err)
 			}

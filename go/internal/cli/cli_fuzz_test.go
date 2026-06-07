@@ -26,6 +26,6 @@ func FuzzParsePubkeys(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// parsePubkeys must never panic regardless of input.
 		// Errors are acceptable; panics are not.
-		parsePubkeys(string(data)) //nolint:errcheck
+		_, _ = parsePubkeys(string(data)) // ignore: fuzz only cares about panics; returned errors (or nils) are expected/ignored
 	})
 }

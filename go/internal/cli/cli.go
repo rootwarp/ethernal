@@ -342,8 +342,8 @@ func validateOutputDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("directory %q is not writable: %w", dir, err)
 	}
-	f.Close()           //nolint:errcheck
-	os.Remove(f.Name()) //nolint:errcheck
+	_ = f.Close()           // ignore: best-effort close on temp probe file (writable dir already proven by create)
+	_ = os.Remove(f.Name()) // ignore: best-effort remove on temp probe file (dir writability already proven)
 	return nil
 }
 
@@ -366,9 +366,9 @@ func printBanner(w io.Writer, cfg Config) {
 	}
 	first := cfg.Pubkeys[0]
 	last := cfg.Pubkeys[len(cfg.Pubkeys)-1]
-	fmt.Fprintf(w, "eth-deposit-gen: network=%s first_pubkey=0x%x last_pubkey=0x%x count=%d\n",
+	_, _ = fmt.Fprintf(w, "eth-deposit-gen: network=%s first_pubkey=0x%x last_pubkey=0x%x count=%d\n",
 		networkDisplay(cfg.Network),
 		first[:],
 		last[:],
-		len(cfg.Pubkeys))
+		len(cfg.Pubkeys)) // ignore: best-effort banner write to ErrWriter
 }

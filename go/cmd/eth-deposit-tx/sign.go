@@ -198,7 +198,7 @@ func signUnsignedTx(ctx context.Context, cfg *SignConfig, errWriter io.Writer, u
 
 	// 2. Prompt if device interaction is needed.
 	if s.RequiresUserInteraction() && errWriter != nil {
-		fmt.Fprintf(errWriter, "Waiting for confirmation on Ledger device...\n")
+		_, _ = fmt.Fprintf(errWriter, "Waiting for confirmation on Ledger device...\n") // ignore: best-effort prompt to errWriter
 	}
 
 	// 3. Sign.

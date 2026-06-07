@@ -254,7 +254,7 @@ func TestNewEnvSource_ReadsEnvVar(t *testing.T) {
 func TestNewEnvSource_EmptyVarReturnsTypedError(t *testing.T) {
 	varName := "TEST_KEYSTORE_PW_MISSING_" + t.Name()
 	// Ensure it's not set.
-	os.Unsetenv(varName)
+	_ = os.Unsetenv(varName) // ignore: Unsetenv error irrelevant; we only need absence for this test case (env may be read-only in some envs)
 
 	src := keystore.NewEnvSource(varName)
 	_, err := src.Read()

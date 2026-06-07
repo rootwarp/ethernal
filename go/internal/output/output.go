@@ -136,9 +136,9 @@ func (w *fsWriter) Write(_ context.Context, dir string, entries []deposit.Entry,
 	defer func() {
 		if !committed {
 			if !fileClosed {
-				f.Close() //nolint:errcheck
+				_ = f.Close() // ignore: best-effort close of tmp in failure cleanup (committed=false path); write/sync/close errors already returned upstream
 			}
-			os.Remove(tmpPath) //nolint:errcheck
+			_ = os.Remove(tmpPath) // ignore: best-effort remove of tmp in failure cleanup (committed=false path)
 		}
 	}()
 

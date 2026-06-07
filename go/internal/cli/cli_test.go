@@ -317,7 +317,7 @@ func TestReadOnlyOutputDir(t *testing.T) {
 	}
 	// Register cleanup to restore perms so t.TempDir() cleanup can remove it
 	t.Cleanup(func() {
-		os.Chmod(roDir, 0o755) //nolint:errcheck
+		_ = os.Chmod(roDir, 0o755) // ignore: test cleanup chmod; failure does not affect test validity
 	})
 	if err := os.Chmod(roDir, 0o555); err != nil {
 		t.Fatalf("Chmod: %v", err)
@@ -532,7 +532,7 @@ func TestOutputDirIsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
-	f.Close()
+	_ = f.Close() // ignore: close error on temp file used only for path in test setup
 	filePath := f.Name()
 
 	args := []string{
@@ -1123,7 +1123,7 @@ func TestKeystoreDirValidation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateTemp: %v", err)
 		}
-		f.Close()
+		_ = f.Close() // ignore: close error on temp file used only for path in test setup
 		args := []string{
 			"--keystore-dir", f.Name(),
 			"--pubkeys", "0x" + validPubkey,

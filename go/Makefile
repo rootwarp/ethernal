@@ -26,11 +26,12 @@ coverage:
 	go tool cover -func=coverage.out | grep -E "(total|100\.0%)" | sort
 	@echo "\nFull HTML report: go tool cover -html=coverage.out"
 
-## lint: run gofmt gate + go vet + staticcheck
+## lint: run gofmt gate + go vet + staticcheck + errcheck
 lint:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && false)
 	go vet ./...
 	staticcheck ./...
+	go run github.com/kisielk/errcheck ./...
 
 ## tidy: sync go.mod and go.sum
 tidy:

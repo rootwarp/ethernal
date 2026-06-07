@@ -59,7 +59,7 @@ func TestParseUnsignedTx_InvalidData(t *testing.T) {
 
 func TestLocalSigner_Sign_InvalidValue(t *testing.T) {
 	s := newLocalSigner(t)
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	unsigned := localUnsigned()
 	unsigned.Value = "0xgg"
@@ -71,7 +71,7 @@ func TestLocalSigner_Sign_InvalidValue(t *testing.T) {
 
 func TestLocalSigner_Sign_InvalidData(t *testing.T) {
 	s := newLocalSigner(t)
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	unsigned := localUnsigned()
 	unsigned.Data = "0xnotvalidhex"
@@ -83,7 +83,7 @@ func TestLocalSigner_Sign_InvalidData(t *testing.T) {
 
 func TestLocalSigner_Sign_PreCancelledContext(t *testing.T) {
 	s := newLocalSigner(t)
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

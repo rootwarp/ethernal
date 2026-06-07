@@ -46,7 +46,7 @@ func TestNewLocalSignerFromHex_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	signed, err := s.Sign(context.Background(), holeskyUnsignedTx())
 	if err != nil {
@@ -120,7 +120,7 @@ func TestNewLocalSignerFromEnv_Set(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromEnv: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	_, err = s.Sign(context.Background(), holeskyUnsignedTx())
 	if err != nil {
@@ -146,7 +146,7 @@ func TestLocalSigner_Sign_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	unsigned := holeskyUnsignedTx()
 	signed, err := s.Sign(context.Background(), unsigned)
@@ -203,7 +203,7 @@ func TestLocalSigner_Sign_SenderRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	signed, err := s.Sign(context.Background(), holeskyUnsignedTx())
 	if err != nil {
@@ -221,7 +221,7 @@ func TestLocalSigner_Sign_ChainID17000(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	unsigned := holeskyUnsignedTx()
 	signed, err := s.Sign(context.Background(), unsigned)
@@ -239,7 +239,7 @@ func TestLocalSigner_Sign_Cancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
@@ -288,7 +288,7 @@ func TestLocalSigner_Name(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	if s.Name() != "local" {
 		t.Errorf("Name() = %q, want %q", s.Name(), "local")
 	}
@@ -300,7 +300,7 @@ func TestLocalSigner_RequiresUserInteraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	if s.RequiresUserInteraction() {
 		t.Error("RequiresUserInteraction() = true, want false")
 	}
@@ -314,7 +314,7 @@ func TestLocalSigner_Sign_ChainID0_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	unsigned := holeskyUnsignedTx()
 	unsigned.ChainID = 0
 	_, err = s.Sign(context.Background(), unsigned)
@@ -331,7 +331,7 @@ func TestLocalSigner_Sign_EmptyMaxFeePerGas_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	unsigned := holeskyUnsignedTx()
 	unsigned.MaxFeePerGas = ""
 	_, err = s.Sign(context.Background(), unsigned)
@@ -346,7 +346,7 @@ func TestLocalSigner_Sign_EmptyMaxPriorityFeePerGas_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	unsigned := holeskyUnsignedTx()
 	unsigned.MaxPriorityFeePerGas = ""
 	_, err = s.Sign(context.Background(), unsigned)
@@ -361,7 +361,7 @@ func TestLocalSigner_Sign_InvalidMaxFeeHex_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	unsigned := holeskyUnsignedTx()
 	unsigned.MaxFeePerGas = "0xgg"
 	_, err = s.Sign(context.Background(), unsigned)
@@ -376,7 +376,7 @@ func TestLocalSigner_Sign_InvalidMaxPriorityFeeHex_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSignerFromHex: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	unsigned := holeskyUnsignedTx()
 	unsigned.MaxPriorityFeePerGas = "0xgg"
 	_, err = s.Sign(context.Background(), unsigned)
@@ -394,7 +394,7 @@ func TestLocalSigner_Sign_VariousChainIDs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewLocalSignerFromHex: %v", err)
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 			unsigned := holeskyUnsignedTx()
 			unsigned.ChainID = chainID

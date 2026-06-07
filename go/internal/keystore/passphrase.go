@@ -47,13 +47,13 @@ func (t *termPromptSource) Read() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open tty: %w", err)
 	}
-	defer tty.Close()
+	defer func() { _ = tty.Close() }() // ignore: best-effort tty close after read; does not affect returned passphrase or error
 
-	fmt.Fprint(t.w, "Keystore passphrase: ")
+	_, _ = fmt.Fprint(t.w, "Keystore passphrase: ") // ignore: best-effort prompt write (to stderr typically)
 
 	pw, err := term.ReadPassword(int(tty.Fd()))
 	// Print a newline after the (suppressed) input.
-	fmt.Fprintln(t.w)
+	_, _ = fmt.Fprintln(t.w) // ignore: best-effort newline after prompt
 	if err != nil {
 		return nil, fmt.Errorf("read passphrase: %w", err)
 	}

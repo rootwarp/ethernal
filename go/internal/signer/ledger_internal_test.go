@@ -279,7 +279,7 @@ func TestLedgerSigner_Sign_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	result, err := s.Sign(context.Background(), unsigned)
@@ -322,7 +322,7 @@ func TestLedgerSigner_Sign_UserRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -343,7 +343,7 @@ func TestLedgerSigner_Sign_UserRejected_APDU6985(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -364,7 +364,7 @@ func TestLedgerSigner_Sign_ChainIDMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -385,7 +385,7 @@ func TestLedgerSigner_Sign_ChainIDMismatch_APDU6a80(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -406,7 +406,7 @@ func TestLedgerSigner_Sign_GenericError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -426,7 +426,7 @@ func TestLedgerSigner_Sign_ChainID0_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	unsigned := internaltxUnsigned()
@@ -445,7 +445,7 @@ func TestLedgerSigner_Sign_EmptyMaxFeePerGas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	unsigned := internaltxUnsigned()
@@ -464,7 +464,7 @@ func TestLedgerSigner_Sign_EmptyMaxPriorityFeePerGas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	unsigned := internaltxUnsigned()
@@ -483,7 +483,7 @@ func TestLedgerSigner_Sign_InvalidMaxFeeHex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	unsigned := internaltxUnsigned()
@@ -502,7 +502,7 @@ func TestLedgerSigner_Sign_PreCancelledContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -534,7 +534,7 @@ func TestLedgerSigner_Sign_ContextCancelledMidSign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -584,7 +584,7 @@ func TestLedgerSigner_Sign_UserRejected_Denied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -611,7 +611,7 @@ func TestLedgerSigner_Sign_AmbiguousError_ChainCancelledByUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -635,7 +635,7 @@ func TestLedgerSigner_Sign_ChainIDMismatch_APDU6a81(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -660,7 +660,7 @@ func TestLedgerSigner_Sign_UnknownAPDUCode_NotSentinel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	_, err = s.Sign(context.Background(), internaltxUnsigned())
@@ -680,7 +680,7 @@ func TestLedgerSigner_Sign_InvalidMaxPrioHex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	unsigned := internaltxUnsigned()
@@ -699,7 +699,7 @@ func TestLedgerSigner_Sign_InvalidData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 	s.setConfirmationPrompt(&bytes.Buffer{})
 
 	unsigned := internaltxUnsigned()
@@ -752,7 +752,7 @@ func TestLedgerSigner_Sign_ConfirmationPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLedgerSigner: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // ignore: signer close err (if any) irrelevant to test assertions; test teardown best-effort
 
 	var buf bytes.Buffer
 	s.setConfirmationPrompt(&buf)

@@ -196,45 +196,45 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 	valueBigWei, _ := hexToBigInt(signed.Unsigned.Value)
 	maxFeeBigWei, _ := hexToBigInt(signed.Unsigned.MaxFeePerGas)
 
-	fmt.Fprintf(c.App.ErrWriter, "\n")
-	fmt.Fprintf(c.App.ErrWriter, "> You are about to BROADCAST a %s deposit transaction.\n", formatETH(valueBigWei))
-	fmt.Fprintf(c.App.ErrWriter, ">   Network:        %s (chain ID %d)\n", netParams.Name, netParams.ChainID)
-	fmt.Fprintf(c.App.ErrWriter, ">   From:           %s\n", signed.From)
-	fmt.Fprintf(c.App.ErrWriter, ">   To (deposit):   %s\n", signed.Unsigned.To)
-	fmt.Fprintf(c.App.ErrWriter, ">   Value:          %s\n", formatETH(valueBigWei))
-	fmt.Fprintf(c.App.ErrWriter, ">   Nonce:          %d\n", signed.Unsigned.Nonce)
-	fmt.Fprintf(c.App.ErrWriter, ">   MaxFeePerGas:   %s\n", formatGwei(maxFeeBigWei))
-	fmt.Fprintf(c.App.ErrWriter, ">   Tx hash:        %s\n", signed.Hash)
-	fmt.Fprintf(c.App.ErrWriter, ">\n")
+	_, _ = fmt.Fprintf(c.App.ErrWriter, "\n")                                                                               // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, "> You are about to BROADCAST a %s deposit transaction.\n", formatETH(valueBigWei)) // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Network:        %s (chain ID %d)\n", netParams.Name, netParams.ChainID)        // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   From:           %s\n", signed.From)                                            // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   To (deposit):   %s\n", signed.Unsigned.To)                                     // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Value:          %s\n", formatETH(valueBigWei))                                 // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Nonce:          %d\n", signed.Unsigned.Nonce)                                  // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   MaxFeePerGas:   %s\n", formatGwei(maxFeeBigWei))                               // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Tx hash:        %s\n", signed.Hash)                                            // ignore: best-effort to ErrWriter
+	_, _ = fmt.Fprintf(c.App.ErrWriter, ">\n")                                                                              // ignore: best-effort to ErrWriter
 
 	// 6. Confirmation.
 	if !cfg.Yes {
-		fmt.Fprintf(c.App.ErrWriter, "> Type the network name to confirm: ")
+		_, _ = fmt.Fprintf(c.App.ErrWriter, "> Type the network name to confirm: ") // ignore: best-effort to ErrWriter
 		reader := bufio.NewReader(c.App.Reader)
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			// EOF or any read error → abort
-			fmt.Fprintf(c.App.ErrWriter, "\nAborted.\n")
+			_, _ = fmt.Fprintf(c.App.ErrWriter, "\nAborted.\n") // ignore: best-effort to ErrWriter
 			return fmt.Errorf("%w: %v", ErrUserAborted, err)
 		}
 		input = strings.TrimSpace(input)
 		if !strings.EqualFold(input, string(netParams.Name)) {
-			fmt.Fprintf(c.App.ErrWriter, "> Confirmation failed (got %q, want %q). Aborted.\n", input, netParams.Name)
+			_, _ = fmt.Fprintf(c.App.ErrWriter, "> Confirmation failed (got %q, want %q). Aborted.\n", input, netParams.Name) // ignore: best-effort to ErrWriter
 			return ErrUserAborted
 		}
 	}
 
 	// 7. Broadcast.
-	fmt.Fprintf(c.App.ErrWriter, "> Broadcasting...\n")
+	_, _ = fmt.Fprintf(c.App.ErrWriter, "> Broadcasting...\n") // ignore: best-effort to ErrWriter
 	txHash, err := broadcaster.SendRawTransaction(c.Context, signed.RawRLP)
 	if err != nil {
 		return err
 	}
 
 	// 8. Print result.
-	fmt.Fprintf(c.App.Writer, "Tx hash: %s\n", txHash)
+	_, _ = fmt.Fprintf(c.App.Writer, "Tx hash: %s\n", txHash) // ignore: best-effort to Writer
 	if netParams.ExplorerURL != "" {
-		fmt.Fprintf(c.App.Writer, "Explorer: %s/tx/%s\n", netParams.ExplorerURL, txHash)
+		_, _ = fmt.Fprintf(c.App.Writer, "Explorer: %s/tx/%s\n", netParams.ExplorerURL, txHash) // ignore: best-effort to Writer
 	}
 	slog.Info("broadcast succeeded", "hash", txHash, "network", netParams.Name)
 
@@ -249,8 +249,8 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 			if rec.Status == 0 {
 				statusStr = "REVERTED"
 			}
-			fmt.Fprintf(c.App.Writer, "Receipt: status=%s block=%d gasUsed=%d\n",
-				statusStr, rec.BlockNumber, rec.GasUsed)
+			_, _ = fmt.Fprintf(c.App.Writer, "Receipt: status=%s block=%d gasUsed=%d\n",
+				statusStr, rec.BlockNumber, rec.GasUsed) // ignore: best-effort to Writer
 
 			if cfg.ReceiptOutputFile != "" {
 				recJSON, err := json.MarshalIndent(rec, "", "  ")
