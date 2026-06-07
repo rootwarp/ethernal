@@ -134,7 +134,28 @@ func EntriesFromJSON(data []byte) ([]Entry, error) {
 //   - DepositDataRoot must not be all-zero
 //   - Amount must be > 0
 //   - NetworkName must be a recognised network
+//   - WithdrawalCredentials: 0x00 all-zero body rejected (ErrZeroWithdrawal00); 0x01/0x02 bytes 1-11 must be zero (ErrInvalidWCFormat); other prefixes invalid
 func (e Entry) Validate() error {
+	// WC shape checks (DiD for hand-crafted JSON that bypasses the gen flag).
+	// (a) 0x00 + all-zero body → ErrZeroWithdrawal00
+	// (b) 0x01/0x02 with non-zero in 1..11 → ErrInvalidWCFormat
+	// (c) any other prefix → ErrInvalidWCFormat
+	wc := e.WithdrawalCredentials
+	switch wc[0] {
+	case 0x00:
+		if wc == ([32]byte{}) {
+			return ErrZeroWithdrawal00
+		}
+	case 0x01, 0x02:
+		for i := 1; i <= 11; i++ {
+			if wc[i] != 0x00 {
+				return fmt.Errorf("%w: prefix 0x%02x requires bytes 1–11 to be zero", ErrInvalidWCFormat, wc[0])
+			}
+		}
+	default:
+		return fmt.Errorf("%w: got 0x%02x", ErrInvalidWCFormat, wc[0])
+	}
+
 	if e.Pubkey == ([48]byte{}) {
 		return fmt.Errorf("deposit: validate: pubkey is all-zero")
 	}

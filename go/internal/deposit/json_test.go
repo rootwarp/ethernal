@@ -2,6 +2,7 @@ package deposit
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -226,6 +227,7 @@ func TestValidate_Valid(t *testing.T) {
 	e.DepositDataRoot[0] = 0xEF
 	e.Amount = 32_000_000_000
 	e.NetworkName = network.Hoodi
+	e.WithdrawalCredentials[0] = 0x01 // canonical shape (0x01 + 11x00 + addr)
 
 	if err := e.Validate(); err != nil {
 		t.Errorf("Validate() on valid entry: unexpected error: %v", err)
@@ -242,6 +244,7 @@ func TestValidate_Invalid(t *testing.T) {
 		e.DepositDataRoot[0] = 0xEF
 		e.Amount = 32_000_000_000
 		e.NetworkName = network.Hoodi
+		e.WithdrawalCredentials[0] = 0x01 // canonical shape passes new WC checks
 		return e
 	}
 
@@ -290,5 +293,100 @@ func TestValidate_Invalid(t *testing.T) {
 				t.Errorf("Validate() error = %q: does not mention %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestEntry_Validate_WC_Reject is the table-driven coverage for the DiD WC
+// shape checks added to Entry.Validate. Each case must return an error
+// satisfying errors.Is(err, the expected sentinel).
+func TestEntry_Validate_WC_Reject(t *testing.T) {
+	makeBase := func() Entry {
+		var e Entry
+		e.Pubkey[0] = 0xAB
+		e.Signature[0] = 0xCD
+		e.DepositDataRoot[0] = 0xEF
+		e.Amount = 32_000_000_000
+		e.NetworkName = network.Hoodi
+		e.WithdrawalCredentials[0] = 0x01 // base good; mutFn will override for reject cases
+		return e
+	}
+
+	tests := []struct {
+		name    string
+		mutFn   func(*Entry)
+		wantErr error
+	}{
+		{
+			name:    "zero_0x00_allzero",
+			mutFn:   func(e *Entry) { e.WithdrawalCredentials = [32]byte{} },
+			wantErr: ErrZeroWithdrawal00,
+		},
+		{
+			name: "0x01_nonzero_byte1",
+			mutFn: func(e *Entry) {
+				e.WithdrawalCredentials[0] = 0x01
+				e.WithdrawalCredentials[1] = 0x01 // non-zero in 1..11
+			},
+			wantErr: ErrInvalidWCFormat,
+		},
+		{
+			name: "0x01_nonzero_byte11",
+			mutFn: func(e *Entry) {
+				e.WithdrawalCredentials[0] = 0x01
+				e.WithdrawalCredentials[11] = 0x01 // non-zero in 1..11
+			},
+			wantErr: ErrInvalidWCFormat,
+		},
+		{
+			name: "0x02_nonzero_byte5",
+			mutFn: func(e *Entry) {
+				e.WithdrawalCredentials[0] = 0x02
+				e.WithdrawalCredentials[5] = 0x02 // non-zero in 1..11
+			},
+			wantErr: ErrInvalidWCFormat,
+		},
+		{
+			name: "bad_prefix_0xff",
+			mutFn: func(e *Entry) {
+				e.WithdrawalCredentials[0] = 0xff
+			},
+			wantErr: ErrInvalidWCFormat,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			e := makeBase()
+			tc.mutFn(&e)
+			err := e.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error wrapping %v", tc.wantErr)
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("Validate() error = %v: not errors.Is(%v)", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestEntry_Validate_WC_Accept confirms that the canonical 0x01 layout
+// (0x01 || 0x00*11 || 20-byte addr) passes the WC shape checks (when the
+// rest of the Entry also satisfies the other Validate rules).
+func TestEntry_Validate_WC_Accept(t *testing.T) {
+	var e Entry
+	e.Pubkey[0] = 0xAB
+	e.Signature[0] = 0xCD
+	e.DepositDataRoot[0] = 0xEF
+	e.Amount = 32_000_000_000
+	e.NetworkName = network.Hoodi
+	// canonical 0x01: 0x01 + 11 zero bytes + 20-byte address (non-zero tail is fine)
+	e.WithdrawalCredentials[0] = 0x01
+	// bytes 1-11 stay zero (default)
+	e.WithdrawalCredentials[12] = 0x01 // start of "addr" part
+	e.WithdrawalCredentials[31] = 0x02 // some non-zero in addr part
+
+	if err := e.Validate(); err != nil {
+		t.Errorf("Validate() on canonical 0x01 WC entry: unexpected error: %v", err)
 	}
 }
