@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -114,5 +118,136 @@ func TestBlockBaseFee_HappyPath(t *testing.T) {
 	}
 	if got == nil || got.Cmp(want) != 0 {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestReceipt_NotFound_RetriesUntilDeadline (mock): mock returns
+// ethereum.NotFound 3× then success → success returned. (M1.3-4 AC)
+func TestReceipt_NotFound_RetriesUntilDeadline(t *testing.T) {
+	calls := 0
+	fetch := func(ctx context.Context, h common.Hash) (*types.Receipt, error) {
+		calls++
+		if calls < 4 {
+			return nil, ethereum.NotFound
+		}
+		return &types.Receipt{
+			TxHash:      common.HexToHash("0x1234"),
+			Status:      1,
+			GasUsed:     12345,
+			BlockHash:   common.HexToHash("0xabc"),
+			BlockNumber: big.NewInt(99),
+		}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rec, err := transactionReceiptWithRetry(ctx, common.HexToHash("0x1234"), fetch)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if rec == nil || rec.BlockNumber != 99 {
+		t.Errorf("got %+v, want blockNumber=99", rec)
+	}
+	if calls != 4 {
+		t.Errorf("calls = %d, want 4 (3×NotFound + 1 success)", calls)
+	}
+}
+
+// TestReceipt_NotFound_DeadlineExceeded (mock): NotFound until dl exceeded
+// yields ErrReceiptTimeout. (M1.3-4 AC)
+func TestReceipt_NotFound_DeadlineExceeded(t *testing.T) {
+	calls := 0
+	fetch := func(ctx context.Context, h common.Hash) (*types.Receipt, error) {
+		calls++
+		return nil, ethereum.NotFound
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	// ensure we hit the deadline (via ctx.Err after first NotFound)
+	time.Sleep(100 * time.Millisecond)
+	rec, err := transactionReceiptWithRetry(ctx, common.HexToHash("0xdead"), fetch)
+	if rec != nil {
+		t.Errorf("expected nil receipt, got %+v", rec)
+	}
+	if !errors.Is(err, ErrReceiptTimeout) {
+		t.Errorf("expected errors.Is(ErrReceiptTimeout), got: %v", err)
+	}
+}
+
+// TestReceipt_TransientError_Retries (mock): transient net err twice then
+// success → success. (M1.3-4 AC)
+func TestReceipt_TransientError_Retries(t *testing.T) {
+	calls := 0
+	fetch := func(ctx context.Context, h common.Hash) (*types.Receipt, error) {
+		calls++
+		if calls < 3 {
+			return nil, &net.DNSError{IsTimeout: true}
+		}
+		return &types.Receipt{
+			TxHash:      common.HexToHash("0x1"),
+			Status:      1,
+			GasUsed:     21000,
+			BlockHash:   common.HexToHash("0xb"),
+			BlockNumber: big.NewInt(42),
+		}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rec, err := transactionReceiptWithRetry(ctx, common.HexToHash("0x1"), fetch)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if rec == nil || rec.BlockNumber != 42 {
+		t.Errorf("got %+v, want blockNumber=42", rec)
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3 (2 transient + 1 success)", calls)
+	}
+}
+
+// TestReceipt_NotFound_NoDeadline_LegacyNilNil (mock): no dl ctx + NotFound
+// yields immediate nil, nil (calls==1, no internal retry). Covers bg and
+// canceled-non-dl (per review). Critical for pollReceipt/send compat.
+func TestReceipt_NotFound_NoDeadline_LegacyNilNil(t *testing.T) {
+	for _, name := range []string{"bg", "canceled"} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			fetch := func(ctx context.Context, h common.Hash) (*types.Receipt, error) {
+				calls++
+				return nil, ethereum.NotFound
+			}
+			ctx := context.Background()
+			if name == "canceled" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			rec, err := transactionReceiptWithRetry(ctx, common.HexToHash("0x1234"), fetch)
+			if rec != nil || err != nil {
+				t.Errorf("expected nil, nil; got rec=%v err=%v", rec, err)
+			}
+			if calls != 1 {
+				t.Errorf("calls = %d, want 1 (no internal retry)", calls)
+			}
+		})
+	}
+}
+
+// TestReceipt_TransientError_DeadlineExceeded (mock): perpetual transient
+// under dl ctx -> ErrReceiptTimeout (symmetric to NotFound dl case).
+func TestReceipt_TransientError_DeadlineExceeded(t *testing.T) {
+	calls := 0
+	fetch := func(ctx context.Context, h common.Hash) (*types.Receipt, error) {
+		calls++
+		return nil, &net.DNSError{IsTimeout: true}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	time.Sleep(100 * time.Millisecond)
+	rec, err := transactionReceiptWithRetry(ctx, common.HexToHash("0xdead"), fetch)
+	if rec != nil {
+		t.Errorf("expected nil receipt, got %+v", rec)
+	}
+	if !errors.Is(err, ErrReceiptTimeout) {
+		t.Errorf("expected errors.Is(ErrReceiptTimeout), got: %v", err)
 	}
 }

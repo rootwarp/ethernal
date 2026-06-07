@@ -5,8 +5,8 @@ import (
 	"math/big"
 )
 
-// mockRPC is a test double for EthRPC using the function-field pattern.
-// Set each Fn field to control per-call behavior.
+// mockRPC is a test double for EthRPC (and EthBroadcaster) using the
+// function-field pattern. Set each Fn field to control per-call behavior.
 type mockRPC struct {
 	SuggestGasTipCapFn func(ctx context.Context) (*big.Int, error)
 	BlockBaseFeeFn     func(ctx context.Context) (*big.Int, error)
@@ -14,6 +14,11 @@ type mockRPC struct {
 	EstimateGasFn      func(ctx context.Context, msg CallMsg) (uint64, error)
 	ChainIDFn          func(ctx context.Context) (*big.Int, error)
 	CloseFn            func()
+
+	// broadcaster fns (extended for M1.3-4 receipt retry tests + interface parity with ethClient)
+	SendRawTransactionFn func(ctx context.Context, rawRLP string) (string, error)
+	TransactionReceiptFn func(ctx context.Context, txHash string) (*Receipt, error)
+	BroadcasterChainIDFn func(ctx context.Context) (uint64, error)
 }
 
 func (m *mockRPC) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
@@ -51,6 +56,27 @@ func (m *mockRPC) ChainID(ctx context.Context) (*big.Int, error) {
 	return m.ChainIDFn(ctx)
 }
 
+func (m *mockRPC) SendRawTransaction(ctx context.Context, rawRLP string) (string, error) {
+	if m.SendRawTransactionFn == nil {
+		panic("mockRPC.SendRawTransaction not set")
+	}
+	return m.SendRawTransactionFn(ctx, rawRLP)
+}
+
+func (m *mockRPC) TransactionReceipt(ctx context.Context, txHash string) (*Receipt, error) {
+	if m.TransactionReceiptFn == nil {
+		panic("mockRPC.TransactionReceipt not set")
+	}
+	return m.TransactionReceiptFn(ctx, txHash)
+}
+
+func (m *mockRPC) BroadcasterChainID(ctx context.Context) (uint64, error) {
+	if m.BroadcasterChainIDFn == nil {
+		panic("mockRPC.BroadcasterChainID not set")
+	}
+	return m.BroadcasterChainIDFn(ctx)
+}
+
 func (m *mockRPC) Close() {
 	if m.CloseFn != nil {
 		m.CloseFn()
@@ -59,3 +85,4 @@ func (m *mockRPC) Close() {
 
 // compile-time assertion
 var _ EthRPC = (*mockRPC)(nil)
+var _ EthBroadcaster = (*mockRPC)(nil)
