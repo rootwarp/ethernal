@@ -42,6 +42,9 @@ func Validate(entry deposit.Entry, cfg BuildConfig) error {
 	wc := entry.WithdrawalCredentials
 	switch wc[0] {
 	case 0x00:
+		if wc == ([32]byte{}) {
+			return ErrZeroWithdrawal00
+		}
 		// BLS withdrawal: no further format constraint.
 	case 0x01, 0x02:
 		// eth1-address and compounding formats: bytes 1–11 must be zero.

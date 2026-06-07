@@ -178,3 +178,102 @@ func TestValidate_Table(t *testing.T) {
 		})
 	}
 }
+
+// TestTxValidate_WC_Reject table mirrors M0.4-4's coverage (5 cases); asserts
+// via errors.Is against the tx sentinels (ErrZeroWithdrawal00 for 0x00 all-zero;
+// ErrInvalidWCFormat for bad 0x01/0x02 padding; ErrInvalidWCPrefix for other prefix).
+func TestTxValidate_WC_Reject(t *testing.T) {
+	makeBase := func() deposit.Entry {
+		var e deposit.Entry
+		e.Pubkey[0] = 0xAB
+		e.Signature[0] = 0xCD
+		e.DepositDataRoot[0] = 0xEF
+		e.Amount = 32_000_000_000
+		e.NetworkName = network.Holesky
+		e.WithdrawalCredentials[0] = 0x01 // base good; mut will override
+		return e
+	}
+
+	cfg := makeValidConfig(t)
+
+	tests := []struct {
+		name    string
+		mutFn   func(*deposit.Entry)
+		wantErr error
+	}{
+		{
+			name:    "zero_0x00_allzero",
+			mutFn:   func(e *deposit.Entry) { e.WithdrawalCredentials = [32]byte{} },
+			wantErr: ErrZeroWithdrawal00,
+		},
+		{
+			name: "0x01_nonzero_byte1",
+			mutFn: func(e *deposit.Entry) {
+				e.WithdrawalCredentials = [32]byte{}
+				e.WithdrawalCredentials[0] = 0x01
+				e.WithdrawalCredentials[1] = 0x01 // non-zero in 1..11
+			},
+			wantErr: ErrInvalidWCFormat,
+		},
+		{
+			name: "0x01_nonzero_byte11",
+			mutFn: func(e *deposit.Entry) {
+				e.WithdrawalCredentials = [32]byte{}
+				e.WithdrawalCredentials[0] = 0x01
+				e.WithdrawalCredentials[11] = 0x01 // non-zero in 1..11
+			},
+			wantErr: ErrInvalidWCFormat,
+		},
+		{
+			name: "0x02_nonzero_byte5",
+			mutFn: func(e *deposit.Entry) {
+				e.WithdrawalCredentials = [32]byte{}
+				e.WithdrawalCredentials[0] = 0x02
+				e.WithdrawalCredentials[5] = 0x02 // non-zero in 1..11
+			},
+			wantErr: ErrInvalidWCFormat,
+		},
+		{
+			name: "bad_prefix_0xff",
+			mutFn: func(e *deposit.Entry) {
+				e.WithdrawalCredentials = [32]byte{}
+				e.WithdrawalCredentials[0] = 0xff
+			},
+			wantErr: ErrInvalidWCPrefix,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			e := makeBase()
+			tc.mutFn(&e)
+			err := Validate(e, cfg)
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error wrapping %v", tc.wantErr)
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("Validate() error = %v: not errors.Is(%v)", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestDID_ZeroWC_DoubleReject verifies cross-layer regression: the *same*
+// all-zero 0x00 entry is rejected at both deposit.Entry.Validate and tx.Validate
+// layers (via errors.Is on the package-specific sentinels).
+func TestDID_ZeroWC_DoubleReject(t *testing.T) {
+	e := makeValidEntry()
+	e.WithdrawalCredentials = [32]byte{} // the same all-zero 0x00 WC
+	c := makeValidConfig(t)
+
+	// deposit layer (M0.4-4)
+	if err := e.Validate(); err == nil || !errors.Is(err, deposit.ErrZeroWithdrawal00) {
+		t.Fatalf("Entry.Validate(zero-0x00): got %v, want wrap deposit.ErrZeroWithdrawal00", err)
+	}
+
+	// tx layer (M0.4-5)
+	if err := Validate(e, c); err == nil || !errors.Is(err, ErrZeroWithdrawal00) {
+		t.Fatalf("tx.Validate(zero-0x00): got %v, want wrap ErrZeroWithdrawal00", err)
+	}
+}
