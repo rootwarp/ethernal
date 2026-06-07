@@ -7,8 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## [1.0.0] - 2026-06-07
+
 ### Removed
 - Tautological `FuzzMerkleize`/`FuzzUint64Chunk` assertions (internal/ssz/ssz_fuzz_test.go); differential oracle (M1.2-4) replaces assertion role (M1.2-7, closes FR-P1-C4 cleanup; M1.8-2).
+
+### Changed
+- Mainnet acknowledgement gate on `eth-deposit-tx` (`--confirm-network=<name>` required on mainnet for `send`/`run`/`build`; `--yes` does not bypass; additional `--i-accept-local-signer-on-mainnet` when using local signer on mainnet) — FR-P1-A1 (GO-013, M1.6).
+- Hybrid `--rpc-url` wired on `run` only (build remains strictly offline, no silent defaults) — FR-P1-D5 (M1.3-5).
+- Exit-code contract additions, pre-validation of required flags, `%w` wrapping audit across module, `TestExitCodeContract` tables (one per binary) as the source of truth — FR-P1-F* (GO-015/020/022/041/042/046/051/018, M1.5 incl. M1.5-9).
+- New sentinels for BLS (ErrSecretZero, ErrPubkeyZero/Invalid), tx (ErrNoBaseFee, etc.), keystore (ErrKeystoreCipherText), signer (ErrUnsupportedTxType, etc.), and mainnet-gate rejections; all mapped in exit contract — multiple M1 FRs (M1.1–M1.6).
+- Env-var auto-unset (`os.Unsetenv` in `NewLocalSignerFromEnv`), per-Sign zeroize of intermediates, sanitized env for child `ethstaker-deposit-cli` subprocess — FR-P1-B4 (GO-017, M1.1-5/7).
+- BLS `Zeroize()` on `Signer` interface (Go-side wipe only; package docs explicitly frame the herumi C-side `mcl` scalar limitation as known/undocumented-until-process-exit) — FR-P1-B4 (GO-017, M1.1-6, honest framing per PRD metric 12 + ADR-006).
+- Differential SSZ oracle (ferranbt/fastssz under `differential_oracle` build tag + committed generated types + CI lane) replacing dead self-oracles — FR-P1-C4 (GO-048, M1.2-4/5).
+- Hermetic cross-validate lane (Docker image + `//go:build cross_validate` test + `make test-cross-validate` + CI workflow) using real pinned `ethstaker-deposit-cli` for hoodi/mainnet — FR-P1-G1 (GO-059, M1.7).
+- `ScanDir(dir string, logger *slog.Logger)` signature (read errors/non-regular files now WARN via injected logger; no global slog leak) — internal signature break (FR-P1-E2, GO-028, M1.4-2); non-breaking for CLI/in-tree callers (all in-project callers updated; see scandir.go:51-52 comment).
+
+### Added
+- Keystore loader hardening (structural vs checksum errors, 32-byte secret enforcement + zeroize, `IsRegular()` filter + 1 MiB `MaxKeystoreSize` `io.LimitReader` cap) — FR-P1-E* (GO-025/029/030, M1.4).
+- RPC robustness (HeaderByNumber + nil-basefee sentinel, fail-closed chainID+logger, gas estimate no-overflow + direct addr, errors.Is(NotFound)+retries, receipt failures to sentinel) — FR-P1-D* (GO-032/033/034/035, M1.3).
+- BLS scalar-zero and pubkey-infinity rejections in production paths — FR-P1-C1/C2 (GO-036/037, M1.2-1/2).
+- `DomainDeposit`/`ZeroGenesisValidatorsRoot` now functions (no mutable package vars) — FR-P1-C3 (GO-038, M1.2-3).
+- Cancellation hygiene, LocalSigner mutex, Ledger Close doc+timeout, worker ctx checks, SIGTERM support — FR-P1-B* (GO-008/021/024, M1.1).
+- Fixture hygiene + `Key.Zeroize` delegate + corrected KeepAlive comment — FR-P1-G2/G3 (GO-066/045, M1.7-4/5) (All M1 changes (M1.1–M1.7) are represented. (M1.8-2)).
 
 ## eth-deposit-tx
 

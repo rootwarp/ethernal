@@ -20,11 +20,12 @@ Comprehensive guide for the two CLIs in this monorepo:
 7. [Step 4 — Broadcast (optional) (`eth-deposit-tx send`)](#step-4--broadcast-optional-eth-deposit-tx-send)
 8. [Convenience: `eth-deposit-tx run` (build + sign in one shot)](#convenience-eth-deposit-tx-run-build--sign-in-one-shot)
 9. [Air-gapped workflow](#air-gapped-workflow)
-10. [Networks](#networks)
-11. [Exit codes](#exit-codes)
-12. [Security](#security)
-13. [Recipes](#recipes)
-14. [Troubleshooting](#troubleshooting)
+10. [Mainnet ceremony](#mainnet-ceremony)
+11. [Networks](#networks)
+12. [Exit codes](#exit-codes)
+13. [Security](#security)
+14. [Recipes](#recipes)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -531,6 +532,74 @@ The two-phase design supports air-gapping the signing machine entirely:
    ```
 
 Neither artifact contains the private key. The Ledger never exports the key.
+
+---
+
+## Mainnet ceremony
+
+**v1.0 mainnet safeguard (M1.6).** Requires `--confirm-network=mainnet` (build/run: must equal --network; send derives from declared/RLP+RPC post-validateSignedAgainstRLP+guard (send.go:215-257,259-282; no --network flag on send; pre-val only syntax in LoadSend per comment 262-263); `--yes` does not bypass) plus (for local signer) `--i-accept-local-signer-on-mainnet`. Pre-validated in Load*Config (M1.6-3; build/run). Generator side still needs `--i-understand-this-is-mainnet`.
+
+(MIGRATION.md v0.2 → v1.0 section planned; M1.8-2 was CHANGELOG only.)
+
+Worked example (uses M1.6 flag set; minimal run+send to demo gate+RLP; build confirm pre-val symmetric per config.go:99-101; use `go run ./cmd/eth-deposit-tx` or rebuild for --help match; tree bin/ may be pre-M1.6):
+
+```bash
+# Step 1 (gen)
+export KEYSTORE_PASS=...
+./bin/eth-deposit-gen --network mainnet --i-understand-this-is-mainnet \
+  --keystore-dir ./keystores/ --pubkeys 0x... --output-dir ./out \
+  --passphrase-env KEYSTORE_PASS
+unset KEYSTORE_PASS
+
+export ETH_DEPOSIT_TX_PRIVATE_KEY=0x...
+
+# Step 2 (run: exercises confirm pre-val + local-mainnet gate + warning)
+./bin/eth-deposit-tx run \
+  --network mainnet \
+  --confirm-network mainnet \
+  --i-accept-local-signer-on-mainnet \
+  --signer local \
+  --input-file ./out/deposit_data-*.json \
+  --nonce 0 \
+  --output ./out/signed_tx.json
+
+unset ETH_DEPOSIT_TX_PRIVATE_KEY
+
+# Step 3 (send: prompt rendered from decoded RLP values + confirm gate)
+./bin/eth-deposit-tx send \
+  --input ./out/signed_tx.json \
+  --rpc-url https://your-mainnet-rpc \
+  --confirm-network mainnet \
+  --wait-for-receipt
+```
+
+Local gate warning (printed by run/sign for local+mainnet):
+
+```
+WARNING: --signer local combined with --network mainnet
+The local signer reads your private key from an environment variable.
+This key is visible to other processes, shell history, and core dumps.
+A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.
+If you accept the risk, the flag was already supplied; proceeding.
+```
+
+Send confirmation prompt (values + labels from decoded RLP after validateSignedAgainstRLP + guard):
+
+```
+> You are about to BROADCAST a 32 ETH deposit transaction.
+>   Network:        mainnet (chain ID 1)
+>   From:           0x...
+>   To (deposit):   0x00000000219ab540356cBB839Cbe05303d7705Fa (decoded from RLP)
+>   Value:          32.000000 ETH (decoded from RLP)
+>   Nonce:          0 (decoded from RLP)
+>   MaxFeePerGas:   20.000000 Gwei (decoded from RLP)
+>   Tx hash:        0x... (decoded from RLP)
+>
+> Type the network name to confirm:
+mainnet
+```
+
+(Ledger mainnet: use `--signer ledger`, omit `--i-accept-local-signer-on-mainnet`.)
 
 ---
 
