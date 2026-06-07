@@ -137,6 +137,10 @@ Exit codes:
 				Name:  "confirm-network",
 				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
 			},
+			&ucli.BoolFlag{
+				Name:  "i-accept-local-signer-on-mainnet",
+				Usage: "Required when --signer local and --network mainnet: acknowledges risk of using local (hot, env-var) private key for mainnet deposit (irreversible 32 ETH lock; Ledger recommended)",
+			},
 			&ucli.StringFlag{
 				Name:    "output",
 				Usage:   "Output file for the unsigned transaction (default: stdout)",

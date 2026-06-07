@@ -59,6 +59,11 @@ type Config struct {
 	// (and decoded-RLP / RPC-derived name where applicable). Pre-validated here
 	// per M1.5-1 pattern. --yes does not bypass.
 	ConfirmNetwork string
+
+	// IAcceptLocalSignerOnMainnet is the --i-accept-local-signer-on-mainnet flag (M1.6-2).
+	// Required (enforced in run/sign Loads/actions) only for --signer local + mainnet.
+	// Captured on build/run for symmetry + M1.6-3 pre-val note; on send/sign too.
+	IAcceptLocalSignerOnMainnet bool
 }
 
 // LoadBuildConfig resolves flag > env > defaults into a typed Config.
@@ -98,6 +103,9 @@ func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
 		}
 	}
+
+	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
+	// M1.6-2 pre-val capture (for "all four" hygiene per reviewer high finding on Loads + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Require for local+mainnet is in LoadRun (where signer known) + action checks (sign); ledger exempt. Store below.
 
 	// 2. Gas limit — string flag so env-var override works alongside flag.
 	gasLimit := defaultGasLimit
@@ -149,17 +157,18 @@ func LoadBuildConfig(c *ucli.Context) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Network:              net,
-		NetworkParams:        params,
-		InputFile:            c.String("input-file"),
-		OutputFile:           c.String("output"),
-		Index:                c.Int("index"),
-		RPCURL:               c.String("rpc-url"),
-		GasLimit:             gasLimit,
-		MaxFeePerGas:         maxFee,
-		MaxPriorityFeePerGas: maxPrioFee,
-		Nonce:                nonce,
-		ConfirmNetwork:       confirmNet,
+		Network:                     net,
+		NetworkParams:               params,
+		InputFile:                   c.String("input-file"),
+		OutputFile:                  c.String("output"),
+		Index:                       c.Int("index"),
+		RPCURL:                      c.String("rpc-url"),
+		GasLimit:                    gasLimit,
+		MaxFeePerGas:                maxFee,
+		MaxPriorityFeePerGas:        maxPrioFee,
+		Nonce:                       nonce,
+		ConfirmNetwork:              confirmNet,
+		IAcceptLocalSignerOnMainnet: acceptLocal,
 	}
 	return cfg, nil
 }

@@ -54,6 +54,11 @@ type SendConfig struct {
 	// Pre-validated for syntactic validity here; full match + mainnet-required
 	// checked in sendAction after RLP decode + RPC (per M1.6-1).
 	ConfirmNetwork string
+
+	// IAcceptLocalSignerOnMainnet is the --i-accept-local-signer-on-mainnet flag (M1.6-2).
+	// For symmetry (build/run/sign/send all carry per M1.6-2); enforcement only on signer paths.
+	// Captured here per pre-val pattern.
+	IAcceptLocalSignerOnMainnet bool
 }
 
 // LoadSendConfig parses and validates send subcommand flags.
@@ -83,14 +88,18 @@ func LoadSendConfig(c *ucli.Context) (*SendConfig, error) {
 		}
 	}
 
+	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
+	// M1.6-2 pre-val capture (for "all four" hygiene per reviewer high finding on Loads + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Full gate enforced at sign/run (local+mainnet); send carries for symmetry (post-sign, no require here, ledger mainnet send does not require per AC). Capture here per M1.5-1 pattern.
+
 	return &SendConfig{
-		InputFile:         inputFile,
-		RPCURL:            rpcURL,
-		Yes:               c.Bool("yes"),
-		WaitForReceipt:    waitForReceipt,
-		ReceiptTimeout:    timeout,
-		ReceiptOutputFile: receiptOutput,
-		ConfirmNetwork:    confirmNet,
+		InputFile:                   inputFile,
+		RPCURL:                      rpcURL,
+		Yes:                         c.Bool("yes"),
+		WaitForReceipt:              waitForReceipt,
+		ReceiptTimeout:              timeout,
+		ReceiptOutputFile:           receiptOutput,
+		ConfirmNetwork:              confirmNet,
+		IAcceptLocalSignerOnMainnet: acceptLocal,
 	}, nil
 }
 
@@ -149,6 +158,10 @@ Exit codes:
 			&ucli.StringFlag{
 				Name:  "confirm-network",
 				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match decoded RLP network name and RPC-derived name where available; --yes does not bypass)",
+			},
+			&ucli.BoolFlag{
+				Name:  "i-accept-local-signer-on-mainnet",
+				Usage: "Required when --signer local and --network mainnet: acknowledges risk of using local (hot, env-var) private key for mainnet deposit (irreversible 32 ETH lock; Ledger recommended)",
 			},
 			&ucli.BoolFlag{
 				Name:  "wait-for-receipt",
@@ -264,6 +277,11 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 			return ucli.Exit("--confirm-network: required for mainnet (value must equal network name)", 2)
 		}
 	}
+
+	// M1.6-2: check site in sendAction before prompt/broadcast (per spec; reuse M1.6-1 hygiene).
+	// Local-signer gate is enforced at sign/run (where --signer is known); send carries flag for
+	// symmetry only. Thus ledger-signed mainnet requires no --i-accept-local-signer-on-mainnet.
+	_ = cfg.IAcceptLocalSignerOnMainnet
 
 	// 7. Print the "about to broadcast" prompt from *decoded* rlpTx values,
 	//    labelled "(decoded from RLP)" (existing prompt code updated to take

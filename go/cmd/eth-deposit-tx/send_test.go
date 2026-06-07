@@ -1206,3 +1206,134 @@ func TestSend_ConfirmNetworkMatch_Allow(t *testing.T) {
 }
 
 // 4th AC is flag visibility in --help (verified in post-edit verif step via `eth-deposit-tx send --help` etc.; no dedicated test func per smallest + M1.5 patterns for flag-in-help).
+
+// The following 3 named tests are the M1.6-2 AC tests (using existing send test
+// helpers: newSendTestApp + OsExiter + ExitCodeFor + app.Run; for local mainnet gate
+// we invoke "run" subcommand (has --network+--signer) via the app; local signer via env
+// (spy on local path); mainnet + confirm-network=mainnet (M1.6-1 hygiene); got/want;
+// warning logged on allow; ledger path no flag required. Follows M1.6-1 TestSend_*Mainnet
+// + M1.5 patterns + run_test local signer setup exactly. Smallest: only these 3 + flag/pre-val/warning).
+// (Note: run on mainnet deposit fixture will hit net-mismatch after gate; we assert gate passed + warning for allow case.)
+
+func TestSend_LocalSignerMainnet_NoAcceptFlag_Reject(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	envVar := "TEST_LOCAL_MAINNET_REJECT_" + randomSuffix(t)
+	t.Setenv(envVar, "0x"+generateTestPrivKey(t))
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	// Use run (exercises LoadRun pre-val + M1.6-2 gate); mainnet requires confirm too (M1.6-1).
+	// Provide static gas/nonce (no rpc in this test path).
+	err := app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "mainnet",
+		"--input-file", fixtureAbsPath(t),
+		"--signer", "local",
+		"--private-key-env", envVar,
+		"--confirm-network", "mainnet",
+		// deliberately no --i-accept-local-signer-on-mainnet
+		"--nonce", "0",
+		"--max-fee-per-gas", "20000000000",
+		"--max-priority-fee-per-gas", "1000000000",
+		"--gas-limit", "250000",
+		"--output", "-",
+	})
+	if err == nil {
+		t.Fatal("expected error for local signer mainnet without accept flag, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	if strings.Contains(errOut.String(), "WARNING: --signer local combined with --network mainnet") {
+		t.Error("warning should not have been printed on reject")
+	}
+}
+
+func TestSend_LocalSignerMainnet_WithAcceptFlag_Allow(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	envVar := "TEST_LOCAL_MAINNET_ALLOW_" + randomSuffix(t)
+	t.Setenv(envVar, "0x"+generateTestPrivKey(t))
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "mainnet",
+		"--input-file", fixtureAbsPath(t),
+		"--signer", "local",
+		"--private-key-env", envVar,
+		"--confirm-network", "mainnet",
+		"--i-accept-local-signer-on-mainnet",
+		"--nonce", "0",
+		"--max-fee-per-gas", "20000000000",
+		"--max-priority-fee-per-gas", "1000000000",
+		"--gas-limit", "250000",
+		"--output", "-",
+	})
+	// run will proceed past gate+warning (Load + action print), then fail on deposit entry network mismatch
+	// (fixture is not mainnet); we assert no gate rejection + warning was logged ("proceeds").
+	if err == nil {
+		// unexpected if fixture matched, but ok
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		// mismatch yields 2; if somehow passed would be 0, but we don't care as long as not gate-specific fail before
+	}
+	if strings.Contains(fmt.Sprintf("%v", err), "i-accept-local-signer-on-mainnet") || strings.Contains(fmt.Sprintf("%v", err), "required when --signer local") {
+		t.Errorf("gate should have allowed with flag; got gate error: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "WARNING: --signer local combined with --network mainnet") {
+		t.Errorf("warning not logged on allow; errOut: %s", errOut.String())
+	}
+}
+
+func TestSend_LedgerOnMainnet_NoAcceptFlag_Required(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	// Ledger on mainnet must NOT require the local-accept flag (only local signer does).
+	// Will fail later (no device for NewLedgerSigner in run), but gate must not fire.
+	err := app.Run([]string{
+		"eth-deposit-tx", "run",
+		"--network", "mainnet",
+		"--input-file", fixtureAbsPath(t),
+		"--signer", "ledger",
+		"--confirm-network", "mainnet",
+		// no --i-accept-local-signer-on-mainnet
+		"--nonce", "0",
+		"--max-fee-per-gas", "20000000000",
+		"--max-priority-fee-per-gas", "1000000000",
+		"--gas-limit", "250000",
+		"--output", "-",
+	})
+	if err == nil {
+		t.Fatal("expected ledger error (no device), got nil")
+	}
+	if strings.Contains(fmt.Sprintf("%v", err), "i-accept-local-signer-on-mainnet") || strings.Contains(fmt.Sprintf("%v", err), "required when --signer local") {
+		t.Errorf("ledger on mainnet must not require local-accept flag; got: %v", err)
+	}
+	if got := ExitCodeFor(err); got == 0 {
+		t.Error("expected non-zero for ledger path")
+	}
+	// no local-signer warning expected (ledger path)
+	if strings.Contains(errOut.String(), "WARNING: --signer local combined with --network mainnet") {
+		t.Error("local-signer warning should not appear for ledger path")
+	}
+}

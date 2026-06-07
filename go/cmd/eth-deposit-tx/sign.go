@@ -41,6 +41,10 @@ type SignConfig struct {
 	// ConfirmNetwork is the --confirm-network value (for symmetry / pre-val).
 	// (Sign has no broadcast so no 3-way compare; mainnet gate on run/send/build.)
 	ConfirmNetwork string
+
+	// IAcceptLocalSignerOnMainnet is the --i-accept-local-signer-on-mainnet flag (M1.6-2 local-signer gate).
+	// Enforced in signAction (after unsigned read, using its ChainID for net) when Signer=="local".
+	IAcceptLocalSignerOnMainnet bool
 }
 
 // LoadSignConfig parses and validates sign subcommand flags.
@@ -79,13 +83,17 @@ func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
 		}
 	}
 
+	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
+	// M1.6-2 pre-val capture (for "all four" hygiene per reviewer high finding on Loads + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Require for local+mainnet happens in signAction (net from unsigned); ledger exempt. Capture here per M1.5-1 / M1.6-2 / M1.6-3 pattern.
+
 	return &SignConfig{
-		Signer:                   signerType,
-		InputFile:                inputFile,
-		OutputFile:               c.String("output"),
-		PrivateKeyEnvVar:         envVar,
-		AllowNonDepositRecipient: allowNonDeposit,
-		ConfirmNetwork:           confirmNet,
+		Signer:                      signerType,
+		InputFile:                   inputFile,
+		OutputFile:                  c.String("output"),
+		PrivateKeyEnvVar:            envVar,
+		AllowNonDepositRecipient:    allowNonDeposit,
+		ConfirmNetwork:              confirmNet,
+		IAcceptLocalSignerOnMainnet: acceptLocal,
 	}, nil
 }
 
@@ -144,6 +152,10 @@ Exit codes:
 				Name:  "confirm-network",
 				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
 			},
+			&ucli.BoolFlag{
+				Name:  "i-accept-local-signer-on-mainnet",
+				Usage: "Required when --signer local and --network mainnet: acknowledges risk of using local (hot, env-var) private key for mainnet deposit (irreversible 32 ETH lock; Ledger recommended)",
+			},
 			&ucli.StringFlag{
 				Name:  "private-key-env",
 				Usage: fmt.Sprintf("Environment variable name holding the hex private key (local signer only; default: %s)", defaultPrivKeyEnvVar),
@@ -182,6 +194,24 @@ func signAction(c *ucli.Context, cfg *SignConfig) error {
 	var unsigned internaltx.UnsignedTx
 	if err := json.Unmarshal(raw, &unsigned); err != nil {
 		return ucli.Exit(fmt.Sprintf("invalid input JSON: %v", err), 2)
+	}
+
+	// M1.6-2: local-signer mainnet gate check here (sign has no --network; derive from unsigned.ChainID).
+	// Enforce before sign summary / RequiresUserInteraction / actual s.Sign (before "proceeding").
+	// Ledger mainnet does not require the flag.
+	if cfg.Signer == "local" {
+		if p, lookupErr := network.LookupByChainID(unsigned.ChainID); lookupErr == nil && p.Name == network.Mainnet {
+			if !cfg.IAcceptLocalSignerOnMainnet {
+				return ucli.Exit("--i-accept-local-signer-on-mainnet: required when --signer local and target network is mainnet", 2)
+			}
+			if c.App.ErrWriter != nil {
+				_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: --signer local combined with --network mainnet\n")
+				_, _ = fmt.Fprintf(c.App.ErrWriter, "The local signer reads your private key from an environment variable.\n")
+				_, _ = fmt.Fprintf(c.App.ErrWriter, "This key is visible to other processes, shell history, and core dumps.\n")
+				_, _ = fmt.Fprintf(c.App.ErrWriter, "A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.\n")
+				_, _ = fmt.Fprintf(c.App.ErrWriter, "If you accept the risk, the flag was already supplied; proceeding.\n")
+			}
+		}
 	}
 
 	// 3. Sign.

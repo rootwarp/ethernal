@@ -14,6 +14,7 @@ import (
 	ucli "github.com/urfave/cli/v2"
 
 	"github.com/rootwarp/eth-utils/go/internal/cli"
+	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
@@ -37,6 +38,10 @@ type RunConfig struct {
 	// RawOutputFile overrides the auto-derived .raw companion filename.
 	// If empty and OutputFile is a file path, signed.raw is derived automatically.
 	RawOutputFile string
+
+	// IAcceptLocalSignerOnMainnet is the --i-accept-local-signer-on-mainnet flag (M1.6-2).
+	// Pre-validated in LoadRunConfig when Signer=local + Network=mainnet (M1.5-1 pattern).
+	IAcceptLocalSignerOnMainnet bool
 }
 
 // LoadRunConfig parses and validates run subcommand flags.
@@ -69,13 +74,21 @@ func LoadRunConfig(c *ucli.Context) (*RunConfig, error) {
 		return nil, ucli.Exit("--keep-unsigned requires --output to be a file path (cannot be used with stdout)", 2)
 	}
 
+	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
+	// M1.6-2 pre-val (M1.5-1 pattern + M1.6-3 note): require when local + mainnet.
+	// (Happens early, before FS/RPC/build/sign work in runAction.) Hygiene for "all four" Loads per reviewer high + M1.6-1 apply.
+	if signerType == "local" && buildCfg.Network == network.Mainnet && !acceptLocal {
+		return nil, ucli.Exit("--i-accept-local-signer-on-mainnet: required when --signer local and --network mainnet", 2)
+	}
+
 	return &RunConfig{
-		Build:            buildCfg,
-		Signer:           signerType,
-		PrivateKeyEnvVar: envVar,
-		OutputFile:       outputFile,
-		KeepUnsigned:     keepUnsigned,
-		RawOutputFile:    c.String("raw-output"),
+		Build:                       buildCfg,
+		Signer:                      signerType,
+		PrivateKeyEnvVar:            envVar,
+		OutputFile:                  outputFile,
+		KeepUnsigned:                keepUnsigned,
+		RawOutputFile:               c.String("raw-output"),
+		IAcceptLocalSignerOnMainnet: acceptLocal,
 	}, nil
 }
 
@@ -171,6 +184,17 @@ Exit codes:
 			if cfg.Build.ConfirmNetwork != "" && cfg.Build.ConfirmNetwork != string(cfg.Build.NetworkParams.Name) {
 				return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match --network %q", cfg.Build.ConfirmNetwork, cfg.Build.NetworkParams.Name), 2)
 			}
+			// M1.6-2: local-signer-mainnet gate + warning already pre-validated in LoadRunConfig.
+			// Print multi-line warning (per PRD §9) to ErrWriter before proceeding to build/sign.
+			if cfg.Signer == "local" && cfg.Build.Network == network.Mainnet {
+				if c.App.ErrWriter != nil {
+					_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: --signer local combined with --network mainnet\n")
+					_, _ = fmt.Fprintf(c.App.ErrWriter, "The local signer reads your private key from an environment variable.\n")
+					_, _ = fmt.Fprintf(c.App.ErrWriter, "This key is visible to other processes, shell history, and core dumps.\n")
+					_, _ = fmt.Fprintf(c.App.ErrWriter, "A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.\n")
+					_, _ = fmt.Fprintf(c.App.ErrWriter, "If you accept the risk, the flag was already supplied; proceeding.\n")
+				}
+			}
 			return runAction(c, cfg)
 		},
 	}
@@ -195,6 +219,10 @@ func buildFlags() []ucli.Flag {
 		&ucli.StringFlag{
 			Name:  "confirm-network",
 			Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
+		},
+		&ucli.BoolFlag{
+			Name:  "i-accept-local-signer-on-mainnet",
+			Usage: "Required when --signer local and --network mainnet: acknowledges risk of using local (hot, env-var) private key for mainnet deposit (irreversible 32 ETH lock; Ledger recommended)",
 		},
 		&ucli.StringFlag{
 			Name:    "output",
@@ -316,8 +344,9 @@ func runAction(c *ucli.Context, cfg *RunConfig) error {
 
 	// 5. Sign (in-process, no disk round-trip).
 	signCfg := &SignConfig{
-		Signer:           cfg.Signer,
-		PrivateKeyEnvVar: cfg.PrivateKeyEnvVar,
+		Signer:                      cfg.Signer,
+		PrivateKeyEnvVar:            cfg.PrivateKeyEnvVar,
+		IAcceptLocalSignerOnMainnet: cfg.IAcceptLocalSignerOnMainnet,
 	}
 	signed, err := signUnsignedTx(c.Context, signCfg, c.App.ErrWriter, *unsigned)
 	if err != nil {
