@@ -939,7 +939,7 @@ func TestRunWithDeps_NoSecretInLogs(t *testing.T) {
 		scanner: fs.scan,
 		loader: &fakeLoader{key: keystore.Key{
 			// Pass a copy so key.Zeroize() doesn't clobber sentinelOrig.
-			Secret:    sentinelOrig,
+			Secret:    append([]byte(nil), sentinelOrig...),
 			PubkeyHex: pkHex,
 		}},
 		newSigner: func(_ []byte) (bls.Signer, error) {
