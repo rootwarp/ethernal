@@ -40,11 +40,17 @@ type SignConfig struct {
 
 // LoadSignConfig parses and validates sign subcommand flags.
 func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
+	// Pre-validate required --signer (was Required:true in flag schema) here so
+	// urfave never produces its internal required error for it.
 	signerType := c.String("signer")
+	if signerType == "" {
+		return nil, ucli.Exit("--signer: required flag not set", 2)
+	}
 	if signerType != "local" && signerType != "ledger" {
 		return nil, ucli.Exit(fmt.Sprintf("--signer: unsupported value %q: must be \"local\" or \"ledger\"", signerType), 2)
 	}
 
+	// Pre-validate required --input (pre-existing; kept for symmetry with signer block + other Loads).
 	inputFile := c.String("input")
 	if inputFile == "" {
 		return nil, ucli.Exit("--input: required flag not set", 2)
@@ -108,9 +114,8 @@ Exit codes:
 		UsageText: `eth-deposit-tx sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR] [--allow-non-deposit-recipient]`,
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{
-				Name:     "signer",
-				Usage:    "Signing method: \"local\" (env-var private key) or \"ledger\" (hardware wallet)",
-				Required: true,
+				Name:  "signer",
+				Usage: "Signing method: \"local\" (env-var private key) or \"ledger\" (hardware wallet)",
 			},
 			&ucli.StringFlag{
 				Name:    "input",

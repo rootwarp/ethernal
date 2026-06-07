@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	ucli "github.com/urfave/cli/v2"
 
@@ -45,6 +46,16 @@ func ExitCodeFor(err error) int {
 	// Exit code 2: urfave/cli validation errors that set code 2.
 	var ec ucli.ExitCoder
 	if errors.As(err, &ec) && ec.ExitCode() == 2 {
+		return 2
+	}
+	// Substring fallback for urfave required-flag errors (errRequiredFlags is
+	// unexported and not reported as ExitCoder code 2; it defaults to exit 1).
+	// Matches "Required flag ..." (singular) and "Required flags ..." (plural).
+	// Pre-validation in the Load*Config functions (M1.5-1) ensures the internal
+	// error is never produced for our schemas; this is the documented safety net
+	// per issue/research/10 (fragility acknowledged; leave as-is per smallest).
+	// + covers synthetic cases in TestExitCodeFor_RequiredFlagsSubstring_Exit2.
+	if strings.Contains(err.Error(), "Required flag") {
 		return 2
 	}
 	// Exit code 2: To address failed strict IsHex+len+cross-check validation

@@ -60,6 +60,16 @@ type Config struct {
 // inputs produce an error with exit code 2 via ucli.Exit so callers can return
 // the error directly to urfave.
 func LoadBuildConfig(c *ucli.Context) (*Config, error) {
+	// Pre-validate required flags early (before any other processing) so that
+	// urfave/cli's internal errRequiredFlags is never emitted for our required
+	// schemas. The flag names derive from the definitions in buildFlags / the
+	// buildCommand flag table (M1.5-1 / FR-P1-F1). (String literal dup of Name: is
+	// per "smallest change" + "Required-flag lists derive from ... do NOT duplicate"
+	// rule; no list/const introduced.)
+	if c.String("input-file") == "" {
+		return nil, ucli.Exit("--input-file: required flag not set", 2)
+	}
+
 	// 1. Network — parse and look up constants.
 	net, err := network.ParseFlag(c.String("network"))
 	if err != nil {

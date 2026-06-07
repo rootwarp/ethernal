@@ -84,3 +84,18 @@ func TestExitCodeFor_BuildUnsignedErrorPath(t *testing.T) {
 		t.Errorf("ExitCodeFor(WrapInputErr(build, ErrMissingFeeStatic)) = %d, want 2", got)
 	}
 }
+
+// TestExitCodeFor_RequiredFlagsSubstring_Exit2 (M1.5-1 AC): a synthetic
+// error string matching urfave/cli's errRequiredFlags format (which is
+// unexported, not an ExitCoder, and would otherwise map to 1) is caught by
+// the substring fallback and maps to exit 2. Both singular and plural forms.
+func TestExitCodeFor_RequiredFlagsSubstring_Exit2(t *testing.T) {
+	singular := fmt.Errorf(`Required flag "input-file" not set`)
+	if got := ExitCodeFor(singular); got != 2 {
+		t.Errorf("ExitCodeFor(singular required) = %d, want 2", got)
+	}
+	plural := fmt.Errorf(`Required flags "input-file, signer" not set`)
+	if got := ExitCodeFor(plural); got != 2 {
+		t.Errorf("ExitCodeFor(plural required) = %d, want 2", got)
+	}
+}

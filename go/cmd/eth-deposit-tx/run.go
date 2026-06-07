@@ -175,11 +175,10 @@ Exit codes:
 func buildFlags() []ucli.Flag {
 	return []ucli.Flag{
 		&ucli.StringFlag{
-			Name:     "input-file",
-			Aliases:  []string{"input", "i"},
-			Usage:    "Path to deposit_data-*.json file (or '-' for stdin); --input is accepted as a shorter alias",
-			Required: true,
-			EnvVars:  []string{"ETH_DEPOSIT_TX_INPUT_FILE"},
+			Name:    "input-file",
+			Aliases: []string{"input", "i"},
+			Usage:   "Path to deposit_data-*.json file (or '-' for stdin); --input is accepted as a shorter alias",
+			EnvVars: []string{"ETH_DEPOSIT_TX_INPUT_FILE"},
 		},
 		&ucli.StringFlag{
 			Name:    "network",
