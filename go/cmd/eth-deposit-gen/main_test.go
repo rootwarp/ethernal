@@ -931,11 +931,10 @@ func TestRunWithDeps_DryRun_VerifyFailureAbortsWithSameExitCode(t *testing.T) {
 // testdata / single-keystore path; uses makeTestDeps/makeCfg with WithdrawalAddress
 // from M0.4-1, cfg equivalent to testdata/hoodi single-keystore flows) produces
 // deposit_data JSON with withdrawal_credentials starting 0x01 (i.e. hex "01" + 22 zero
-// chars + addr). Skipped per project-plan exit criterion (M0.4 + M0.10) until golden refresh.
+// chars + addr).
 // ---------------------------------------------------------------------------
 
 func TestRunWithDeps_E2E_HappyPath_JSONHas01WC(t *testing.T) {
-	t.Skip("TODO(M0.10): golden refresh pending in M0.10; this e2e happy-path test (exercising runWithDeps + deposit generator + DryRun JSON output with single-keystore cfg equivalent to testdata/ flows) now produces withdrawal_credentials starting with 0x01... from the validated WithdrawalAddress derivation (M0.4-2); re-enable after fixture update")
 	var stdoutBuf bytes.Buffer
 	var summaryBuf bytes.Buffer
 
@@ -1638,14 +1637,12 @@ func Test_WithdrawalAddress_Missing_Exit2(t *testing.T) {
 // + real deposit.NewGenerator path using existing testdata single keystore +
 // the --withdrawal-address (via cfg) + derivation. Produces deposit_data JSON
 // (via DryRun) whose withdrawal_credentials starts "01" + 22 zero hex + addr.
-// Skipped (with TODO(M0.10)) per AC and project-plan exit criterion until
-// M0.10 fixture refresh; do not refresh goldens here.
+// Exercises the full runWithDeps + real deposit.NewGenerator path using existing
+// testdata single keystore + the --withdrawal-address (via cfg) + derivation.
 func TestRunWithDeps_EndToEnd_HappyPath_Derived01WC(t *testing.T) {
-	t.Skip("golden refresh pending in M0.10") // TODO(M0.10)
-
 	// Use existing testdata for single-keystore e2e happy path (M0.4-2 AC).
 	ksDir := t.TempDir()
-	src := "testdata/hoodi/keystores/keystore.json"
+	src := "../../testdata/hoodi/keystores/keystore.json"
 	dst := filepath.Join(ksDir, "keystore.json")
 	ksBytes, err := os.ReadFile(src)
 	if err != nil {

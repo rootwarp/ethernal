@@ -213,18 +213,19 @@ Without the flag, `--network mainnet` exits with code 2.
 ```json
 [
   {
-    "pubkey": "8420...",
-    "withdrawal_credentials": "01000...",
+    "pubkey": "8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9",
+    "withdrawal_credentials": "0100000000000000000000005aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
     "amount": 32000000000,
-    "signature": "...",
-    "deposit_message_root": "...",
-    "deposit_data_root": "...",
+    "signature": "a9e7b4e88886658acb53d72eb454ee8f108a1380db95155b1d871145944669a10bd073ee38d71489775a7a78364918810f1e1cb8888c1d6dade3fa2670bdd558e325d1f4626da66127321d160c07ef5866a7828d9978d8a2723d01476d4e5717",
+    "deposit_message_root": "3e320f9b0a2c6e33536764bc0f7c332e5241ad96d9b8c9a3ea3de15512a964c7",
+    "deposit_data_root": "cd59791bcc14902cae86760c9e87842517d511b8a6a935887f2d319c976b46a8",
     "fork_version": "10000910",
     "network_name": "hoodi",
     "deposit_cli_version": "2.7.0"
   }
 ]
 ```
+(The concrete bytes above are from the regenerated `testdata/hoodi/deposit_data-expected.json` post-M0.10 refresh; real runs produce `deposit_data-<RFC3339Nano>-<sha256[:4]>.json`.)
 
 ---
 
@@ -259,7 +260,7 @@ Air-gapped build (all values explicit):
 ```bash
 ./bin/eth-deposit-tx build \
   --network hoodi \
-  --input-file ./out/deposit_data-1716000000.json \
+  --input-file ./out/deposit_data-2026-06-07T06:11:44.170453Z-4f7dc6a8.json \
   --gas-limit 300000 \
   --max-fee-per-gas 30000000000 \
   --max-priority-fee-per-gas 2000000000 \

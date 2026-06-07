@@ -1,0 +1,35 @@
+name: lint
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  lint:
+    name: lint + unit tests (M0.1 gates)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+
+      - name: go build
+        run: make -C go build build-tx
+
+      - name: make lint (gofmt + vet + staticcheck + errcheck + govulncheck)
+        run: make -C go lint
+
+      - name: make test
+        env:
+          CGO_ENABLED: 1
+        run: make -C go test
+
+      - name: make assert-no-zero-wc (M0.10-1 regression guard)
+        run: make -C go assert-no-zero-wc

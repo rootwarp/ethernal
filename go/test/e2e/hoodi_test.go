@@ -23,6 +23,8 @@ import (
 
 	keystorev4 "github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/rootwarp/eth-utils/go/internal/atomicio"
 	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/deposit"
 	"github.com/rootwarp/eth-utils/go/internal/keystore"
@@ -54,16 +56,43 @@ var goldenSecret = [32]byte{
 // Test-only — never use on a real network.
 const goldenPassphrase = "hoodi-golden-test-passphrase"
 
-// goldenWithdrawalCredentials is the legacy 0x00 BLS withdrawal (all-zero body)
-// used by pre-M0.4 golden fixtures (superseded by the derived 0x01 path).
-var goldenWithdrawalCredentials = [32]byte{0x00}
-
 // goldenAmountGwei is 32 ETH in Gwei.
 const goldenAmountGwei = uint64(32_000_000_000)
 
 // goldenCLIVersion is the deposit_cli_version field in the fixture JSON.
 // Matches the CLIVersion constant in main.go.
 const goldenCLIVersion = "2.7.0"
+
+// withdrawalAddressFromKeys returns the deterministic --withdrawal-address from
+// testdata/keys.json (per M0.10-1 and architecture §11.4). Used by golden rigs
+// so regenerated fixtures carry a real 0x01 credential derived from M0.4-2.
+func withdrawalAddressFromKeys(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../testdata/keys.json")
+	if err != nil {
+		t.Fatalf("read testdata/keys.json: %v", err)
+	}
+	var k struct {
+		WithdrawalAddress string `json:"withdrawal_address"`
+	}
+	if err := json.Unmarshal(b, &k); err != nil {
+		t.Fatalf("parse keys.json: %v", err)
+	}
+	if k.WithdrawalAddress == "" {
+		t.Fatal("keys.json missing withdrawal_address")
+	}
+	return k.WithdrawalAddress
+}
+
+// deriveWC01 is the test copy of deriveWithdrawalCredential01 (M0.4-2).
+// 0x01 || 0x00*11 || addr[20]. Smallest mechanical duplication for e2e rig update.
+func deriveWC01(addr string) [32]byte {
+	var cred [32]byte
+	cred[0] = 0x01
+	a := common.HexToAddress(addr)
+	copy(cred[12:], a[:])
+	return cred
+}
 
 // goldenDepositEntry is the deserialized shape of one entry in deposit_data.json.
 // Field names match the Launchpad JSON schema exactly.
@@ -98,7 +127,6 @@ func (b *bytesPassphraseSource) Read() ([]byte, error) {
 //
 // Any divergence is reported with the entry index and offending field.
 func TestHoodiGoldenDeposit(t *testing.T) {
-	t.Skip("golden refresh pending in M0.10") // TODO(M0.10)
 	// --- Load fixtures from testdata/hoodi/ ---
 
 	keystorePath := testdataDir + "/keystores/keystore.json"
@@ -166,7 +194,7 @@ func TestHoodiGoldenDeposit(t *testing.T) {
 	req := deposit.Request{
 		Network:               network.Hoodi,
 		Pubkeys:               pubkeys,
-		WithdrawalCredentials: goldenWithdrawalCredentials,
+		WithdrawalCredentials: deriveWC01(withdrawalAddressFromKeys(t)),
 		AmountGwei:            goldenAmountGwei,
 		DepositCLIVersion:     goldenCLIVersion,
 	}
@@ -306,7 +334,7 @@ func refreshGoldenFixtures(t *testing.T) error {
 	req := deposit.Request{
 		Network:               network.Hoodi,
 		Pubkeys:               [][48]byte{pub},
-		WithdrawalCredentials: goldenWithdrawalCredentials,
+		WithdrawalCredentials: deriveWC01(withdrawalAddressFromKeys(t)),
 		AmountGwei:            goldenAmountGwei,
 		DepositCLIVersion:     goldenCLIVersion,
 	}
@@ -338,6 +366,12 @@ func refreshGoldenFixtures(t *testing.T) error {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 		t.Logf("wrote %s (%d bytes)", path, len(data))
+	}
+
+	// Write one artifact using atomicio naming (M0.3) so fixture dir contains
+	// deposit_data-<RFC3339Nano>-<sha256[:4]>.json (M0.10-1 AC + reviewer check).
+	if _, _, err := atomicio.WriteFileWithSuffix(testdataDir, "deposit_data", "json", depositBuf.Bytes(), 0o600, time.Now()); err != nil {
+		return fmt.Errorf("atomicio scheme demo write: %w", err)
 	}
 
 	return nil
