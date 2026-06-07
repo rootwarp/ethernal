@@ -630,9 +630,7 @@ func ValidateAgainstNetwork(entry deposit.Entry, params network.Params) error
   failures to documented exit code (GO-035, FR-P1-D4).
 - `ErrRPCDial` (`rpc_client.go:48-53`): redacted URL — `scheme://host` only via
   `internal/cli.Redact` (GO-049, FR-P0-C3).
-- Hybrid `--rpc-url` decision (FR-P1-D5): proposed answer — wire `NewEthClient` into
-  `BuildConfig.RPC` on `run` only; `build` stays strictly offline (research recommendation,
-  PRD §11.3 leaning). **Open question carried into M1 ADR.**
+- Hybrid `--rpc-url` decision (FR-P1-D5): wired on `run` only per ADR-004 (M1.3-5); `build` stays strictly offline.
 
 **Files changed:** `internal/tx/validation.go:14-58`, `:43-45`; `internal/tx/interface.go:52-53`;
 `internal/tx/types.go:11-13`; `internal/tx/builder.go:40-71` (orchestration), `:78-82`,
@@ -1581,7 +1579,7 @@ PRD §6 FR-→M map and PRD §14 finding map.)
 | RPC chain-ID guard fail-closed | `internal/tx` | GO-033 |
 | Gas estimate overflow + contract addr direct | `internal/tx` | GO-034 |
 | `errors.Is(ethereum.NotFound)` + retry transient + receipt-fail sentinel | `internal/tx` | GO-035 |
-| Hybrid `--rpc-url` decision (recommend: wire on `run` only) | `cmd/eth-deposit-tx`, `internal/tx` | FR-P1-D5 |
+| Hybrid `--rpc-url` decision (wired on `run` only per ADR-004) | `cmd/eth-deposit-tx`, `internal/tx` | FR-P1-D5 |
 | Keystore structural-vs-checksum classification | `internal/keystore` | GO-025 |
 | `ScanDir` logger injection | `internal/keystore` | GO-028 |
 | 32-byte secret length check | `internal/keystore` | GO-029 |
@@ -1908,14 +1906,13 @@ These are the conflicts the team-lead asked to be flagged rather than silently r
 - **Consequences:** The helper is tested via `send_test.go`; if a second consumer appears, it
   migrates to `internal/tx` after the `signer→tx` dependency is broken.
 
-### ADR-004: Reject `--rpc-url` on `build`/`run` in M0; revisit in M1 for `run`
+### ADR-004: Reject `--rpc-url` on `build`/`run` in M0; wire on `run` only in M1
 
-- **Status:** Accepted (M0 reject), M1 deferred (FR-P1-D5).
-- **Context:** GO-005 + FR-P0-B8 + research/02 hybrid mode unknowns.
-- **Decision:** M0 returns `tx.ErrRPCURLRejected` with operator guidance. M1 wires on `run` only;
-  `build` stays strictly offline (research recommendation, PRD §11.3 lean).
-- **Alternatives:** silently honour `--rpc-url`; quietly delete the flag.
-- **Consequences:** breaking change documented in MIGRATION.md.
+- **Status:** Accepted (M0 reject; M1 per M1.3-5).
+- **Context:** GO-005 + FR-P0-B8 + research/02 hybrid mode unknowns. Closes architecture §19 conflict #4 (FR-P1-D5 final).
+- **Decision:** M0 returns `tx.ErrRPCURLRejected` with operator guidance. M1 wires on `run` only (M1.3-5 impl); `build` stays strictly offline. Wire-on-`run`-only is the locked answer; rationale: air-gap for build, resolve on run (per ADR-004/Spike S3).
+- **Alternatives:** silently honour `--rpc-url`; wire on both; permanently delete the flag.
+- **Consequences:** breaking change documented in MIGRATION.md (M0.9 v0.2 baseline; M1.8 v0.2→v1.0 hybrid cross-link).
 
 ### ADR-005: `Min/Max` deposit amount range constants from M0
 
