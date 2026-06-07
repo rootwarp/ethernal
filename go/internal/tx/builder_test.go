@@ -1,10 +1,12 @@
 package tx
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strings"
 	"testing"
@@ -494,7 +496,7 @@ func TestBuilder_BuildUnsigned_RPCMode_ChainIDMismatch(t *testing.T) {
 	}
 }
 
-func TestBuilder_BuildUnsigned_RPCMode_ChainIDCallError_Ignored(t *testing.T) {
+func TestBuilder_BuildUnsigned_RPCMode_ChainIDCallError_FailClosed(t *testing.T) {
 	ctx := context.Background()
 	entry := makeValidEntry()
 	params := holeskyParams(t)
@@ -514,9 +516,12 @@ func TestBuilder_BuildUnsigned_RPCMode_ChainIDCallError_Ignored(t *testing.T) {
 	}
 	b := NewBuilder()
 	_, err := b.BuildUnsigned(ctx, entry, cfg)
-	// ChainID call error should be silently ignored — build should succeed.
-	if err != nil {
-		t.Fatalf("ChainID call error should be ignored, got: %v", err)
+	// ChainID call error now fails closed (M1.3-2); no silent ignore.
+	if err == nil {
+		t.Fatal("expected error on ChainID RPC err, got nil")
+	}
+	if !errors.Is(err, ErrChainIDZero) {
+		t.Errorf("expected ErrChainIDZero, got: %v", err)
 	}
 }
 
@@ -726,5 +731,63 @@ func TestBuilder_BuildUnsigned_RPCMode_PendingNonceAtError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "PendingNonceAt") {
 		t.Errorf("error should mention PendingNonceAt, got: %v", err)
+	}
+}
+
+// TestResolveRPC_ChainIDZero_FailClosed (mock): RPC returns 0 → error returned (no silent continue). M1.3-2 AC.
+func TestResolveRPC_ChainIDZero_FailClosed(t *testing.T) {
+	ctx := context.Background()
+	entry := makeValidEntry()
+	params := holeskyParams(t)
+
+	rpc := &mockRPC{
+		ChainIDFn: func(_ context.Context) (*big.Int, error) {
+			return big.NewInt(0), nil
+		},
+	}
+	cfg := BuildConfig{
+		NetworkParams: params,
+		RPC:           rpc,
+	}
+	_, _, _, _, err := resolveRPC(ctx, cfg, entry, nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrChainIDZero) {
+		t.Errorf("expected ErrChainIDZero, got: %v", err)
+	}
+}
+
+// TestResolveRPC_LoggerEmits_Warning (capture logger): warn-and-continue branches actually emit a WARN record. M1.3-2 AC.
+func TestResolveRPC_LoggerEmits_Warning(t *testing.T) {
+	ctx := context.Background()
+	entry := makeValidEntry()
+	params := holeskyParams(t)
+
+	var logBuf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	rpc := &mockRPC{
+		ChainIDFn: func(_ context.Context) (*big.Int, error) {
+			return nil, errors.New("rpc chainid fail")
+		},
+	}
+	cfg := BuildConfig{
+		NetworkParams: params,
+		RPC:           rpc,
+	}
+	_, _, _, _, err := resolveRPC(ctx, cfg, entry, lg)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrChainIDZero) {
+		t.Errorf("expected ErrChainIDZero, got: %v", err)
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, "WARN") && !strings.Contains(logs, "level=WARN") {
+		t.Errorf("expected WARN record in captured logger, got: %q", logs)
+	}
+	if !strings.Contains(logs, "chain ID resolution from RPC failed") {
+		t.Errorf("expected warn msg, got: %q", logs)
 	}
 }

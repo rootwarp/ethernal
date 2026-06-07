@@ -21,6 +21,7 @@ var (
 	// RPC-mode sentinel errors.
 	ErrMissingFromForNonce = errors.New("from address required to fetch nonce via RPC")
 	ErrChainIDMismatch     = errors.New("RPC chain ID does not match configured network")
+	ErrChainIDZero         = errors.New("RPC chain ID is zero")
 
 	// Network/fork binding sentinel (tx DiD partner to deposit's ValidateForNetwork; exit 2 per architecture §15).
 	ErrNetworkMismatchTx = errors.New("entry network does not match target network params")
