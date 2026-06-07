@@ -704,10 +704,10 @@ func TestLedgerSigner_Sign_ChainIDMismatch_APDU6a81(t *testing.T) {
 	}
 }
 
-// TestLedgerSigner_Sign_AppNotOpen_APDU6d00 verifies that APDU code 6d00
-// in a SignTx error is treated as a generic ledger error (not a user rejection).
+// TestLedgerSigner_Sign_UnknownAPDUCode_NotSentinel verifies that an unknown APDU code
+// (e.g. 6f00) in a SignTx error is treated as a generic ledger error (not a user rejection).
 // The isAppNotOpenErr heuristic only applies at construction time (Open/Status);
-// during Sign, 6d00 would be an unexpected app state, mapped to a generic error.
+// during Sign, such codes map to generic error (no sentinel).
 func TestLedgerSigner_Sign_UnknownAPDUCode_NotSentinel(t *testing.T) {
 	w := &mockWallet{
 		SignTxFn: func(_ accounts.Account, _ *types.Transaction, _ *big.Int) (*types.Transaction, error) {

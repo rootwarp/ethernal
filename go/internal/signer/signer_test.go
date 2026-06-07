@@ -31,39 +31,6 @@ func (f *fakeSigner) Name() string                  { return f.name }
 func (f *fakeSigner) RequiresUserInteraction() bool { return false }
 func (f *fakeSigner) Close() error                  { return nil }
 
-func TestFakeSignerName(t *testing.T) {
-	s := &fakeSigner{name: "test-signer"}
-	if got := s.Name(); got != "test-signer" {
-		t.Errorf("Name() = %q, want %q", got, "test-signer")
-	}
-}
-
-func TestFakeSignerSign(t *testing.T) {
-	s := &fakeSigner{name: "fake"}
-	unsigned := tx.UnsignedTx{
-		ChainID: 1,
-		To:      "0x1234",
-		Value:   "0x1",
-		Data:    "0xabcd",
-		Gas:     21000,
-		Type:    "0x2",
-	}
-	ctx := context.Background()
-	signed, err := s.Sign(ctx, unsigned)
-	if err != nil {
-		t.Fatalf("Sign() returned unexpected error: %v", err)
-	}
-	if signed == nil {
-		t.Fatal("Sign() returned nil SignedTx")
-	}
-	if signed.From != "0xdeadbeef" {
-		t.Errorf("From = %q, want %q", signed.From, "0xdeadbeef")
-	}
-	if signed.Unsigned.ChainID != unsigned.ChainID {
-		t.Errorf("Unsigned.ChainID = %d, want %d", signed.Unsigned.ChainID, unsigned.ChainID)
-	}
-}
-
 func TestSentinelErrors(t *testing.T) {
 	errs := []error{
 		signer.ErrUserRejected,

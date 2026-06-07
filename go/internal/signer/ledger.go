@@ -129,13 +129,11 @@ func (s *LedgerSigner) setLoggerForTest(l *slog.Logger) {
 }
 
 // isAppNotOpenErr returns true when err suggests the Ethereum app is not open.
-// Matches known APDU error codes (6e00, 6e01, 6d00) and textual hints.
-// The textual heuristic requires both "app" AND ("not open" OR "open the") to
-// reduce false positives (e.g. "snapshot not found in app" no longer matches).
+// Matches known APDU error codes (6e00, 6e01) [CLA not supported]; 6d00 (INS not supported) is for some paths per current geth accounts/usbwallet/ledger + APDU spec. Textual hints require both "app" AND ("not open" OR "open the") to reduce false positives.
 // TODO(3.6): replace with exact strings from real hardware test.
 func isAppNotOpenErr(err error) bool {
 	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "6e00") || strings.Contains(msg, "6e01") || strings.Contains(msg, "6d00") {
+	if strings.Contains(msg, "6e00") || strings.Contains(msg, "6e01") {
 		return true
 	}
 	return strings.Contains(msg, "app") &&
