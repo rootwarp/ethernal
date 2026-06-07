@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	ucli "github.com/urfave/cli/v2"
 
@@ -963,5 +966,65 @@ func TestSend_ReceiptTimeout_Exit5_FileAbsent(t *testing.T) {
 	// no file written on timeout path
 	if _, statErr := os.Stat(recFile); statErr == nil {
 		t.Error("receipt file should be absent on timeout")
+	}
+}
+
+// TestSend_BroadcasterChainIDCanceled_ExitCanceled (M1.5-7 AC): cancel mid BroadcasterChainID call
+// (via SIGINT -> NotifyContext -> c.Context cancel) yields err with errors.Is(context.Canceled) and
+// ExitCodeFor==4 (not 5). Uses existing withMockBroadcaster + send test helpers + Notify+self-Kill+
+// goroutine+select pattern exactly from M1.1/M1.5-6. The mock blocks on ctx so "mid-call" cancel is
+// observed; happy paths + other error paths untouched.
+func TestSend_BroadcasterChainIDCanceled_ExitCanceled(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	withMockBroadcaster(t, &mockBroadcaster{
+		BroadcasterChainIDFn: func(ctx context.Context) (uint64, error) {
+			// block until ctx canceled (simulates mid-call work that is ctx-aware, like real ChainID)
+			<-ctx.Done()
+			return 0, ctx.Err()
+		},
+		SendRawTransactionFn: func(_ context.Context, _ string) (string, error) {
+			t.Error("SendRawTransaction should not be called on chainID cancel")
+			return "", nil
+		},
+	})
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	// follow M1.5-6 / M1.1: setup NotifyContext, run app in goroutine (using RunContext so c.Context carries it),
+	// sleep to let it enter BroadcasterChainID, self-Kill(SIGINT) to cancel, assert on returned err.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- app.RunContext(ctx, []string{
+			"eth-deposit-tx", "send",
+			"--input", writeTempSignedTx(t),
+			"--rpc-url", "http://localhost:8545",
+			"--yes",
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond) // time-based arrival matches siblings (e.g. TestSIGTERM_CleanShutdown:5ms); BroadcasterChainIDFn mock blocks reliably once reached (matches M1.5-6)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("kill self: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected errors.Is(err, context.Canceled) true; got err=%v", err)
+		}
+		if got := ExitCodeFor(err); got != 4 {
+			t.Errorf("exit code = %d, want 4; err = %v", got, err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for BroadcasterChainID cancel to surface")
 	}
 }

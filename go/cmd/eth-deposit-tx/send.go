@@ -207,7 +207,7 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 	// 5. RPC chain ID guard now against the *decoded* rlpTx (not signed.Unsigned).
 	rpcChainID, err := broadcaster.BroadcasterChainID(c.Context)
 	if err != nil {
-		return fmt.Errorf("%w: fetch chain ID: %v", internaltx.ErrBroadcastFailed, err)
+		return fmt.Errorf("%w: fetch chain ID: %w", internaltx.ErrBroadcastFailed, err)
 	}
 	if rpcChainID != rlpTx.ChainId().Uint64() {
 		return fmt.Errorf("%w: signed tx has chain ID %d but RPC reports %d",
