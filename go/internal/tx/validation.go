@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/rootwarp/eth-utils/go/internal/deposit"
+	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
 // Validate runs entry-level and network-level checks for BuildUnsigned. It does
@@ -23,7 +24,7 @@ func Validate(entry deposit.Entry, cfg BuildConfig) error {
 	}
 
 	// Amount check.
-	if entry.Amount != 32_000_000_000 {
+	if entry.Amount != network.MinDepositAmountGwei {
 		return fmt.Errorf("%w: got %d", ErrInvalidAmount, entry.Amount)
 	}
 

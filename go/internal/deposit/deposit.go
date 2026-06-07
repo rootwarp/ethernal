@@ -41,7 +41,7 @@ type Request struct {
 	// uniformly to every entry in this request.
 	WithdrawalCredentials [32]byte
 
-	// AmountGwei is the deposit amount in Gwei (default: 32_000_000_000).
+	// AmountGwei is the deposit amount in Gwei (default: MinDepositAmountGwei).
 	AmountGwei uint64
 
 	// DepositCLIVersion is the version string written into the output JSON,

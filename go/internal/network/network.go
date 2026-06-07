@@ -61,6 +61,12 @@ var DomainDeposit = [4]byte{0x03, 0x00, 0x00, 0x00}
 // signing — always 32 zero bytes per the consensus spec.
 var ZeroGenesisValidatorsRoot = [32]byte{}
 
+// MinDepositAmountGwei is the minimum deposit amount in Gwei (MIN_ACTIVATION_BALANCE per EIP-7251).
+const MinDepositAmountGwei uint64 = 32_000_000_000
+
+// MaxDepositAmountGwei is the maximum deposit amount in Gwei (MAX_EFFECTIVE_BALANCE_ELECTRA per EIP-7251).
+const MaxDepositAmountGwei uint64 = 2_048_000_000_000
+
 // mustParseAddr converts a 40-char hex string (no 0x prefix) to a [20]byte.
 // Panics on invalid input — used only for compile-time constant initialisation.
 func mustParseAddr(s string) [20]byte {

@@ -13,9 +13,9 @@ import (
 // ErrNilContext is returned when BuildUnsigned is called with a nil context.
 var ErrNilContext = errors.New("context must not be nil")
 
-// ErrInvalidAmount is returned when the deposit entry amount is not exactly 32 ETH (32_000_000_000 Gwei).
+// ErrInvalidAmount is returned when the deposit entry amount is not exactly 32 ETH (MinDepositAmountGwei Gwei).
 // Only the 32 ETH first-deposit case is supported in Phase 2.
-var ErrInvalidAmount = errors.New("deposit amount must be exactly 32_000_000_000 Gwei (32 ETH)")
+var ErrInvalidAmount = errors.New("deposit amount must be exactly MinDepositAmountGwei Gwei (32 ETH)")
 
 // value32ETH is 32 ETH expressed in wei (32 * 10^18 = 0x1bc16d674ec800000).
 var value32ETH = new(big.Int).Mul(big.NewInt(32), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
