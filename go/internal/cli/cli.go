@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	ucli "github.com/urfave/cli/v2"
 
 	"github.com/rootwarp/eth-utils/go/internal/bls"
@@ -31,6 +32,13 @@ type Config struct {
 
 	// OutputDir is the validated, writable directory for deposit_data-<ts>.json.
 	OutputDir string
+
+	// WithdrawalAddress is the EIP-55 checksummed 20-byte hex address (0x + 40
+	// chars) supplied via the required --withdrawal-address flag (M0.4-1). It is
+	// validated (IsHexAddress + exact len 42 + post-check addr.Hex() == input for
+	// checksum) before Config is constructed. Per arch §6.11 this is the input
+	// for 0x01 credentials; the 0x00 BLS form is absent in v0.2.
+	WithdrawalAddress string
 
 	// PassphraseEnv is the name of the environment variable holding the keystore
 	// passphrase. An empty string means the tool will fall back to a TTY prompt.
@@ -76,13 +84,13 @@ type Config struct {
 
 // NewApp constructs and returns a configured *cli.App. The run callback receives
 // a validated Config; it is only invoked when all flags are present and valid.
-// Validation errors are returned as cli.Exit errors (exit code 1) so that urfave
-// can print them to ErrWriter and exit cleanly.
+// Validation errors are returned as cli.Exit errors (exit code 2, per PRD for
+// user/configuration errors) so that urfave can print them to ErrWriter and exit cleanly.
 func NewApp(run func(context.Context, Config) error) *ucli.App {
 	app := ucli.NewApp()
 	app.Name = "eth-deposit-gen"
 	app.Usage = "Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys"
-	app.UsageText = `eth-deposit-gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR [--passphrase-env VAR]`
+	app.UsageText = `eth-deposit-gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]`
 	app.Description = `Produces deposit_data-<ts>.json for one or more BLS validator public keys by
 signing each deposit message with the BLS key loaded from an EIP-2335 keystore.
 Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.`
@@ -102,7 +110,8 @@ EXAMPLES:
      --network hoodi \
      --keystore-dir ./keystores/ \
      --pubkeys 0x93247f2209abcafd...,0xa1b2c3d4e5f6... \
-     --output-dir ./out
+     --output-dir ./out \
+     --withdrawal-address 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed
 
    # Mainnet, single pubkey (requires explicit acknowledgement)
    eth-deposit-gen \
@@ -110,7 +119,8 @@ EXAMPLES:
      --i-understand-this-is-mainnet \
      --keystore-dir ./keystores/ \
      --pubkeys 0x93247f2209abcafd... \
-     --output-dir ./out
+     --output-dir ./out \
+     --withdrawal-address 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed
 
 OPTIONS:
    {{range .VisibleFlags}}{{.}}
@@ -137,6 +147,11 @@ OPTIONS:
 			Name:     "output-dir",
 			Usage:    "Existing, writable directory for the output deposit_data-<ts>.json file",
 			Required: true,
+		},
+		&ucli.StringFlag{
+			Name:  "withdrawal-address",
+			Usage: "Required EIP-55 checksummed (or all-lower) 0x-prefixed 20-byte execution address used to derive 0x01 withdrawal credential (e.g. 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed). Prevents all-zero 0x00 credential (GO-001).",
+			// Required omitted deliberately: the presence + EIP-55 guard inside Action returns ucli.Exit(..., 2) (ExitCoder) for reliable cast in tests and consistent pre-val pattern (other Requireds still use urfave + exitCodeFor substring fallback for their missing->2).
 		},
 		&ucli.StringFlag{
 			Name:  "passphrase-env",
@@ -178,8 +193,9 @@ OPTIONS:
 	}
 
 	app.Action = func(c *ucli.Context) error {
-		// Validation order: network first (per spec), then mainnet ack, then pubkeys,
-		// then keystore-dir (directory readability probe), then output-dir.
+		// Validation order: network first (per spec), then mainnet ack, then
+		// --withdrawal-address (M0.4-1 EIP-55 guard), then pubkeys, then
+		// keystore-dir (directory readability probe), then output-dir.
 
 		// 1. Parse and validate --network (eth-deposit-gen only supports mainnet and hoodi)
 		net, err := network.ParseFlag(c.String("network"))
@@ -195,6 +211,33 @@ OPTIONS:
 		mainnetAck := c.Bool("i-understand-this-is-mainnet")
 		if net == network.Mainnet && !mainnetAck {
 			return ucli.Exit("mainnet selected; pass --i-understand-this-is-mainnet to acknowledge", 2)
+		}
+
+		// 1b. Validate --withdrawal-address (M0.4-1, closes flag-layer of GO-001).
+		// Enforces at the CLI input boundary: exact 42 chars (0x + 40 hex), IsHexAddress
+		// (valid hex, any case), and EIP-55 checksum only when the supplied value uses
+		// mixed case (all-lower and all-upper valid-hex forms are accepted as "no
+		// checksum claim"). On any failure: clear operator guidance + exit 2; no
+		// deposit is produced. The validated string is bound to Config and will be
+		// used (M0.4-2) to derive 0x01 || 0x00*11 || addr[20]. This is prerequisite
+		// to safely deleting the dangerous defaultWithdrawalCreds (M0.4-3).
+		withdrawalAddr := c.String("withdrawal-address")
+		if len(withdrawalAddr) != 42 {
+			return ucli.Exit(fmt.Sprintf("--withdrawal-address: has invalid length %d (want 42)", len(withdrawalAddr)), 2)
+		}
+		if !common.IsHexAddress(withdrawalAddr) {
+			return ucli.Exit("--withdrawal-address: contains non-hex characters (after 0x prefix)", 2)
+		}
+		// Normalize 0X prefix (IsHex accepts it; .Hex() always uses 0x) so that
+		// 0X + correct EIP55 mixed-case letters is accepted (not falsely treated as mismatch).
+		norm := withdrawalAddr
+		if strings.HasPrefix(norm, "0X") {
+			norm = "0x" + norm[2:]
+		}
+		if norm != strings.ToLower(norm) && norm != strings.ToUpper(norm) {
+			if common.HexToAddress(withdrawalAddr).Hex() != norm {
+				return ucli.Exit("--withdrawal-address: EIP-55 checksum mismatch (supply the address in all-lowercase or with correct mixed-case checksum)", 2)
+			}
 		}
 
 		// 2. Parse and validate --pubkeys
@@ -238,6 +281,7 @@ OPTIONS:
 			Parallel:             parallel,
 			VerifyWithDepositCLI: c.Bool("verify-with-deposit-cli"),
 			DepositCLIPath:       c.String("deposit-cli-path"),
+			WithdrawalAddress:    withdrawalAddr,
 		}
 
 		// 5. Print confirmation banner to stderr before invoking run.

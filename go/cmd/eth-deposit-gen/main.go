@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -262,6 +263,10 @@ func runWithDeps(ctx context.Context, cfg cli.Config, d deps) error {
 		log.Debug("mainnet: ack not set, aborting")
 		return errMainnetAckRequired
 	}
+	// WithdrawalAddress (EIP-55 validated 0x01 input from --withdrawal-address flag,
+	// bound in cli layer per M0.4-1) is received here in the Config load path for
+	// M0.4-2 derivation (currently _ = to satisfy "bound in main.go" per review/plan notes; no use yet, no creep).
+	_ = cfg.WithdrawalAddress
 	if cfg.Network == network.Mainnet {
 		log.Debug("mainnet: explicit ack verified")
 	}
@@ -479,6 +484,13 @@ func exitCodeFor(err error) int {
 	// CLI validation errors from urfave/cli (ExitCoder with code 2).
 	var ec ucli.ExitCoder
 	if errors.As(err, &ec) && ec.ExitCode() == 2 {
+		return 2
+	}
+	// Substring fallback for urfave required-flag errors (errRequiredFlags wrapped
+	// in MultiError; not an ExitCoder, defaults to 1). Maps "Required flag \"...\" not set"
+	// (including for --withdrawal-address) to exit 2. This is the pre-validation
+	// pattern for missing required flags (M0.4-1 flag + M0.4-7/M1.5-1).
+	if strings.Contains(err.Error(), "Required flag") {
 		return 2
 	}
 

@@ -139,10 +139,11 @@ func makeCfg() cli.Config {
 	var pk [48]byte
 	pk[0] = 0xAB
 	return cli.Config{
-		KeystoreDir: "/fake/keystores",
-		Pubkeys:     [][48]byte{pk},
-		Network:     network.Hoodi,
-		OutputDir:   "/tmp",
+		KeystoreDir:       "/fake/keystores",
+		Pubkeys:           [][48]byte{pk},
+		Network:           network.Hoodi,
+		OutputDir:         "/tmp",
+		WithdrawalAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
 	}
 }
 
@@ -1055,11 +1056,12 @@ func TestRunWithDeps_ParallelWorkerError(t *testing.T) {
 	d.loader = &failLoader
 
 	cfg := cli.Config{
-		KeystoreDir: "/fake/keystores",
-		Pubkeys:     pks,
-		Network:     network.Hoodi,
-		OutputDir:   "/tmp",
-		Parallel:    2,
+		KeystoreDir:       "/fake/keystores",
+		Pubkeys:           pks,
+		Network:           network.Hoodi,
+		OutputDir:         "/tmp",
+		Parallel:          2,
+		WithdrawalAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
 	}
 
 	err := runWithDeps(context.Background(), cfg, d)
@@ -1477,5 +1479,52 @@ func TestNoSlogImportInSigningPackages(t *testing.T) {
 				t.Fatalf("scan %q: %v", path, err)
 			}
 		}
+	}
+}
+
+// Test_WithdrawalAddress_Missing_Exit2 rejects missing flag with exit code 2.
+// Exercises the real CLI path (Action returns ucli.Exit(2) since no Required on
+// this flag; inside len/IsHex guard catches empty) so cast to ExitCoder succeeds
+// (addresses review HIGH on errRequiredFlags type + reliable exit 2 per AC).
+func Test_WithdrawalAddress_Missing_Exit2(t *testing.T) {
+	ksDir := t.TempDir()
+	outDir := t.TempDir()
+
+	// Real invocation: supply the other 4 Required flags, omit only --withdrawal-address.
+	// Withdrawal check (before pubkeys parse) will fire, return ucli.Exit code 2 (ExitCoder).
+	app := cli.NewApp(func(context.Context, cli.Config) error { return nil })
+	app.Writer = io.Discard
+	app.ErrWriter = io.Discard
+	app.ExitErrHandler = func(_ *ucli.Context, _ error) {}
+	args := []string{
+		"eth-deposit-gen",
+		"--keystore-dir", ksDir,
+		"--pubkeys", "0x" + strings.Repeat("a", 96), // dummy; withdrawal guard fires first
+		"--network", "hoodi",
+		"--output-dir", outDir,
+		// deliberately no --withdrawal-address
+	}
+	err := app.Run(args)
+	if err == nil {
+		t.Fatal("run without --withdrawal-address: error = nil, want error")
+	}
+	exitErr, ok := err.(ucli.ExitCoder)
+	if !ok {
+		t.Fatalf("error type %T is not ucli.ExitCoder (review HIGH on errRequiredFlags cast)", err)
+	}
+	if exitErr.ExitCode() != 2 {
+		t.Errorf("ExitCode = %d, want 2", exitErr.ExitCode())
+	}
+	if !strings.Contains(err.Error(), "withdrawal-address") {
+		t.Errorf("error message %q does not contain withdrawal-address", err.Error())
+	}
+
+	// Also verify exitCodeFor mapping (for the real err and sim of urfave shape for other flags).
+	if got := exitCodeFor(err); got != 2 {
+		t.Errorf("exitCodeFor(real missing) = %d, want 2", got)
+	}
+	sim := fmt.Errorf("Required flag \"withdrawal-address\" not set")
+	if got := exitCodeFor(sim); got != 2 {
+		t.Errorf("exitCodeFor(sim) = %d, want 2", got)
 	}
 }
