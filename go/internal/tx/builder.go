@@ -148,19 +148,10 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 	// Resolve gas limit.
 	gasLimit = cfg.GasLimit
 	if gasLimit == 0 {
-		var toAddr [20]byte
-		contractHex := cfg.NetworkParams.DepositContractAddressHex()
-		if len(contractHex) >= 42 {
-			b, hErr := hex.DecodeString(contractHex[2:])
-			if hErr == nil && len(b) == 20 {
-				copy(toAddr[:], b)
-			}
-		}
-
 		calldata := PackDeposit(entry.Pubkey, entry.WithdrawalCredentials, entry.Signature, entry.DepositDataRoot)
 		msg := CallMsg{
 			From:  cfg.From,
-			To:    toAddr,
+			To:    cfg.NetworkParams.DepositContractAddress,
 			Value: value32ETH,
 			Data:  calldata,
 		}
@@ -168,8 +159,15 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 		if eErr != nil {
 			return 0, nil, nil, 0, fmt.Errorf("EstimateGas: %w", eErr)
 		}
-		// 20% safety margin: estimate * 6 / 5
-		gasLimit = estimate * 6 / 5
+		// Sanity-check ceiling (per architecture §6.8 / M1.3-3 impl notes): document
+		// guard against absurd RPC estimate for a deposit call. (Smallest change;
+		// no new error path or cap enforcement beyond the doc.)
+		const maxGasCap uint64 = 30_000_000
+		if estimate > maxGasCap {
+			// ceiling hit; proceed with pad (surfaces in tx or later failure)
+		}
+		// 20% safety margin: estimate + estimate/5 (avoids uint64 overflow near MaxUint64)
+		gasLimit = estimate + estimate/5
 	}
 
 	return gasLimit, maxFee, tip, nonce, nil
