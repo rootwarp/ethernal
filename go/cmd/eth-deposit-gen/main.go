@@ -149,14 +149,21 @@ type deps struct {
 // Invocation: <cliPath> verify --input-file <outputPath>
 // This matches staking-deposit-cli >= 2.7.0. See Issue #18 for rationale.
 func runDepositCLIVerify(ctx context.Context, cliPath, outputPath string) error {
-	if _, err := exec.LookPath(cliPath); err != nil {
-		return fmt.Errorf("%w: %q not found in PATH: %v", ErrDepositCLINotFound, cliPath, err)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	cmd := exec.CommandContext(ctx, cliPath, "verify", "--input-file", outputPath)
+	full, err := exec.LookPath(cliPath)
+	if err != nil {
+		return fmt.Errorf("%w: %q not found in PATH: %w", ErrDepositCLINotFound, cliPath, err)
+	}
+	cmd := exec.CommandContext(ctx, full, "verify", "--input-file", outputPath)
 	cmd.Env = sanitizedEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrDepositCLIFailed, string(out))
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		return fmt.Errorf("%w: %s: %w", ErrDepositCLIFailed, string(out), err)
 	}
 	return nil
 }

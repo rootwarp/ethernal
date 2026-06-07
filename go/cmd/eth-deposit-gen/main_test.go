@@ -1670,6 +1670,48 @@ func TestRunWithDeps_Verify_PrintenvMocked_NoSecretKeys(t *testing.T) {
 	}
 }
 
+// TestRunDepositCLIVerify_SIGINT_MidExec_Exit4 (M1.5-6 AC): exercises the
+// production runDepositCLIVerify (via "yes" as a never-exiting cliPath) under
+// SIGINT while blocked in the exec (via in-process runWithDeps + NotifyContext self-Kill,
+// matching sibling SIGINT tests); the ctx cancel aborts the CommandContext, the
+// post-exec guard returns context.Canceled (not ErrDepositCLIFailed), so errors.Is
+// and exitCodeFor both yield 4.
+func TestRunDepositCLIVerify_SIGINT_MidExec_Exit4(t *testing.T) {
+	if _, err := exec.LookPath("yes"); err != nil {
+		t.Skip("yes not found in PATH; skipping SIGINT mid-verify exec test")
+	}
+
+	var summaryBuf bytes.Buffer
+	d := makeTestDeps(&summaryBuf, nil)
+	d.verifyDepositCLI = runDepositCLIVerify // wire real impl to exercise exec path
+
+	cfg := makeCfg()
+	cfg.VerifyWithDepositCLI = true
+	cfg.DepositCLIPath = "yes"
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	done := make(chan error, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond) // let it reach write then verify exec; time-based arrival matches siblings (e.g. TestSIGTERM_CleanShutdown:5ms); "yes" hanger makes mid-Combined reliable once reached
+		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+	}()
+	go func() { done <- runWithDeps(ctx, cfg, d) }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runWithDeps err = %v, want context.Canceled (SIGINT mid runDepositCLIVerify)", err)
+		}
+		if code := exitCodeFor(err); code != 4 {
+			t.Errorf("exitCodeFor(err) = %d, want 4", code)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("SIGINT did not abort verify exec within 1s")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestProgress — Issue #19 progress indicator tests
 // ---------------------------------------------------------------------------
