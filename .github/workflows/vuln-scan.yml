@@ -1,0 +1,28 @@
+name: vuln-scan
+
+on:
+  schedule:
+    # Weekly Monday 04:00 UTC (per M0.1 / architecture §12.3)
+    - cron: '0 4 * * MON'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    name: weekly govulncheck (develop)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: 'develop'  # explicit for cron (which may default to main); guarantees develop tip per M0.1-5 comment intent + low review finding
+        # For scheduled runs we want the tip of develop.
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+
+      - name: govulncheck ./...
+        run: GOTOOLCHAIN=go1.26.4 go run golang.org/x/vuln/cmd/govulncheck ./...
+        working-directory: go

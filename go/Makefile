@@ -26,12 +26,14 @@ coverage:
 	go tool cover -func=coverage.out | grep -E "(total|100\.0%)" | sort
 	@echo "\nFull HTML report: go tool cover -html=coverage.out"
 
-## lint: run gofmt gate + go vet + staticcheck + errcheck
+## lint: run gofmt gate + go vet + staticcheck + errcheck + govulncheck
 lint:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && false)
 	go vet ./...
 	staticcheck ./...
 	go run github.com/kisielk/errcheck ./...
+	# govulncheck non-zero on documented geth hits (traces exist but per SECURITY.md); undocumented reachable fails (AC4); see policy
+	GOTOOLCHAIN=go1.26.4 go run golang.org/x/vuln/cmd/govulncheck ./...
 
 ## tidy: sync go.mod and go.sum
 tidy:
