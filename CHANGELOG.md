@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Unreleased
+
+### Removed
+- Tautological `FuzzMerkleize`/`FuzzUint64Chunk` assertions (internal/ssz/ssz_fuzz_test.go); differential oracle (M1.2-4) replaces assertion role (M1.2-7, closes FR-P1-C4 cleanup; M1.8-2).
+
 ## eth-deposit-tx
 
 ### [eth-deposit-tx 0.1.0] - 2026-05-18

@@ -43,10 +43,8 @@ tidy:
 verify:
 	go mod verify
 
-## fuzz: run fuzz targets for 30 seconds each (ssz and cli parsers)
+## fuzz: run fuzz targets for 30 seconds each (cli and tx parsers)
 fuzz:
-	$(GOFLAGS) go test -fuzz FuzzMerkleize   -fuzztime 30s ./internal/ssz/
-	$(GOFLAGS) go test -fuzz FuzzUint64Chunk -fuzztime 30s ./internal/ssz/
 	$(GOFLAGS) go test -fuzz FuzzParsePubkeys -fuzztime 30s ./internal/cli/
 	$(GOFLAGS) go test -fuzz FuzzPackDeposit_AgainstGethABI -fuzztime 60s ./internal/tx/
 

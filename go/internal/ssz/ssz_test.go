@@ -330,45 +330,14 @@ func TestDepositMessageHashTreeRoot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.msg.HashTreeRoot()
 
-			if tc.wantHex != "" {
-				wantBytes := mustDecodeHex(t, tc.wantHex)
-				var want [32]byte
-				copy(want[:], wantBytes)
-				if got != want {
-					t.Errorf("DepositMessage.HashTreeRoot() = %x, want %x", got, want)
-				}
-			} else {
-				// Compute expected value for the dynamic case.
-				want := computeDepositMessageRoot(t, tc.msg)
-				if got != want {
-					t.Errorf("DepositMessage.HashTreeRoot() = %x, want %x", got, want)
-				}
+			wantBytes := mustDecodeHex(t, tc.wantHex)
+			var want [32]byte
+			copy(want[:], wantBytes)
+			if got != want {
+				t.Errorf("DepositMessage.HashTreeRoot() = %x, want %x", got, want)
 			}
 		})
 	}
-}
-
-// computeDepositMessageRoot is the reference implementation used in tests.
-func computeDepositMessageRoot(t *testing.T, msg DepositMessage) [32]byte {
-	t.Helper()
-	// pubkey: merkleize 2 chunks → pubkeyRoot
-	var pk0 [32]byte
-	copy(pk0[:], msg.Pubkey[:32])
-	var pk1 [32]byte
-	copy(pk1[:], msg.Pubkey[32:48]) // low 16 bytes; high 16 remain zero
-	pubkeyRoot := sha256Pair(pk0, pk1)
-
-	// wc chunk
-	wcChunk := msg.WithdrawalCredentials
-
-	// amount chunk
-	amountChunk := uint64Chunk(msg.Amount)
-
-	// merkleize([pubkeyRoot, wcChunk, amountChunk], limit=3 → padded to 4)
-	var zeroChunk [32]byte
-	h01 := sha256Pair(pubkeyRoot, wcChunk)
-	h23 := sha256Pair(amountChunk, zeroChunk)
-	return sha256Pair(h01, h23)
 }
 
 // -----------------------------------------------------------------------------
@@ -402,49 +371,14 @@ func TestDepositDataHashTreeRoot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.data.HashTreeRoot()
 
-			if tc.wantHex != "" {
-				wantBytes := mustDecodeHex(t, tc.wantHex)
-				var want [32]byte
-				copy(want[:], wantBytes)
-				if got != want {
-					t.Errorf("DepositData.HashTreeRoot() = %x, want %x", got, want)
-				}
-			} else {
-				want := computeDepositDataRoot(t, tc.data)
-				if got != want {
-					t.Errorf("DepositData.HashTreeRoot() = %x, want %x", got, want)
-				}
+			wantBytes := mustDecodeHex(t, tc.wantHex)
+			var want [32]byte
+			copy(want[:], wantBytes)
+			if got != want {
+				t.Errorf("DepositData.HashTreeRoot() = %x, want %x", got, want)
 			}
 		})
 	}
-}
-
-// computeDepositDataRoot is the reference implementation used in tests.
-func computeDepositDataRoot(t *testing.T, data DepositData) [32]byte {
-	t.Helper()
-	// pubkeyRoot (same as DepositMessage)
-	var pk0 [32]byte
-	copy(pk0[:], data.Pubkey[:32])
-	var pk1 [32]byte
-	copy(pk1[:], data.Pubkey[32:48])
-	pubkeyRoot := sha256Pair(pk0, pk1)
-
-	wcChunk := data.WithdrawalCredentials
-	amountChunk := uint64Chunk(data.Amount)
-
-	// sigRoot: 3 chunks padded to 4
-	var sig0, sig1, sig2, sigPad [32]byte
-	copy(sig0[:], data.Signature[:32])
-	copy(sig1[:], data.Signature[32:64])
-	copy(sig2[:], data.Signature[64:96])
-	sigH01 := sha256Pair(sig0, sig1)
-	sigH23 := sha256Pair(sig2, sigPad)
-	sigRoot := sha256Pair(sigH01, sigH23)
-
-	// merkleize([pubkeyRoot, wcChunk, amountChunk, sigRoot], limit=4)
-	h01 := sha256Pair(pubkeyRoot, wcChunk)
-	h23 := sha256Pair(amountChunk, sigRoot)
-	return sha256Pair(h01, h23)
 }
 
 // -----------------------------------------------------------------------------
