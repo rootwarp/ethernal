@@ -39,7 +39,7 @@ If the signing logic changes (e.g., go-ethereum version bump that changes the RL
 ```sh
 cd go
 ETH_DEPOSIT_TX_PRIVATE_KEY=$(cat testdata/phase3/holesky/private_key.txt | tr -d '\n') \
-  go run ./cmd/eth-deposit-tx sign \
+  go run ./cmd/eth-deposit sign \
   --signer local \
   --input testdata/phase3/holesky/unsigned_tx.json \
   --output testdata/phase3/holesky/signed_tx_golden.json

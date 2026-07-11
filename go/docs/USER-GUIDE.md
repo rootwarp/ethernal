@@ -1,11 +1,13 @@
 # eth-utils User Guide
 
-Comprehensive guide for the two CLIs in this monorepo:
+Comprehensive guide for `eth-deposit`, the CLI in this monorepo that takes a
+validator all the way from BLS keystore to a broadcast Ethereum deposit
+transaction:
 
-- **`eth-deposit-gen`** — produces Launchpad-compatible deposit data JSON (BLS signatures over the deposit message) from EIP-2335 validator keystores.
-- **`eth-deposit-tx`** — builds, signs (Ledger or local key), and broadcasts the Ethereum transaction that submits the deposit to the Beacon Chain deposit contract.
+- **`eth-deposit gen`** — produces Launchpad-compatible deposit data JSON (BLS signatures over the deposit message) from EIP-2335 validator keystores.
+- **`eth-deposit build|sign|run|send`** — builds, signs (Ledger or local key), and broadcasts the Ethereum transaction that submits the deposit to the Beacon Chain deposit contract.
 
-**Status:** `eth-deposit-gen` released as v1.0.0; `eth-deposit-tx` v0.1.0 is release-ready.
+**Status:** unreleased, pending the first tag under the merged name. `eth-deposit` combines the formerly separate `eth-deposit-gen` (released as v1.0.0) and `eth-deposit-tx` (never tagged) binaries into one tool — see `CHANGELOG.md` for the merge note.
 
 ---
 
@@ -14,11 +16,11 @@ Comprehensive guide for the two CLIs in this monorepo:
 1. [Concepts and workflow model](#concepts-and-workflow-model)
 2. [Install](#install)
 3. [Quick start (Hoodi testnet)](#quick-start-hoodi-testnet)
-4. [Step 1 — Generate deposit data (`eth-deposit-gen`)](#step-1--generate-deposit-data-eth-deposit-gen)
-5. [Step 2 — Build the unsigned transaction (`eth-deposit-tx build`)](#step-2--build-the-unsigned-transaction-eth-deposit-tx-build)
-6. [Step 3 — Sign the transaction (`eth-deposit-tx sign`)](#step-3--sign-the-transaction-eth-deposit-tx-sign)
-7. [Step 4 — Broadcast (optional) (`eth-deposit-tx send`)](#step-4--broadcast-optional-eth-deposit-tx-send)
-8. [Convenience: `eth-deposit-tx run` (build + sign in one shot)](#convenience-eth-deposit-tx-run-build--sign-in-one-shot)
+4. [Step 1 — Generate deposit data (`eth-deposit gen`)](#step-1--generate-deposit-data-eth-deposit-gen)
+5. [Step 2 — Build the unsigned transaction (`eth-deposit build`)](#step-2--build-the-unsigned-transaction-eth-deposit-build)
+6. [Step 3 — Sign the transaction (`eth-deposit sign`)](#step-3--sign-the-transaction-eth-deposit-sign)
+7. [Step 4 — Broadcast (optional) (`eth-deposit send`)](#step-4--broadcast-optional-eth-deposit-send)
+8. [Convenience: `eth-deposit run` (build + sign in one shot)](#convenience-eth-deposit-run-build--sign-in-one-shot)
 9. [Air-gapped workflow](#air-gapped-workflow)
 10. [Mainnet ceremony](#mainnet-ceremony)
 11. [Networks](#networks)
@@ -36,12 +38,12 @@ A validator deposit takes two artifacts:
 
 | Artifact | Produced by | Contains |
 |---|---|---|
-| **Deposit data JSON** | `eth-deposit-gen` | BLS-signed deposit message: validator pubkey, withdrawal credentials, signature, deposit_data_root, amount |
-| **Signed Ethereum transaction** | `eth-deposit-tx` | EIP-1559 transaction calling the deposit contract's `deposit(bytes,bytes,bytes,bytes32)` with 32 ETH value, signed by the **sender's** secp256k1 key |
+| **Deposit data JSON** | `eth-deposit gen` | BLS-signed deposit message: validator pubkey, withdrawal credentials, signature, deposit_data_root, amount |
+| **Signed Ethereum transaction** | `eth-deposit build`/`sign`/`run` | EIP-1559 transaction calling the deposit contract's `deposit(bytes,bytes,bytes,bytes32)` with 32 ETH value, signed by the **sender's** secp256k1 key |
 
 Two distinct keys are involved:
-- **BLS validator key** (per validator) — held in EIP-2335 keystores; used by `eth-deposit-gen` to sign the deposit message. Never leaves the keystore decryption boundary.
-- **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `eth-deposit-tx` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas.
+- **BLS validator key** (per validator) — held in EIP-2335 keystores; used by `eth-deposit gen` to sign the deposit message. Never leaves the keystore decryption boundary.
+- **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `eth-deposit sign`/`run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas.
 
 The two-phase split (`build` then `sign`) supports air-gapped operation: build the unsigned tx on an online machine, transfer the JSON to a signing machine (which may be offline), sign there, transfer the signed JSON back online, broadcast.
 
@@ -52,24 +54,22 @@ The two-phase split (`build` then `sign`) supports air-gapped operation: build t
 ### Requirements
 
 - **Go 1.26.0 or later** (matches `go/go.mod`).
-- **CGO enabled** (default).
-  - `eth-deposit-gen` always requires CGO via `herumi/bls-eth-go-binary`.
-  - `eth-deposit-tx` requires CGO via the BLS dependency it picks up transitively, AND for the Ledger USB/HID bindings (`github.com/ethereum/go-ethereum/accounts/usbwallet` → `karalabe/usb`). Without CGO, the Ledger code path is replaced by a stub that returns an error if you select `--signer ledger`; the rest of the binary still works.
+- **CGO enabled** (default). `eth-deposit` requires CGO for two independent reasons: `herumi/bls-eth-go-binary` (BLS signing, used by `gen`) and the Ledger USB/HID bindings (`github.com/ethereum/go-ethereum/accounts/usbwallet` → `karalabe/usb`, used by `sign`/`run`). Without CGO, the Ledger code path is replaced by a stub that returns an error if you select `--signer ledger`; the rest of the binary still works.
 - **macOS** — Xcode Command Line Tools provide the C toolchain. No extra packages needed.
 - **Linux** — install `libusb-1.0-0-dev` (Debian/Ubuntu) or `libusb1-devel` (Fedora/RHEL) so the Ledger USB bindings can build and run. For non-root device access, set up udev rules per https://github.com/LedgerHQ/udev-rules.
-- **Windows** — not supported in v1.0.0.
+- **Windows** — not supported.
 
 ### Install from a release
 
-When v0.1.0 is tagged, prebuilt archives for `darwin-amd64`, `darwin-arm64`, `linux-amd64`, `linux-arm64` (plus SBOMs and checksums) are produced by goreleaser CI:
+Once `eth-deposit` is tagged, prebuilt archives for `darwin-amd64`, `darwin-arm64`, `linux-amd64`, `linux-arm64` (plus SBOMs and checksums) are produced by goreleaser CI:
 
 ```bash
 # Replace ${VERSION} and ${OS_ARCH} as appropriate
 curl -L -o eth-utils.tar.gz \
-  "https://github.com/rootwarp/eth-utils/releases/download/v${VERSION}/eth-deposit-tx_${OS_ARCH}.tar.gz"
+  "https://github.com/rootwarp/eth-utils/releases/download/v${VERSION}/eth-deposit_${OS_ARCH}.tar.gz"
 tar xzf eth-utils.tar.gz
 sha256sum -c checksums.txt   # verify
-./eth-deposit-tx --version
+./eth-deposit --version
 ```
 
 ### Install from source
@@ -77,22 +77,19 @@ sha256sum -c checksums.txt   # verify
 ```bash
 git clone https://github.com/rootwarp/eth-utils.git
 cd eth-utils
-make build      # produces bin/eth-deposit-gen
-make build-tx   # produces bin/eth-deposit-tx
+make build   # produces bin/eth-deposit
 ```
 
-Or via `go install` (per-binary):
+Or via `go install`:
 
 ```bash
-go install github.com/rootwarp/eth-utils/go/cmd/eth-deposit-gen@latest
-go install github.com/rootwarp/eth-utils/go/cmd/eth-deposit-tx@latest
+go install github.com/rootwarp/eth-utils/go/cmd/eth-deposit@latest
 ```
 
 Verify:
 
 ```bash
-./bin/eth-deposit-gen --version
-./bin/eth-deposit-tx --version
+./bin/eth-deposit --version
 ```
 
 ---
@@ -104,7 +101,7 @@ End-to-end deposit on Hoodi using a Ledger:
 ```bash
 # 1. Generate deposit data
 export KEYSTORE_PASS=my-keystore-passphrase
-./bin/eth-deposit-gen \
+./bin/eth-deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
   --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
@@ -113,20 +110,20 @@ export KEYSTORE_PASS=my-keystore-passphrase
 unset KEYSTORE_PASS
 
 # 2. Build unsigned tx (use --nonce explicitly if sender has prior txs)
-./bin/eth-deposit-tx build \
+./bin/eth-deposit build \
   --network hoodi \
   --input-file ./out/deposit_data-*.json \
   --nonce 0 \
   --output ./out/unsigned_tx.json
 
 # 3. Sign with Ledger (confirm on device)
-./bin/eth-deposit-tx sign \
+./bin/eth-deposit sign \
   --signer ledger \
   --input ./out/unsigned_tx.json \
   --output ./out/signed_tx.json
 
 # 4. Broadcast (will prompt to type "hoodi" to confirm)
-./bin/eth-deposit-tx send \
+./bin/eth-deposit send \
   --input ./out/signed_tx.json \
   --rpc-url https://your-hoodi-rpc-url \
   --wait-for-receipt
@@ -136,12 +133,12 @@ For a local-key dev flow, see the [recipes](#recipes) below.
 
 ---
 
-## Step 1 — Generate deposit data (`eth-deposit-gen`)
+## Step 1 — Generate deposit data (`eth-deposit gen`)
 
 ### Synopsis
 
 ```
-eth-deposit-gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR [options]
+eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR [options]
 ```
 
 ### Flags
@@ -167,7 +164,7 @@ eth-deposit-gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-di
 ```bash
 export KEYSTORE_PASS=my-keystore-passphrase
 
-./bin/eth-deposit-gen \
+./bin/eth-deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
   --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
@@ -180,7 +177,7 @@ export KEYSTORE_PASS=my-keystore-passphrase
 ### Example — multiple validators, parallel signing
 
 ```bash
-./bin/eth-deposit-gen \
+./bin/eth-deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
   --pubkeys 0xpub1...,0xpub2...,0xpub3...,0xpub4... \
@@ -196,7 +193,7 @@ Output JSON is a single array with one entry per pubkey, in the order you suppli
 Mainnet deposits are irreversible. The `--i-understand-this-is-mainnet` flag is required:
 
 ```bash
-./bin/eth-deposit-gen \
+./bin/eth-deposit gen \
   --network mainnet \
   --i-understand-this-is-mainnet \
   --keystore-dir ./keystores/ \
@@ -210,7 +207,7 @@ Without the flag, `--network mainnet` exits with code 2.
 ### Example — dry-run preview
 
 ```bash
-./bin/eth-deposit-gen ... --dry-run    # JSON to stdout, no file
+./bin/eth-deposit gen ... --dry-run    # JSON to stdout, no file
 ```
 
 ### Output JSON shape
@@ -234,12 +231,12 @@ Without the flag, `--network mainnet` exits with code 2.
 
 ---
 
-## Step 2 — Build the unsigned transaction (`eth-deposit-tx build`)
+## Step 2 — Build the unsigned transaction (`eth-deposit build`)
 
 ### Synopsis
 
 ```
-eth-deposit-tx build --input-file FILE --network NET [options]
+eth-deposit build --input-file FILE --network NET [options]
 ```
 
 Produces an EIP-1559 unsigned transaction in JSON. No signing happens — runs fully offline.
@@ -263,7 +260,7 @@ Produces an EIP-1559 unsigned transaction in JSON. No signing happens — runs f
 Air-gapped build (all values explicit):
 
 ```bash
-./bin/eth-deposit-tx build \
+./bin/eth-deposit build \
   --network hoodi \
   --input-file ./out/deposit_data-2026-06-07T06:11:44.170453Z-4f7dc6a8.json \
   --gas-limit 300000 \
@@ -277,7 +274,7 @@ Multiple validators — produce a tx per validator by varying `--index`:
 
 ```bash
 for i in 0 1 2 3; do
-  ./bin/eth-deposit-tx build \
+  ./bin/eth-deposit build \
     --network hoodi \
     --input-file deposit_data.json \
     --index $i \
@@ -306,12 +303,12 @@ The `data` field is exactly 420 bytes (`0x` + 840 hex chars): the 4-byte `deposi
 
 ---
 
-## Step 3 — Sign the transaction (`eth-deposit-tx sign`)
+## Step 3 — Sign the transaction (`eth-deposit sign`)
 
 ### Synopsis
 
 ```
-eth-deposit-tx sign --signer local|ledger --input FILE [options]
+eth-deposit sign --signer local|ledger --input FILE [options]
 ```
 
 ### Flags
@@ -332,7 +329,7 @@ The private key MUST come from an environment variable. There is no CLI flag to 
 ```bash
 export ETH_DEPOSIT_TX_PRIVATE_KEY=0x0101010101010101010101010101010101010101010101010101010101010101  # synthetic test key
 
-./bin/eth-deposit-tx sign \
+./bin/eth-deposit sign \
   --signer local \
   --input ./out/unsigned_tx.json \
   --output ./out/signed_tx.json
@@ -346,7 +343,7 @@ To use a different env-var name (e.g., for a hosted CI secret):
 
 ```bash
 export MY_DEPLOY_KEY=0x...
-./bin/eth-deposit-tx sign --signer local --private-key-env MY_DEPLOY_KEY --input unsigned_tx.json --output signed_tx.json
+./bin/eth-deposit sign --signer local --private-key-env MY_DEPLOY_KEY --input unsigned_tx.json --output signed_tx.json
 ```
 
 ### Option B — Ledger Nano
@@ -359,7 +356,7 @@ Prerequisites:
 - Linux: `libusb-1.0` installed and Ledger udev rules in place (see [Install](#install))
 
 ```bash
-./bin/eth-deposit-tx sign \
+./bin/eth-deposit sign \
   --signer ledger \
   --input ./out/unsigned_tx.json \
   --output ./out/signed_tx.json
@@ -377,7 +374,7 @@ What you'll see:
 
 If you reject on the device, sign exits with code 4 (user abort). If no Ledger is found or the Ethereum app is not open, exit code 3 with a clear error.
 
-**Note on heuristics (v0.1.0):** the rejection / chain-ID-mismatch / app-not-open detection in `internal/signer/ledger.go` uses pattern matching on the device-side error strings and has NOT yet been validated against real hardware. If you observe unexpected error mappings on a real Ledger, file an issue describing what message you received so the heuristics can be tightened.
+**Note on heuristics:** the rejection / chain-ID-mismatch / app-not-open detection in `internal/signer/ledger.go` uses pattern matching on the device-side error strings and has NOT yet been validated against real hardware. If you observe unexpected error mappings on a real Ledger, file an issue describing what message you received so the heuristics can be tightened.
 
 ### Output shape
 
@@ -400,12 +397,12 @@ Output files are created with `0o600` permissions (owner read/write only).
 
 ---
 
-## Step 4 — Broadcast (optional) (`eth-deposit-tx send`)
+## Step 4 — Broadcast (optional) (`eth-deposit send`)
 
 ### Synopsis
 
 ```
-eth-deposit-tx send --input FILE --rpc-url URL [options]
+eth-deposit send --input FILE --rpc-url URL [options]
 ```
 
 Broadcasts a signed transaction via JSON-RPC with a double-confirmation prompt and optional receipt polling.
@@ -448,7 +445,7 @@ send also fetches the chain ID from the RPC endpoint and refuses to broadcast if
 ### Example — with receipt
 
 ```bash
-./bin/eth-deposit-tx send \
+./bin/eth-deposit send \
   --input ./out/signed_tx.json \
   --rpc-url https://holesky.example/rpc \
   --wait-for-receipt \
@@ -476,14 +473,14 @@ Note: `cast send` is wrong here — that constructs a new transaction. Use `cast
 
 ---
 
-## Convenience: `eth-deposit-tx run` (build + sign in one shot)
+## Convenience: `eth-deposit run` (build + sign in one shot)
 
 When you're signing on the same machine that has the deposit data, `run` collapses build + sign into one command:
 
 ```bash
 export ETH_DEPOSIT_TX_PRIVATE_KEY=0x...
 
-./bin/eth-deposit-tx run \
+./bin/eth-deposit run \
   --network hoodi \
   --signer local \
   --input-file ./out/deposit_data-1716000000.json \
@@ -511,31 +508,31 @@ The two-phase design supports air-gapping the signing machine entirely:
 
 ```
 [ Online machine #1 ]                                 [ Air-gapped signing machine ]
-  eth-deposit-gen ...           ─USB/QR transfer──>     ./signing-machine/in/
-                                                          eth-deposit-tx sign --signer ledger ...
-  eth-deposit-tx build ...                              ./signing-machine/out/
+  eth-deposit gen ...           ─USB/QR transfer──>     ./signing-machine/in/
+                                                          eth-deposit sign --signer ledger ...
+  eth-deposit build ...                                 ./signing-machine/out/
                                 <─USB/QR transfer──     signed_tx.json
 [ Online machine #2 ]
-  eth-deposit-tx send ...
+  eth-deposit send ...
 ```
 
 1. **Online machine** — generate deposit data and the unsigned transaction:
    ```bash
-   ./bin/eth-deposit-gen ... --output-dir ./out
-   ./bin/eth-deposit-tx build --network hoodi --input-file ./out/deposit_data-*.json --nonce N --output unsigned_tx.json
+   ./bin/eth-deposit gen ... --output-dir ./out
+   ./bin/eth-deposit build --network hoodi --input-file ./out/deposit_data-*.json --nonce N --output unsigned_tx.json
    ```
 2. **Transfer** `unsigned_tx.json` to the air-gapped machine (USB, QR code, etc.). It contains no secrets.
 3. **Air-gapped machine** — sign with the Ledger:
    ```bash
-   ./bin/eth-deposit-tx sign --signer ledger --input unsigned_tx.json --output signed_tx.json
+   ./bin/eth-deposit sign --signer ledger --input unsigned_tx.json --output signed_tx.json
    ```
 4. **Transfer** `signed_tx.json` back to an online machine.
 5. **Online machine** — broadcast:
    ```bash
-   ./bin/eth-deposit-tx send --input signed_tx.json --rpc-url https://...
+   ./bin/eth-deposit send --input signed_tx.json --rpc-url https://...
    ```
 
-Neither artifact contains the private key. The Ledger never exports the key.
+Neither artifact contains the private key. The Ledger never exports the key. Note that a merged `eth-deposit` binary on the air-gapped machine also carries the `gen`/`build`/`send` code paths it isn't using there — see `CHANGELOG.md` for that tradeoff.
 
 ---
 
@@ -609,7 +606,7 @@ mainnet
 
 ## Networks
 
-Supported by both tools (see `internal/network/network.go`):
+Supported by `eth-deposit` (see `internal/network/network.go`):
 
 | Network | Chain ID | Deposit contract | Explorer |
 |---|---|---|---|
@@ -619,15 +616,15 @@ Supported by both tools (see `internal/network/network.go`):
 | `holesky` | 17000 | `0x4242424242424242424242424242424242424242` | https://holesky.etherscan.io |
 
 Notes:
-- `eth-deposit-gen` only supports `mainnet` and `hoodi` (BLS fork-version material).
-- `eth-deposit-tx` supports all four (it just needs chain ID + deposit contract address).
+- `gen` only supports `mainnet` and `hoodi` (BLS fork-version material).
+- `build`/`sign`/`run`/`send` support all four (they just need chain ID + deposit contract address).
 - For testnet ETH: use the testnet faucets — Hoodi `https://hoodi-faucet.pk910.de/`, Sepolia `https://sepoliafaucet.com/`, Holesky `https://holesky-faucet.pk910.de/`.
 
 ---
 
 ## Exit codes
 
-Both tools use a consistent set of exit codes you can script around:
+All `eth-deposit` subcommands use a consistent set of exit codes you can script around:
 
 | Code | Meaning |
 |---|---|
@@ -636,12 +633,12 @@ Both tools use a consistent set of exit codes you can script around:
 | 2 | User / configuration error (bad input, missing flag, invalid JSON, unknown network) |
 | 3 | Signer / crypto error (Ledger not found, Ethereum app not open, invalid key, BLS/SSZ failure) |
 | 4 | User abort (SIGINT, or rejected confirmation prompt) |
-| 5 | Broadcast / RPC error — `eth-deposit-tx send` only (chain-ID mismatch, RPC dial failure, broadcast failure) |
+| 5 | Broadcast / RPC error — `send` only (chain-ID mismatch, RPC dial failure, broadcast failure) |
 
 Script around these:
 
 ```bash
-if ./bin/eth-deposit-tx sign ...; then
+if ./bin/eth-deposit sign ...; then
   echo "signed"
 else
   rc=$?
@@ -660,13 +657,13 @@ fi
 
 ### Threat model
 
-The tools protect:
+`eth-deposit` protects:
 
 - **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from env vars only; Ledger keys never leave the device.
 - **Signed artifacts are protected against tampering at rest** (0o600 perms; receiver can verify by recovering the sender and checking the tx hash).
 - **Broadcast is gated by chain-ID match and operator confirmation.** A signed-for-Holesky transaction will not be broadcast to a mainnet RPC endpoint.
 
-The tools do NOT protect:
+It does NOT protect:
 
 - A compromised machine. If your build/sign machine is compromised, the unsigned tx data field (which encodes the deposit) could be silently altered. Verify on the Ledger screen before pressing confirm.
 - Network-level interception of the broadcast (not a concern for signed transactions — they cannot be modified without invalidating the signature).
@@ -704,11 +701,11 @@ The typed exit codes let your automation distinguish between "operator rejected"
 export KEYSTORE_PASS=test-passphrase
 export ETH_DEPOSIT_TX_PRIVATE_KEY=0x0101...   # synthetic; never real
 
-./bin/eth-deposit-gen \
+./bin/eth-deposit gen \
   --network hoodi --keystore-dir ./keystores/ \
   --pubkeys 0x... --output-dir ./out --passphrase-env KEYSTORE_PASS
 
-./bin/eth-deposit-tx run \
+./bin/eth-deposit run \
   --network hoodi --signer local \
   --input-file ./out/deposit_data-*.json \
   --nonce 0 --output ./out/signed_tx.json
@@ -721,15 +718,15 @@ unset KEYSTORE_PASS ETH_DEPOSIT_TX_PRIVATE_KEY
 ```bash
 export KEYSTORE_PASS=...
 
-./bin/eth-deposit-gen ... --output-dir ./out --passphrase-env KEYSTORE_PASS
+./bin/eth-deposit gen ... --output-dir ./out --passphrase-env KEYSTORE_PASS
 
-./bin/eth-deposit-tx run \
+./bin/eth-deposit run \
   --network hoodi --signer ledger \
   --input-file ./out/deposit_data-*.json \
   --nonce 17 --output ./out/signed_tx.json
 # (confirm on Ledger)
 
-./bin/eth-deposit-tx send \
+./bin/eth-deposit send \
   --input ./out/signed_tx.json \
   --rpc-url https://your-hoodi-rpc \
   --wait-for-receipt --receipt-output ./out/receipt.json
@@ -742,36 +739,36 @@ unset KEYSTORE_PASS
 
 ```bash
 # Online machine A
-./bin/eth-deposit-gen --network mainnet --i-understand-this-is-mainnet \
+./bin/eth-deposit gen --network mainnet --i-understand-this-is-mainnet \
   --keystore-dir ./keystores/ --pubkeys 0x... \
   --output-dir ./out --passphrase-env KEYSTORE_PASS
-./bin/eth-deposit-tx build --network mainnet \
+./bin/eth-deposit build --network mainnet \
   --input-file ./out/deposit_data-*.json \
   --nonce ${NONCE} --output unsigned_tx.json
 # transfer unsigned_tx.json via USB/QR to air-gapped machine
 
 # Air-gapped machine B (no network)
-./bin/eth-deposit-tx sign --signer ledger \
+./bin/eth-deposit sign --signer ledger \
   --input unsigned_tx.json --output signed_tx.json
 # (confirm on Ledger; verify on-device fields per Security section)
 # transfer signed_tx.json back via USB/QR
 
 # Online machine A
-./bin/eth-deposit-tx send --input signed_tx.json --rpc-url https://your-mainnet-rpc
+./bin/eth-deposit send --input signed_tx.json --rpc-url https://your-mainnet-rpc
 # (type "mainnet" to confirm)
 ```
 
 ### Recipe 4 — Multiple validators in one shot
 
 ```bash
-./bin/eth-deposit-gen --network hoodi --keystore-dir ./keystores/ \
+./bin/eth-deposit gen --network hoodi --keystore-dir ./keystores/ \
   --pubkeys 0xpub1...,0xpub2...,0xpub3... \
   --output-dir ./out --passphrase-env KEYSTORE_PASS --parallel 4
 
 # One sign per validator, increment nonce
 BASE_NONCE=17
 for i in 0 1 2; do
-  ./bin/eth-deposit-tx run --network hoodi --signer ledger \
+  ./bin/eth-deposit run --network hoodi --signer ledger \
     --input-file ./out/deposit_data-*.json --index $i \
     --nonce $((BASE_NONCE + i)) \
     --output ./out/signed_${i}.json
@@ -781,8 +778,8 @@ done
 ### Recipe 5 — Pipe between commands
 
 ```bash
-./bin/eth-deposit-gen --network hoodi ... --dry-run | \
-  ./bin/eth-deposit-tx build --network hoodi --input-file - --nonce 0 | \
+./bin/eth-deposit gen --network hoodi ... --dry-run | \
+  ./bin/eth-deposit build --network hoodi --input-file - --nonce 0 | \
   jq '.'   # pretty-print the unsigned tx
 ```
 
@@ -801,7 +798,7 @@ cast decode-typed-tx "$RAW"
 
 ## Troubleshooting
 
-### `eth-deposit-gen` errors
+### `eth-deposit gen` errors
 
 | Symptom | Cause / fix |
 |---|---|
@@ -810,15 +807,15 @@ cast decode-typed-tx "$RAW"
 | `decrypt: invalid passphrase` (exit 3) | Wrong `KEYSTORE_PASS`. The passphrase decrypts every keystore — all must share it. |
 | `staking-deposit-cli not found in PATH` (exit 3, only with `--verify-with-deposit-cli`) | Either install `staking-deposit-cli >= 2.7.0`, set `--deposit-cli-path`, or drop the verify flag. |
 
-### `eth-deposit-tx build` errors
+### `eth-deposit build` errors
 
 | Symptom | Cause / fix |
 |---|---|
 | `--index N: out of bounds (file has M entries)` (exit 2) | Your deposit data JSON has fewer entries than the index you requested. |
-| `deposit entry validation: ...` (exit 2) | The deposit data JSON is malformed (from `internal/deposit.Entry.Validate` at main.go:249; e.g. zero pubkey, WC format/roots, amount==0 per json.go:144-201). tx.Validate DiD surfaces as 'build: invalid input: ...' (WrapInputErr main.go:282). Regenerate with `eth-deposit-gen`. |
-| `build: invalid input: deposit amount must be exactly MinDepositAmountGwei Gwei (32 ETH)` (ErrInvalidAmount via tx.Validate; exit 2) | The entry's `amount` != 32 ETH (tx/validation.go:24-25 check + builder.go:19 sentinel, wrapped in main.go:282 BuildUnsigned + WrapInputErr). Only 32 ETH first deposits supported. |
+| `deposit entry validation: ...` (exit 2) | The deposit data JSON is malformed (zero pubkey, bad withdrawal credentials prefix, etc.). Regenerate with `eth-deposit gen`. |
+| `value mismatch ...` (exit 2) | The entry's `amount` is not 32 ETH in Gwei. Only 32 ETH first deposits are currently supported. |
 
-### `eth-deposit-tx sign` errors
+### `eth-deposit sign` errors
 
 | Symptom | Cause / fix |
 |---|---|
@@ -828,9 +825,9 @@ cast decode-typed-tx "$RAW"
 | `no Ledger device found` (exit 3) | Plug in the Ledger, unlock it, open the Ethereum app. On Linux, verify udev rules. |
 | `ledger Ethereum app is not open` (exit 3) | Open the Ethereum app on the device, then retry. |
 | `user rejected signing on Ledger` (exit 4) | You pressed the reject button on the device. Retry if intentional was confirm. |
-| `ledger support requires CGO_ENABLED=1` (exit 3) | The binary was built without CGO. Rebuild with `make build-tx` (default sets `CGO_ENABLED=1`). |
+| `ledger support requires CGO_ENABLED=1` (exit 3) | The binary was built without CGO. Rebuild with `make build` (default sets `CGO_ENABLED=1`). |
 
-### `eth-deposit-tx send` errors
+### `eth-deposit send` errors
 
 | Symptom | Cause / fix |
 |---|---|
@@ -843,32 +840,5 @@ cast decode-typed-tx "$RAW"
 ### General
 
 - If `make e2e-mock` passes but real testnet broadcast fails, the gap is usually nonce or insufficient funds.
-- For Ledger error-string mismatches (the heuristics aren't real-hardware-validated in v0.1.0), file an issue with the exact error text.
-- For everything else, run with `--verbose` and `--json-logs` (eth-deposit-gen) to get structured diagnostics.
-
-**Note on symptoms:** Every troubleshooting row's symptom name (exact sentinels like ErrBroadcastChainIDMismatch/ErrRPCDial, ucli.Exit strings like "deposit entry validation: ..."/"--index ...", wrappers like "build: invalid input: ...", or node messages under listed Err*) appears in (or maps directly to entries in) architecture §15 exit-code table and is covered by M1.5-9 TestExitCodeContract (source of truth). See arch §15:1736 (ucli/ErrInvalidInput), 1738-1739 (deposit/tx.Err lists), 1744 (broadcast), exit.go, and contract tests.
-
-## Maintainer
-
-### `make doc-audit` (M1.8-4 / Spike S5)
-
-`make -C go doc-audit` (or `cd go && make doc-audit`) implements the doc-audit mechanism.
-
-It:
-
-- Executes `$(GOFLAGS) go run ./cmd/eth-deposit-gen --help` and equiv for `eth-deposit-tx build|sign|run|send --help`.
-- Greps for every flag listed in the flag tables (and mainnet sections) of this file; fails if any documented flag is absent from the live --help.
-- Extracts flags from --help outputs and requires each (except --help/--version and a minimal transitional allowlist) to appear as text in this USER-GUIDE (catches introduction of an undocumented flag in the binaries).
-- Exits non-zero on any delta.
-
-This is the automated guard for PRD success metric #9 ("Documented CLI contract ... audited by a `make doc-audit` target" → 0 deltas).
-
-**Usage:** Run before any PR touching CLI flags (in cmd/eth-deposit-*/main.go , internal/cli/cli.go , or config load). It must exit 0 on `develop`.
-
-See `go/Makefile:doc-audit` for the exact (grep-based smoke) implementation; chosen per project-plan time-box / Spike S5 note (simple diff vs committed contract.txt or full table parser would have been fancier but unavailable in the 1-day box).
-
-**Pre-existing deltas note (HIGH feedback round):** Forward lists now strictly match *literal* | Flag | tables only (gen table USER-GUIDE.md:150-162 omits --withdrawal-address which is emitted in internal/cli/cli.go:152 + gen --help + examples; tx sub tables omit --confirm-network/--i-accept-local-signer-on-mainnet which live in mainnet ceremony section:541+ and code e.g. run.go:184, send.go:162). These + --allow-non-deposit-recipient (sign table:316-322 omits; emitted in sign.go Flags) are covered by reverse + OK_EXTRA transitional allowlist + prose docs (explicit in Makefile:145 comment citing tables + emission sites). OK_EXTRA + reverse is the "vice versa" per Spike S5; will shrink after future table hygiene. Reverse long-opt extract + alias text-grep (e.g. -i) is intentional time-boxed smoke (MED fixes added set -u/pipefail + capture guards + alias subcheck).
-
-AC1: exists + exits 0 on develop.  
-AC2: fails on undocumented flag (verifiable by temp edit adding a flag to a ucli.Flags slice then revert).  
-AC3: this section.
+- For Ledger error-string mismatches (the heuristics aren't real-hardware-validated), file an issue with the exact error text.
+- For everything else, run with `--verbose` and `--json-logs` (`eth-deposit gen`) to get structured diagnostics.

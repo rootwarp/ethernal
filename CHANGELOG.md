@@ -5,73 +5,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## Unreleased
+## eth-deposit
 
-## [1.1.0] - 2026-06-07
+### eth-deposit (unreleased) - 2026-07-12
 
-### Changed
-- M2 hardening (closes PRD §12 M2 exit + all FR-P2 + quality catalogue): dead-code removal, deduplication, quality catalogue hygiene (M2.1); dead-code/dedup removal (M2.2); single-registry `internal/network` table + init-panic + ADR-008 (ledger_nocgo delete) + sentinel doc comments + `%v`→`%w` + thin-main (orchestration moved; mains ≤30LOC) + duplicate pkg docs cleaned (M2.3).
-- 0x02 EIP-7251 compounding-validator support deferred to vNext (M2.4-1; spec not settled at release time per defer ACs; CHANGELOG + release notes record it).
+**Breaking change:** `eth-deposit-gen` and `eth-deposit-tx` are merged into a single
+`eth-deposit` binary with five subcommands: `gen`, `build`, `sign`, `run`, `send`.
+The two old binary names are retired — there is no compatibility shim or alias.
+This lands as unreleased (no tag cut yet); see below for why this was a cheap time
+to do it.
 
-### Added
-- Tag `v1.1.0` on `main`.
-- Prebuilt binaries (linux-amd64, darwin-arm64, darwin-amd64) cut via go build (darwin native; linux placeholder per prior local release pattern).
-- CHANGELOG.md v1.1.0 entry (this) covering all M2 changes + 0x02 deferral.
-- Release notes published (in this CHANGELOG section; cross-ref M2.4-v11-release.md + prior M0.11-3/M1.9-4 pattern; no new file created per "never create unless necessary").
+#### Why
 
-## [1.0.0] - 2026-06-07
+- `eth-deposit-gen` had one real tagged release (`v1.0.0`); `eth-deposit-tx`'s
+  "[eth-deposit-tx 0.1.0]" entry below was never actually tagged — `git tag -l`
+  only ever showed `v1.0.0`, and `release.yml`'s `tags: ["v*"]` trigger wouldn't
+  have matched the scoped tag format that entry references anyway. Merging cost
+  nothing for tx's users because it never shipped a versioned release.
+- The two tools already shared one Go module, one `internal/` package tree, and
+  documented each other in their own `--help` text (`build`'s description already
+  pointed users at `eth-deposit-gen`'s output). The gap between "two binaries that
+  hand off a JSON file" and "one binary with five subcommands" was mostly ceremony.
+- Before merging, the two tools' CGO dependency chains were verified to co-link
+  cleanly: a throwaway program importing both `herumi/bls-eth-go-binary` (BLS,
+  used by `gen`) and `go-ethereum/accounts/usbwallet` (Ledger USB/HID, used by
+  `sign`/`run`) was built and run natively (darwin/arm64), then cross-compiled to
+  all 4 release targets (linux amd64/arm64 via zig cc, darwin amd64/arm64 via
+  native/cross `cc`) — all four linked and ran with no symbol conflicts.
 
-### Removed
-- Tautological `FuzzMerkleize`/`FuzzUint64Chunk` assertions (internal/ssz/ssz_fuzz_test.go); differential oracle (M1.2-4) replaces assertion role (M1.2-7, closes FR-P1-C4 cleanup; M1.8-2).
+#### Known tradeoff
 
-### Changed
-- Mainnet acknowledgement gate on `eth-deposit-tx` (`--confirm-network=<name>` required on mainnet for `send`/`run`/`build`; `--yes` does not bypass; additional `--i-accept-local-signer-on-mainnet` when using local signer on mainnet) — FR-P1-A1 (GO-013, M1.6).
-- Hybrid `--rpc-url` wired on `run` only (build remains strictly offline, no silent defaults) — FR-P1-D5 (M1.3-5).
-- Exit-code contract additions, pre-validation of required flags, `%w` wrapping audit across module, `TestExitCodeContract` tables (one per binary) as the source of truth — FR-P1-F* (GO-015/020/022/041/042/046/051/018, M1.5 incl. M1.5-9).
-- New sentinels for BLS (ErrSecretZero, ErrPubkeyZero/Invalid), tx (ErrNoBaseFee, etc.), keystore (ErrKeystoreCipherText), signer (ErrUnsupportedTxType, etc.), and mainnet-gate rejections; all mapped in exit contract — multiple M1 FRs (M1.1–M1.6).
-- Env-var auto-unset (`os.Unsetenv` in `NewLocalSignerFromEnv`), per-Sign zeroize of intermediates, sanitized env for child `ethstaker-deposit-cli` subprocess — FR-P1-B4 (GO-017, M1.1-5/7).
-- BLS `Zeroize()` on `Signer` interface (Go-side wipe only; package docs explicitly frame the herumi C-side `mcl` scalar limitation as known/undocumented-until-process-exit) — FR-P1-B4 (GO-017, M1.1-6, honest framing per PRD metric 12 + ADR-006).
-- Differential SSZ oracle (ferranbt/fastssz under `differential_oracle` build tag + committed generated types + CI lane) replacing dead self-oracles — FR-P1-C4 (GO-048, M1.2-4/5).
-- Hermetic cross-validate lane (Docker image + `//go:build cross_validate` test + `make test-cross-validate` + CI workflow) using real pinned `ethstaker-deposit-cli` for hoodi/mainnet — FR-P1-G1 (GO-059, M1.7).
-- `ScanDir(dir string, logger *slog.Logger)` signature (read errors/non-regular files now WARN via injected logger; no global slog leak) — internal signature break (FR-P1-E2, GO-028, M1.4-2); non-breaking for CLI/in-tree callers (all in-project callers updated; see scandir.go:51-52 comment).
+- `eth-deposit` now ships as one binary carrying both the offline BLS/keystore
+  code path (`gen`) and the online RPC-broadcast/USB code path
+  (`build`/`sign`/`run`/`send`). An air-gapped keygen-only deployment now
+  receives (but doesn't execute) the networking and Ledger USB code it used to
+  not have at all. This was an explicit, informed tradeoff in favor of a single
+  binary and release pipeline over preserving that separation as a hard
+  guarantee — see the two sections below for what each half used to ship alone.
 
-### Added
-- Keystore loader hardening (structural vs checksum errors, 32-byte secret enforcement + zeroize, `IsRegular()` filter + 1 MiB `MaxKeystoreSize` `io.LimitReader` cap) — FR-P1-E* (GO-025/029/030, M1.4).
-- RPC robustness (HeaderByNumber + nil-basefee sentinel, fail-closed chainID+logger, gas estimate no-overflow + direct addr, errors.Is(NotFound)+retries, receipt failures to sentinel) — FR-P1-D* (GO-032/033/034/035, M1.3).
-- BLS scalar-zero and pubkey-infinity rejections in production paths — FR-P1-C1/C2 (GO-036/037, M1.2-1/2).
-- `DomainDeposit`/`ZeroGenesisValidatorsRoot` now functions (no mutable package vars) — FR-P1-C3 (GO-038, M1.2-3).
-- Cancellation hygiene, LocalSigner mutex, Ledger Close doc+timeout, worker ctx checks, SIGTERM support — FR-P1-B* (GO-008/021/024, M1.1).
-- Fixture hygiene + `Key.Zeroize` delegate + corrected KeepAlive comment — FR-P1-G2/G3 (GO-066/045, M1.7-4/5) (All M1 changes (M1.1–M1.7) are represented. (M1.8-2)).
+#### Changed
 
-### Maintainer-led mainnet dry-run + record outcome (M1.9-3 / Spike S6)
-Per phase: maintainer runs dry-run mainnet ceremony on held-out test wallet (PRD §12 prefers held-out over dryrun mode; no `--dryrun` flag added for tx as M1.6 added none; gen's `--dry-run` is separate and unrelated). (Note: "completes without warning" per PRD/phase shorthand refers to no *unrelated* warnings per the M1.9-3 ACs; the documented local+mainnet gate WARNING from M1.6 is expected/only one surfaced when using held-out local path.)
-- **Wallet used:** synthetic held-out test key `0x0101010101010101010101010101010101010101010101010101010101010101` (from `go/testdata/phase3/holesky/private_key.txt`; no real mainnet ETH/funds at risk — dry only, produces artifacts but no broadcast).
-- **Network:** mainnet (chain ID 1; used `testdata/mainnet/deposit_data-...json` fixture whose network_name matches; gate matrix used mainnet-shaped mocks with chainID=1).
-- **Prompt text / on-screen warnings (only expected mainnet-gate + M0.6 signing summary; no unrelated warnings surfaced):**
-  - Gate rejection (missing confirm): `err="--confirm-network: required for mainnet (must equal network name)"` (exit 2 from build pre-val / action).
-  - Local+mainnet warning (when `--signer local --network mainnet --i-accept...` supplied):
-    ```
-    WARNING: --signer local combined with --network mainnet
-    The local signer reads your private key from an environment variable.
-    This key is visible to other processes, shell history, and core dumps.
-    A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.
-    If you accept the risk, the flag was already supplied; proceeding.
-    ```
-  - 4-line signing summary (M0.6-3) printed to stderr before local sign:
-    ```
-    chainID: 1
-    to: 0x00000000219ab540356cbb839cbe05303d7705fa
-    value: 0x1bc16d674ec800000
-    nonce: 0
-    ```
-  - From send/run help + source (type-confirm for broadcast path): "> You are about to BROADCAST a ... deposit transaction." (with decoded RLP labels); "> Type the network name to confirm: "; gate mismatch errors e.g. `--confirm-network: "hoodi" does not match decoded RLP network "mainnet"`.
-- **Exit codes:** 2 (gate fail without `--confirm-network=mainnet` or missing `--i-accept-local-signer-on-mainnet`); 0 (full gate pass + sign success in dry run).
-- **Tx hash if broadcast:** N/A (dry-run: used `build` + `run` (in-process build+sign) only; no `send`; no real RPC broadcast or on-chain tx. Would be present only on live `send --wait-for-receipt` with funded wallet + real mainnet RPC).
-- **Artifacts (dry):** produced `signed.json` + `.raw` + (with --keep) unsigned; 0o600 perms; sha256 etc as normal.
-- **Gate matrix (M1.6-4 / M1.9-2):** `CGO_ENABLED=1 go test -run 'TestMainnetGate|TestSend_Mainnet.*|TestSend_.*Confirm|TestSend_LocalSignerMainnet' ./cmd/eth-deposit-tx/... -count=1` → PASS (exit 0); 8+ baseline + edges (mainnet rows require --confirm-network=mainnet and local+mainnet require extra flag; hoodi do not).
-- **Other verifs:** `--help` / `--version` smoke clean (gate flags `--confirm-network`, `--i-accept-local-signer-on-mainnet` documented in usage); `make -C go test-cross-validate` green; no unrelated warnings in any run (only gate texts + normal INFO "wrote * tx").
-- **Sign-off (cross-check per AC):** synthetic held-out + captured logs + clean test matrix + verifs here act as maintainer execution + second review (no real funds; matches "or recorded dryrun mode if available" but used held-out per preference; cross-check performed via independent re-execution of held-out commands + matrix in review process). ACs met: dry-run executed + outcome recorded; only expected gate prompts/warnings; cross-check simulated.
-- Decision: edit existing CHANGELOG.md (no new file per "never create unless necessary"); record here (also referenced by M1.9-5 / root RELEASE_NOTES_v1.0.0.md pattern from v0.2). Advances plan (M1.9-3 of 5).
+- `internal/cli` (gen's flag/validation wiring) is now wired in as a subcommand
+  (`Name: "gen"`) rather than the process root; its former custom root help
+  template's Examples section moved into `Description` text, matching the
+  pattern `build`/`sign`/`run`/`send` already used.
+- Exit codes are unchanged and were already compatible: gen's 0/2/3/4 (+1
+  fallback) is a subset of tx's 0/1/2/3/4/5 scheme; both are now handled by one
+  `ExitCodeFor` in `exit.go`.
+- `.goreleaser.yaml`: 8 build entries (4 gen + 4 tx) collapsed to 4; one archive
+  (`eth-deposit_<os>_<arch>.tar.gz`) instead of two. One SBOM per platform
+  instead of one per tool per platform.
+- CI: `eth-deposit-gen.yml` retired; the surviving e2e workflow and `release.yml`
+  now test the whole module instead of per-tool subdirectories.
+- `go/Makefile`: single `build` target (`bin/eth-deposit`) replaces `build`
+  (gen) + `build-tx` (tx).
+- `go/docs/USER-GUIDE.md`: updated throughout to the merged command shape
+  (`eth-deposit gen`, `eth-deposit build`, etc.).
+
+---
 
 ## eth-deposit-tx
 
