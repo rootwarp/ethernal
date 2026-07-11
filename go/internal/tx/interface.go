@@ -43,9 +43,6 @@ type BuildConfig struct {
 	// NetworkParams provides ChainID and the deposit contract address.
 	NetworkParams network.Params
 
-	// RPCURL is reserved for Issue 2.5 (wiring the real ethclient); unused here.
-	RPCURL string
-
 	// RPC is the live RPC client used to resolve missing gas/fee/nonce values.
 	// nil means static-only mode.
 	RPC EthRPC

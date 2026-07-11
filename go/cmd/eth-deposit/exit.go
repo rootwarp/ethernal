@@ -37,7 +37,14 @@ func ExitCodeFor(err error) int {
 	if err == nil {
 		return 0
 	}
-	// Exit code 4: context cancellation (SIGINT/SIGTERM) or explicit abort.
+	// Exit code 4: context cancellation (SIGINT) or explicit abort.
+	//
+	// This check precedes the exit-5 RPC block deliberately. When a SIGINT
+	// cancels an in-flight RPC estimation call, the resulting error wraps BOTH
+	// context.Canceled and ErrRPCEstimation (builder.go's two-%w tagging). We
+	// classify that as a user abort (4), not an RPC failure (5): the operator
+	// chose to stop. A genuine connectivity failure that does not carry
+	// context.Canceled falls through to the exit-5 block below and stays 5.
 	if errors.Is(err, context.Canceled) || errors.Is(err, ErrUserAborted) {
 		return 4
 	}

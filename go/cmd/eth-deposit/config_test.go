@@ -61,8 +61,11 @@ func TestLoadBuildConfig_Defaults(t *testing.T) {
 	if cfg.NetworkParams.ChainID != 17000 {
 		t.Errorf("ChainID: got %d, want 17000", cfg.NetworkParams.ChainID)
 	}
-	if cfg.GasLimit != defaultGasLimit {
-		t.Errorf("GasLimit: got %d, want %d", cfg.GasLimit, defaultGasLimit)
+	// GasLimit is 0 at config load when --gas-limit is omitted; the offline
+	// branch in buildUnsignedTx restores the 250000 static default downstream
+	// (RPC mode leaves it 0 so the node's EstimateGas runs).
+	if cfg.GasLimit != 0 {
+		t.Errorf("GasLimit: got %d, want 0 (default applied later, not at config load)", cfg.GasLimit)
 	}
 	if cfg.MaxFeePerGas != nil {
 		t.Errorf("MaxFeePerGas: expected nil when not set, got %s", cfg.MaxFeePerGas)

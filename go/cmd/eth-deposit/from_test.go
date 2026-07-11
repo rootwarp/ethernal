@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
 
 	ucli "github.com/urfave/cli/v3"
+
+	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
 // --- LoadBuildConfig --from parsing (via captureConfig, config.go:LoadBuildConfig) ---
@@ -199,12 +202,29 @@ func TestBuild_RPCRequiresFromWhenNonceOmitted(t *testing.T) {
 }
 
 // TestBuild_FromNotRequiredWithNonceAndGas confirms that supplying both --nonce
-// and --gas-limit lifts the --from requirement even with --rpc-url set. In P2-1
-// the RPC is not dialed, so the build completes offline (exit 0).
+// and --gas-limit lifts the --from requirement even with --rpc-url set. That is
+// exactly because the two calls that need a funded sender — PendingNonceAt and
+// EstimateGas — are skipped when nonce and gas are explicit; the fee calls still
+// resolve from the node but do not need From. P2-2 build now dials, so a fake is
+// injected: it serves fees and t.Fatals on the two From-consuming calls. Exit 0.
 func TestBuild_FromNotRequiredWithNonceAndGas(t *testing.T) {
 	orig := ucli.OsExiter
 	ucli.OsExiter = func(int) {}
 	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	withMockEthRPC(t, &mockEthRPC{
+		ChainIDFn:          func(context.Context) (*big.Int, error) { return big.NewInt(int64(holeskyChainID)), nil },
+		SuggestGasTipCapFn: func(context.Context) (*big.Int, error) { return big.NewInt(1_000_000_000), nil },
+		BlockBaseFeeFn:     func(context.Context) (*big.Int, error) { return big.NewInt(10_000_000_000), nil },
+		PendingNonceAtFn: func(context.Context, [20]byte) (uint64, error) {
+			t.Fatal("PendingNonceAt fired; explicit --nonce should win (and it needs From)")
+			return 0, nil
+		},
+		EstimateGasFn: func(context.Context, internaltx.CallMsg) (uint64, error) {
+			t.Fatal("EstimateGas fired; explicit --gas-limit should win (and it needs From)")
+			return 0, nil
+		},
+	})
 
 	app := newTestApp()
 	var out bytes.Buffer
@@ -215,7 +235,7 @@ func TestBuild_FromNotRequiredWithNonceAndGas(t *testing.T) {
 		"eth-deposit", "build",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
-		"--rpc-url", "http://127.0.0.1:0",
+		"--rpc-url", "http://node.example",
 		"--nonce", "7",
 		"--gas-limit", "250000",
 		// no --from -> not required because both nonce and gas are explicit

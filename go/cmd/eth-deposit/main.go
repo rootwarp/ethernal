@@ -16,6 +16,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -108,13 +112,18 @@ func buildCommand() *ucli.Command {
 and produces an unsigned EIP-1559 transaction for the Beacon Chain deposit contract.
 
 Supports offline/air-gapped mode (no --rpc-url required) when all gas and nonce
-flags are supplied explicitly, and hybrid mode when --rpc-url is provided.
+flags are supplied explicitly, and hybrid mode: with --rpc-url, any gas, fee, or
+nonce not passed explicitly is resolved from the node (which needs --from).
 Output is written to stdout by default; use --output FILE or --output - for explicit stdout.
 
 Examples:
 
   # Output unsigned tx to stdout (pipe-friendly):
   eth-deposit build --network holesky --input-file deposit_data.json
+
+  # Hybrid: resolve gas, fees, and nonce from a node (requires --from):
+  eth-deposit build --network holesky --input-file deposit_data.json \
+    --rpc-url https://holesky.example.com --from 0xYourSenderAddress
 
   # Save unsigned tx to a file for the air-gapped sign step:
   eth-deposit build --network holesky --input-file deposit_data.json --output unsigned.json
@@ -161,7 +170,7 @@ Exit codes:
 			},
 			&ucli.StringFlag{
 				Name:    "rpc-url",
-				Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional; when omitted, all gas and nonce flags must be supplied explicitly)",
+				Usage:   "JSON-RPC endpoint URL. When set, any gas/fee/nonce value not given explicitly is resolved from the node (requires --from); when omitted, the build is fully offline and all gas and nonce flags must be supplied explicitly.",
 				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_RPC_URL"),
 			},
 			&ucli.StringFlag{
@@ -254,8 +263,20 @@ func requireFromForRPC(cfg *Config) error {
 	return nil
 }
 
+// newEthRPC is the production EthRPC factory. Tests override this to inject a
+// fake. It mirrors newBroadcaster (send.go): NewEthClient returns (*ethClient,
+// error) and the seam widens the return to the EthRPC interface.
+var newEthRPC = func(ctx context.Context, rpcURL string) (internaltx.EthRPC, error) {
+	return internaltx.NewEthClient(ctx, rpcURL)
+}
+
 // buildUnsignedTx converts raw deposit data bytes + build config into an UnsignedTx.
 // It is extracted so runAction can call it without re-reading from disk.
+//
+// It owns the RPC client lifecycle for both build and run: in RPC mode it dials
+// via newEthRPC and injects the client so the builder resolves unset
+// gas/fee/nonce from the node; in offline mode it fills the hardcoded air-gapped
+// defaults and never dials, keeping golden output byte-identical.
 func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte) (*internaltx.UnsignedTx, error) {
 	entries, err := deposit.EntriesFromJSON(rawData)
 	if err != nil {
@@ -275,29 +296,53 @@ func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte) (*interna
 
 	buildCfg := internaltx.BuildConfig{
 		NetworkParams:        cfg.NetworkParams,
-		RPCURL:               cfg.RPCURL,
+		From:                 cfg.From,
 		GasLimit:             cfg.GasLimit,
 		MaxFeePerGas:         cfg.MaxFeePerGas,
 		MaxPriorityFeePerGas: cfg.MaxPriorityFeePerGas,
 		Nonce:                cfg.Nonce,
 	}
-	if buildCfg.MaxFeePerGas == nil {
-		buildCfg.MaxFeePerGas = defaultMaxFeePerGas()
-	}
-	if buildCfg.MaxPriorityFeePerGas == nil {
-		buildCfg.MaxPriorityFeePerGas = defaultMaxPriorityFeePerGas()
-	}
-	if buildCfg.GasLimit == 0 {
-		buildCfg.GasLimit = defaultGasLimit
-	}
-	if buildCfg.Nonce == nil {
-		var z uint64
-		buildCfg.Nonce = &z
+
+	if cfg.RPCURL != "" {
+		// RPC mode: dial, inject, and leave gas/fees/nonce unset so resolveRPC
+		// fills them from the node (explicit flags still win — resolveRPC only
+		// fills nil/zero fields). Mirror send.go's nil-interface guard: on dial
+		// failure the seam returns a non-nil EthRPC wrapping a nil *ethClient, so
+		// check err and return BEFORE deferring Close.
+		client, err := newEthRPC(ctx, cfg.RPCURL)
+		if err != nil {
+			return nil, err // ErrRPCDial → exit 5, unwrapped (never reaches WrapInputErr)
+		}
+		defer client.Close()
+		buildCfg.RPC = client
+	} else {
+		// Offline / air-gapped mode: fill the hardcoded defaults (F1.4 / C3).
+		if buildCfg.MaxFeePerGas == nil {
+			buildCfg.MaxFeePerGas = defaultMaxFeePerGas()
+		}
+		if buildCfg.MaxPriorityFeePerGas == nil {
+			buildCfg.MaxPriorityFeePerGas = defaultMaxPriorityFeePerGas()
+		}
+		if buildCfg.GasLimit == 0 {
+			buildCfg.GasLimit = defaultGasLimit
+		}
+		if buildCfg.Nonce == nil {
+			var z uint64
+			buildCfg.Nonce = &z
+		}
 	}
 
 	builder := internaltx.NewBuilder()
 	unsignedTx, err := builder.BuildUnsigned(ctx, entry, buildCfg)
 	if err != nil {
+		// Check-before-wrap: an RPC estimation-call failure must reach exit 5
+		// unwrapped (ExitCodeFor maps ErrRPCEstimation → 5); everything else is a
+		// config/input error and stays wrapped → exit 2, preserving the offline
+		// contract. A SIGINT mid-estimation wraps context.Canceled and is mapped
+		// to 4 by ExitCodeFor's ordering — see the note there.
+		if errors.Is(err, internaltx.ErrRPCEstimation) {
+			return nil, err
+		}
 		return nil, WrapInputErr("build", err)
 	}
 	return unsignedTx, nil

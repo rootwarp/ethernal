@@ -108,7 +108,9 @@ func LoadBuildConfig(c *ucli.Command) (*Config, error) {
 	// M1.6-2/M1.6-3 pre-val capture (for "all four" hygiene per reviewer high + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Require for local+mainnet is in LoadRun (where signer known) + action checks (sign); ledger exempt. Store below. Early before gas/etc per M1.5-1.
 
 	// 2. Gas limit — string flag so env-var override works alongside flag.
-	gasLimit := defaultGasLimit
+	// Unset means 0 here; the offline branch in buildUnsignedTx restores the
+	// static default, while RPC mode leaves it 0 so resolveRPC runs EstimateGas.
+	var gasLimit uint64
 	if s := c.String("gas-limit"); s != "" {
 		v, err := strconv.ParseUint(s, 10, 64)
 		if err != nil {

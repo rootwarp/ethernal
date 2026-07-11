@@ -45,18 +45,20 @@ func TestExitCodeFor(t *testing.T) {
 		{"ErrBroadcastFailed direct", internaltx.ErrBroadcastFailed, 5},
 		{"ErrBroadcastChainIDMismatch direct", internaltx.ErrBroadcastChainIDMismatch, 5},
 		{"ErrBroadcastFailed wrapped", fmt.Errorf("rpc: %w", internaltx.ErrBroadcastFailed), 5},
-		// P1-5: RPC gas/fee/nonce estimation-call failure → exit 5 (load-bearing;
-		// buildUnsignedTx returns it unwrapped, so this ExitCodeFor mapping is the
-		// only route off the exit-1 fallback). The wrapped case mirrors builder.go's
-		// two-%w form (NOT WrapInputErr), i.e. the shape P2-2 will surface.
-		//
-		// NOTE: end-to-end exit-5 on the real CLI path activates with P2-2. Today
-		// main.go blanket-wraps BuildUnsigned errors with WrapInputErr/ErrInvalidInput,
-		// which short-circuits at the exit-2 branch above before this line can fire
-		// (architecture §2.1 ordering hazard). P2-2's check-before-wrap fix removes
-		// that short-circuit; these unit tests verify the mapping directly meanwhile.
+		// RPC gas/fee/nonce estimation-call failure → exit 5 (load-bearing).
+		// buildUnsignedTx returns ErrRPCEstimation UNWRAPPED (check-before-wrap),
+		// so this ExitCodeFor mapping is the only route off the exit-1 fallback —
+		// drop the exit.go line and it falls through to 1. The wrapped case mirrors
+		// builder.go's two-%w form (NOT WrapInputErr). The real CLI path is covered
+		// end-to-end by the seam-fake estimation-failure case in buildrpc_test.go.
 		{"ErrRPCEstimation direct", internaltx.ErrRPCEstimation, 5},
 		{"ErrRPCEstimation wrapped", fmt.Errorf("%w: SuggestGasTipCap: %w", internaltx.ErrRPCEstimation, errors.New("dial timeout")), 5},
+		// SIGINT during an RPC estimation call: the error wraps BOTH context.Canceled
+		// and ErrRPCEstimation (builder.go two-%w tagging). ExitCodeFor's ordering
+		// resolves it to 4 (user abort), not 5 — context.Canceled is checked first.
+		// See the ordering comment in exit.go.
+		{"SIGINT mid-estimation → 4 (context.Canceled wins over ErrRPCEstimation)",
+			fmt.Errorf("%w: EstimateGas: %w", internaltx.ErrRPCEstimation, context.Canceled), 4},
 		// P1-5: build-side RPC configuration errors → exit 2. Tested with the BARE
 		// sentinel (NOT WrapInputErr, which would drag in ErrInvalidInput and match
 		// the earlier exit-2 branch, leaving this block unexercised).
