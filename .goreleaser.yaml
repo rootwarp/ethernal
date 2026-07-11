@@ -1,0 +1,155 @@
+# .goreleaser.yaml — Release configuration for eth-deposit.
+#
+# eth-deposit merges the former eth-deposit-gen and eth-deposit-tx binaries
+# into one tool (gen/build/sign/run/send subcommands). This file builds ONE
+# binary per release, for 4 platform/arch targets.
+#
+# CGO strategy: native-runner matrix (CI), zig cc cross-compilation (local)
+# --------------------------------------------------------------------------
+# eth-deposit depends on CGO for two independent reasons:
+#   - github.com/herumi/bls-eth-go-binary (prebuilt .a per target) for BLS signing (gen)
+#   - go-ethereum usbwallet/HID for Ledger support (sign/run)
+# CGO_ENABLED=1 is required; pure-Go builds are not supported. Both cgo
+# dependency chains were verified to co-link cleanly across all 4 targets
+# before this binary was merged (see CHANGELOG.md).
+#
+# CI release builds: test jobs run natively per OS/arch (ubuntu-latest,
+# ubuntu-24.04-arm, macos-14); the release build runs in a single
+# ghcr.io/goreleaser/goreleaser-cross:v1.25.9 container on ubuntu-latest,
+# which bundles osxcross and GNU cross-compilers for all 4 targets.
+#
+# For local snapshot builds: run `make snapshot` (repo root Makefile). It
+# sets CC_FOR_LINUX_AMD64 and CC_FOR_LINUX_ARM64 env vars before invoking
+# goreleaser. The linux build configs read those via ${CC_FOR_LINUX_*:-cc}
+# so goreleaser uses zig cc locally but falls back to "cc" (host compiler)
+# in CI where those vars are unset. Darwin targets always fall back to "cc"
+# (Xcode clang) locally; the CI container sets CC_FOR_DARWIN_* to osxcross.
+#
+# Windows: excluded. herumi/bls-eth-go-binary ships a windows/amd64 .a but
+# there is no Windows CI runner configured and the operator use case is
+# Linux/macOS servers only.
+
+version: 2
+
+project_name: eth-utils
+
+before:
+  hooks:
+    - go -C go mod verify
+
+builds:
+  # darwin builds — natively on macOS runners in local snapshot;
+  # cross-compiled via osxcross in CI (goreleaser-cross container).
+  # CC_FOR_DARWIN_AMD64 / CC_FOR_DARWIN_ARM64 are set in CI to the osxcross
+  # wrappers (o64-clang / oa64-clang). When unset (local macOS build), "cc"
+  # (Xcode clang) is used.
+  - id: darwin-amd64
+    main: ./cmd/eth-deposit
+    dir: go
+    binary: eth-deposit
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if index .Env "CC_FOR_DARWIN_AMD64" }}{{ .Env.CC_FOR_DARWIN_AMD64 }}{{ else }}cc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  - id: darwin-arm64
+    main: ./cmd/eth-deposit
+    dir: go
+    binary: eth-deposit
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if index .Env "CC_FOR_DARWIN_ARM64" }}{{ .Env.CC_FOR_DARWIN_ARM64 }}{{ else }}cc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  # linux builds — natively on ubuntu runners in CI; via zig cc when
+  # CC_FOR_LINUX_AMD64/ARM64 env vars are set (local snapshot via `make snapshot`).
+  - id: linux-amd64
+    main: ./cmd/eth-deposit
+    dir: go
+    binary: eth-deposit
+    goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if index .Env "CC_FOR_LINUX_AMD64" }}{{ .Env.CC_FOR_LINUX_AMD64 }}{{ else }}cc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  - id: linux-arm64
+    main: ./cmd/eth-deposit
+    dir: go
+    binary: eth-deposit
+    goos:
+      - linux
+    goarch:
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CC={{ if index .Env "CC_FOR_LINUX_ARM64" }}{{ .Env.CC_FOR_LINUX_ARM64 }}{{ else }}cc{{ end }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: eth-deposit
+    ids:
+      - darwin-amd64
+      - darwin-arm64
+      - linux-amd64
+      - linux-arm64
+    name_template: "eth-deposit_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ .Tag }}-snapshot"
+
+release:
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

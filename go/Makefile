@@ -1,16 +1,11 @@
-.PHONY: test lint build build-tx clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet e2e-ledger-testnet assert-no-zero-wc oracle-regen test-cross-validate help doc-audit
+.PHONY: test lint build clean coverage fuzz tidy verify refresh-golden e2e-mock e2e-testnet help
 
-BIN     := bin/eth-deposit-gen
-BIN_TX  := bin/eth-deposit-tx
+BIN     := bin/eth-deposit
 GOFLAGS := CGO_ENABLED=1
 
-## build: compile the binary to bin/eth-deposit-gen
+## build: compile the binary to bin/eth-deposit
 build:
-	$(GOFLAGS) go build -o $(BIN) ./cmd/eth-deposit-gen
-
-## build-tx: compile eth-deposit-tx to bin/eth-deposit-tx
-build-tx:
-	$(GOFLAGS) go build -o $(BIN_TX) ./cmd/eth-deposit-tx
+	$(GOFLAGS) go build -o $(BIN) ./cmd/eth-deposit
 
 ## test: run all tests (unit + integration)
 test:
@@ -54,7 +49,7 @@ refresh-golden:
 
 ## e2e-mock: run E2E tests (build+sign+send via mock broadcaster, no real RPC)
 e2e-mock:
-	$(GOFLAGS) go test -tags=e2e -count=1 ./cmd/eth-deposit-tx/...
+	$(GOFLAGS) go test -tags=e2e -count=1 ./cmd/eth-deposit/...
 
 ## e2e-testnet: run manual testnet E2E (requires RPC_URL and ETH_DEPOSIT_TX_PRIVATE_KEY)
 e2e-testnet:

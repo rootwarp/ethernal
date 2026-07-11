@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# e2e-testnet.sh — Manual E2E testnet deposit procedure for eth-deposit-tx.
+# e2e-testnet.sh — Manual E2E testnet deposit procedure for eth-deposit.
 #
 # This script orchestrates the full build → run → send flow against a live
 # testnet RPC endpoint. It is intended for manual validation after a code change
@@ -57,7 +57,7 @@ cd "${GO_ROOT}"
 if [[ -z "${DEPOSIT_DATA_FILE:-}" ]]; then
   # Default: use the phase3 fixture deposit data from the test suite.
   # This contains synthetic (test-only) validator data and is safe for testnet.
-  DEPOSIT_DATA_FILE="cmd/eth-deposit-tx/testdata/deposit-fixture.json"
+  DEPOSIT_DATA_FILE="cmd/eth-deposit/testdata/deposit-fixture.json"
 fi
 
 if [[ ! -f "${DEPOSIT_DATA_FILE}" ]]; then
@@ -75,7 +75,7 @@ if [[ -d "${ARTIFACTS_DIR}" ]]; then
 fi
 mkdir -p "${ARTIFACTS_DIR}"
 
-echo "=== eth-deposit-tx E2E testnet validation ==="
+echo "=== eth-deposit E2E testnet validation ==="
 echo "Network:         ${NETWORK}"
 echo "RPC URL:         ${RPC_URL}"
 echo "Deposit data:    ${DEPOSIT_DATA_FILE}"
@@ -83,13 +83,13 @@ echo "Artifacts dir:   ${ARTIFACTS_DIR}"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 1: Build the eth-deposit-tx binary.
+# Step 1: Build the eth-deposit binary.
 # ---------------------------------------------------------------------------
-echo "[1/5] Building eth-deposit-tx..."
-CGO_ENABLED=1 go build -o "${ARTIFACTS_DIR}/eth-deposit-tx" ./cmd/eth-deposit-tx
-echo "      Binary: ${ARTIFACTS_DIR}/eth-deposit-tx"
+echo "[1/5] Building eth-deposit..."
+CGO_ENABLED=1 go build -o "${ARTIFACTS_DIR}/eth-deposit" ./cmd/eth-deposit
+echo "      Binary: ${ARTIFACTS_DIR}/eth-deposit"
 
-BIN="${ARTIFACTS_DIR}/eth-deposit-tx"
+BIN="${ARTIFACTS_DIR}/eth-deposit"
 
 # ---------------------------------------------------------------------------
 # Step 2: Run build+sign (the run subcommand) with the local signer.

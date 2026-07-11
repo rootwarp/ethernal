@@ -46,10 +46,9 @@ release-dry-run:
 	CC_FOR_LINUX_ARM64="zig cc -target aarch64-linux-musl" \
 	goreleaser release --snapshot --skip=publish --clean
 
-## version: print the canonical first release version for eth-deposit-tx
-# NOTE (M1.9-4): manual builds (go build / Makefile build-*) and go run use "dev" (from main.go var; no -ldflags). Real v1.0.0 injected by goreleaser ldflags in release flow on tag. root version target greps source (stale for tx). Smoke verifs on darwins show usage (incl. M1.6 gates); version string dev vs release difference documented in summary.
+## version: print the current eth-deposit release status (see CHANGELOG.md for history)
 version:
-	@grep -E 'v[0-9]+\.[0-9]+\.[0-9]+' go/cmd/eth-deposit-tx/main.go | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "v0.1.0"
+	@echo "unreleased (eth-deposit merges eth-deposit-gen v1.0.0 and the never-tagged eth-deposit-tx; see CHANGELOG.md)"
 
 # Clean
 clean:

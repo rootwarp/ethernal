@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# eth-deposit-gen.sh — wrapper script for eth-deposit-gen
+# eth-deposit-gen.sh — wrapper script for "eth-deposit gen"
 #
-# Builds the binary if needed, then runs it with the supplied flags.
+# Builds the eth-deposit binary if needed, then runs its gen subcommand with
+# the supplied flags.
 # Passphrase is read from a TTY prompt by default; use --passphrase-env to
 # supply a variable name instead (the variable holds the passphrase, not
 # this script).
@@ -31,7 +32,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODULE_DIR="${REPO_ROOT}/go"
-BIN="${MODULE_DIR}/bin/eth-deposit-gen"
+BIN="${MODULE_DIR}/bin/eth-deposit"
 
 # ── Build if binary is missing or stale ───────────────────────────────────────
 
@@ -45,8 +46,8 @@ needs_build() {
 }
 
 if needs_build; then
-  echo "Building eth-deposit-gen..." >&2
-  (cd "${MODULE_DIR}" && CGO_ENABLED=1 go build -o bin/eth-deposit-gen ./cmd/eth-deposit-gen) || {
+  echo "Building eth-deposit..." >&2
+  (cd "${MODULE_DIR}" && CGO_ENABLED=1 go build -o bin/eth-deposit ./cmd/eth-deposit) || {
     echo "ERROR: build failed." >&2
     exit 1
   }
@@ -76,4 +77,4 @@ done
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
-exec "${BIN}" "$@"
+exec "${BIN}" gen "$@"
