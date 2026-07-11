@@ -87,6 +87,8 @@ func (c *ethClient) SendRawTransaction(ctx context.Context, rawRLP string) (stri
 	}
 
 	if err := c.client.SendTransaction(ctx, &tx); err != nil {
+		// %w (not %v) keeps the underlying *url.Error reachable via errors.As so
+		// the log boundary (RedactURLString) can scrub a path-embedded API key.
 		return "", fmt.Errorf("%w: %w", ErrBroadcastFailed, err)
 	}
 	return tx.Hash().Hex(), nil

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 	"time"
+
+	ucli "github.com/urfave/cli/v3"
 
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
@@ -40,5 +43,43 @@ func TestBuild_RPCErrorURLRedactedAtBoundary(t *testing.T) {
 	}
 	if !strings.Contains(logged, "http://127.0.0.1:1") {
 		t.Errorf("expected scheme://host retained in logged string, got %q", logged)
+	}
+}
+
+// TestSend_RPCErrorURLRedactedAtBoundary is the send-path counterpart: a real
+// broadcast to a closed port with a secret in the URL fails at BroadcasterChainID
+// (a lazy-dialed HTTP call), producing the *url.Error that send.go wraps. It
+// guards the send.go/rpc_client.go %w wraps — with %v the URL would be baked out
+// of the chain and RedactURLString could not scrub it.
+func TestSend_RPCErrorURLRedactedAtBoundary(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	const secret = "SENDINTEGRATIONSECRET"
+
+	app := newSendTestApp()
+	var out, errOut bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &errOut
+
+	err := app.Run(context.Background(), []string{
+		"eth-deposit", "send",
+		"--input", writeTempSignedTx(t),
+		"--rpc-url", "http://127.0.0.1:1/v3/" + secret,
+		"--yes",
+	})
+	if err == nil {
+		t.Fatal("expected a broadcast error against a closed port")
+	}
+	if !strings.Contains(err.Error(), secret) {
+		t.Fatalf("precondition: raw send error should carry the secret, got %q", err.Error())
+	}
+	logged := internaltx.RedactURLString(err) // what main.go:85 logs
+	if strings.Contains(logged, secret) {
+		t.Errorf("send boundary redaction leaked the secret: %q", logged)
+	}
+	if !strings.Contains(logged, "http://127.0.0.1:1") {
+		t.Errorf("expected scheme://host retained, got %q", logged)
 	}
 }

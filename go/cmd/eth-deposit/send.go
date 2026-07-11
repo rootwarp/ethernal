@@ -219,6 +219,8 @@ func sendAction(ctx context.Context, c *ucli.Command, cfg *SendConfig) error {
 	// 3. Verify chain ID.
 	rpcChainID, err := broadcaster.BroadcasterChainID(ctx)
 	if err != nil {
+		// %w (not %v) keeps the underlying *url.Error reachable via errors.As so
+		// the log boundary (RedactURLString) can scrub a path-embedded API key.
 		return fmt.Errorf("%w: fetch chain ID: %w", internaltx.ErrBroadcastFailed, err)
 	}
 	if rpcChainID != rlpTx.ChainId().Uint64() {
