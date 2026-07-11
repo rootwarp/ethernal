@@ -552,6 +552,80 @@ func TestPickPassphraseSource_TermSource(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestGenDryRun_NoOutputDir_RealPipelineEmitsJSON — F3 integration confirmation
+//
+// Drives the real gen pipeline (productionGenDeps: real bls.Init, keystore scan
+// and decrypt) over the committed hoodi fixtures, reading the passphrase from a
+// process env var like a real invocation. It sets OutputDir="" and DryRun=true to
+// prove that nothing downstream requires --output-dir in dry-run: the deposit JSON
+// is produced and lands in the DryRunWriter's buffer (stdout in production).
+// The complementary internal/cli tests cover the CLI-layer requiredness gating.
+// ---------------------------------------------------------------------------
+
+func TestGenDryRun_NoOutputDir_RealPipelineEmitsJSON(t *testing.T) {
+	const fixtureDir = "../../testdata/hoodi"
+
+	// Passphrase supplied via an env var, exactly as --passphrase-env would.
+	passRaw, err := os.ReadFile(fixtureDir + "/passphrase.txt")
+	if err != nil {
+		t.Fatalf("read passphrase.txt: %v", err)
+	}
+	const passEnv = "TEST_HOODI_PASSPHRASE"
+	t.Setenv(passEnv, strings.TrimRight(string(passRaw), "\r\n"))
+
+	// Single pubkey from the fixture.
+	pubRaw, err := os.ReadFile(fixtureDir + "/pubkeys.txt")
+	if err != nil {
+		t.Fatalf("read pubkeys.txt: %v", err)
+	}
+	pubBytes, err := hex.DecodeString(strings.TrimSpace(string(pubRaw)))
+	if err != nil {
+		t.Fatalf("decode pubkeys.txt: %v", err)
+	}
+	if len(pubBytes) != 48 {
+		t.Fatalf("pubkeys.txt: got %d bytes, want 48", len(pubBytes))
+	}
+	var pk [48]byte
+	copy(pk[:], pubBytes)
+
+	var stdoutBuf, summaryBuf bytes.Buffer
+	d := productionGenDeps()
+	d.writer = output.NewDryRunWriter(&stdoutBuf) // stand in for os.Stdout
+	d.summaryOut = &summaryBuf
+	d.progressOut = io.Discard
+	d.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	cfg := cli.Config{
+		KeystoreDir:   fixtureDir + "/keystores",
+		Pubkeys:       [][48]byte{pk},
+		Network:       network.Hoodi,
+		OutputDir:     "", // no --output-dir: allowed in dry-run
+		PassphraseEnv: passEnv,
+		DryRun:        true,
+	}
+
+	if err := runGenWithDeps(context.Background(), cfg, d); err != nil {
+		t.Fatalf("runGenWithDeps(dry-run, no output-dir): %v", err)
+	}
+
+	var entries []map[string]any
+	if err := json.Unmarshal(stdoutBuf.Bytes(), &entries); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\nstdout: %s", err, stdoutBuf.String())
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d deposit entries, want 1", len(entries))
+	}
+	if got := entries[0]["pubkey"]; got != hex.EncodeToString(pk[:]) {
+		t.Errorf("entry pubkey = %v, want %s", got, hex.EncodeToString(pk[:]))
+	}
+
+	// The summary still prints and, with no file written, uses the <stdout> placeholder.
+	if !strings.Contains(summaryBuf.String(), "wrote <stdout>") {
+		t.Errorf("summary %q does not contain %q", summaryBuf.String(), "wrote <stdout>")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestRunGenWithDeps — scanner-specific tests
 // ---------------------------------------------------------------------------
 

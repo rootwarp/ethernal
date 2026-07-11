@@ -69,8 +69,9 @@ type Config struct {
 	MainnetAck bool
 
 	// DryRun is true when --dry-run is passed. When set, the tool writes JSON to
-	// stdout instead of creating a file on disk. The output-dir is validated but
-	// nothing is written there. The summary line and sha256 still print to stderr.
+	// stdout instead of creating a file on disk. In dry-run --output-dir is not
+	// required and its validation is skipped. The summary line and sha256 still
+	// print to stderr.
 	DryRun bool
 
 	// Verbose enables debug-level log output when true. Default is false (Info level).
@@ -143,9 +144,8 @@ Examples:
 			Required: true,
 		},
 		&ucli.StringFlag{
-			Name:     "output-dir",
-			Usage:    "Existing, writable directory for the output deposit_data-<ts>.json file",
-			Required: true,
+			Name:  "output-dir",
+			Usage: "Existing, writable directory for the output deposit_data-<ts>.json file",
 		},
 		&ucli.StringFlag{
 			Name:  "withdrawal-address",
@@ -250,10 +250,15 @@ Examples:
 			return ucli.Exit(fmt.Sprintf("--keystore-dir: %v", err), 2)
 		}
 
-		// 4. Validate --output-dir
+		// 4. Validate --output-dir (skipped in dry-run: DryRunWriter never touches disk).
 		outputDir := cmd.String("output-dir")
-		if err := validateOutputDir(outputDir); err != nil {
-			return ucli.Exit(fmt.Sprintf("--output-dir: %v", err), 2)
+		if !cmd.Bool("dry-run") {
+			if outputDir == "" {
+				return ucli.Exit("--output-dir: required flag not set", 2) // F3.2
+			}
+			if err := validateOutputDir(outputDir); err != nil { // cli.go:316
+				return ucli.Exit(fmt.Sprintf("--output-dir: %v", err), 2) // F3.2
+			}
 		}
 
 		// 5. Validate --parallel: must be in [1, runtime.NumCPU()*4].

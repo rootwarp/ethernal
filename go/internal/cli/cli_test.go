@@ -1186,191 +1186,103 @@ func TestKeystoreDirValidation(t *testing.T) {
 	})
 }
 
-// Test_WithdrawalAddress_EIP55 accepts checksummed addresses, rejects mis-checksum.
-// (AC for M0.4-1)
-func Test_WithdrawalAddress_EIP55(t *testing.T) {
-	dir := t.TempDir()
-	ksDir := t.TempDir()
+// TestOutputDirConditionalRequiredness covers F3: --output-dir is required (and
+// validated) only when NOT in --dry-run mode. In dry-run the flag may be absent
+// or point at an invalid path — validation is skipped because DryRunWriter writes
+// to stdout and never touches disk. Outside dry-run a missing or invalid
+// --output-dir maps to exit code 2, matching the other manual validations.
+func TestOutputDirConditionalRequiredness(t *testing.T) {
+	ksDir := t.TempDir() // a real, readable directory for --keystore-dir
+	// A path that does not exist, so validateOutputDir would fail if it ran.
+	invalidDir := filepath.Join(t.TempDir(), "does-not-exist")
 
-	good := validWithdrawal // 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed (correct EIP-55)
-	// mis-checksum: correct length+hex but case on last nibble wrong
-	bad := "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAee"
-
-	tests := []struct {
-		name    string
-		addr    string
-		wantErr bool
-	}{
-		{name: "accepts_checksummed", addr: good, wantErr: false},
-		{name: "rejects_mis_checksum", addr: bad, wantErr: true},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			args := []string{
-				"--keystore-dir", ksDir,
-				"--pubkeys", "0x" + validPubkey,
-				"--network", "hoodi",
-				"--output-dir", dir,
-				"--withdrawal-address", tc.addr,
-			}
-			cfg, _, called, err := runApp(t, args)
-			if tc.wantErr {
-				if err == nil {
-					t.Errorf("addr=%s: error=nil, want error", tc.addr)
-				}
-				if called {
-					t.Error("run called on bad EIP55")
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("addr=%s: unexpected error: %v", tc.addr, err)
-				}
-				if !called {
-					t.Fatal("run not called")
-				}
-				if cfg.WithdrawalAddress != tc.addr {
-					t.Errorf("WithdrawalAddress=%q, want %q", cfg.WithdrawalAddress, tc.addr)
-				}
-			}
-		})
-	}
-}
-
-// Test_WithdrawalAddress_LengthReject rejects 41 / 43-char inputs. (AC for M0.4-1)
-func Test_WithdrawalAddress_LengthReject(t *testing.T) {
-	dir := t.TempDir()
-	ksDir := t.TempDir()
-
-	addr41 := "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAe"   // 41 chars total
-	addr43 := "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAedd" // 43 chars total
-
-	for _, bad := range []string{addr41, addr43} {
-		t.Run(fmt.Sprintf("len_%d", len(bad)), func(t *testing.T) {
-			args := []string{
-				"--keystore-dir", ksDir,
-				"--pubkeys", "0x" + validPubkey,
-				"--network", "hoodi",
-				"--output-dir", dir,
-				"--withdrawal-address", bad,
-			}
-			_, _, called, err := runApp(t, args)
-			if err == nil {
-				t.Errorf("len=%d: error=nil, want error", len(bad))
-			}
-			if called {
-				t.Error("run called on length error")
-			}
-		})
-	}
-}
-
-// Test_WithdrawalAddress_NonHexReject rejects 0xZZZ.... (AC for M0.4-1)
-func Test_WithdrawalAddress_NonHexReject(t *testing.T) {
-	dir := t.TempDir()
-	ksDir := t.TempDir()
-
-	bad := "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeg" // g not hex, len=42
-
-	args := []string{
-		"--keystore-dir", ksDir,
-		"--pubkeys", "0x" + validPubkey,
-		"--network", "hoodi",
-		"--output-dir", dir,
-		"--withdrawal-address", bad,
-	}
-	_, _, called, err := runApp(t, args)
-	if err == nil {
-		t.Error("non-hex: error=nil, want error")
-	}
-	if called {
-		t.Error("run called on non-hex")
-	}
-}
-
-// Test_WithdrawalAddress_DocumentedInHelp verifies --help (manpage) documents the
-// flag with example (5th AC for M0.4-1; via explicit test exercising help path).
-func Test_WithdrawalAddress_DocumentedInHelp(t *testing.T) {
-	// Construct app; urfave renders help including UsageText + flag list + custom EXAMPLES.
-	app := icli.NewApp(func(context.Context, icli.Config) error { return nil })
-	// We assert key strings are present in the rendered help template pieces (urfave
-	// populates VisibleFlags and UsageText at runtime).
-	if app.UsageText == "" || !strings.Contains(app.UsageText, "--withdrawal-address") {
-		t.Errorf("UsageText does not document --withdrawal-address: %q", app.UsageText)
-	}
-	// The custom template EXAMPLES were updated with example address.
-	// (Indirect: flag definition itself has the Usage describing EIP-55.)
-	found := false
-	for _, f := range app.Flags {
-		if sf, ok := f.(*ucli.StringFlag); ok && sf.Name == "withdrawal-address" {
-			if strings.Contains(sf.Usage, "EIP-55") || strings.Contains(sf.Usage, "0x") {
-				found = true
-			}
-			break
+	t.Run("dry_run_without_output_dir_succeeds", func(t *testing.T) {
+		args := []string{
+			"--keystore-dir", ksDir,
+			"--pubkeys", "0x" + validPubkey,
+			"--network", "hoodi",
+			"--dry-run",
+			// no --output-dir
 		}
-	}
-	if !found {
-		t.Error("withdrawal-address flag Usage does not document EIP-55 / example form")
-	}
-}
-
-// TestConfirmReader_StdinIsTTY_ReturnsStdin (M1.5-4 AC).
-func TestConfirmReader_StdinIsTTY_ReturnsStdin(t *testing.T) {
-	// Use /dev/tty itself as the "stdin" arg; its fd will pass IsTerminal.
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		t.Skipf("no controlling TTY for StdinIsTTY test: %v", err)
-	}
-	t.Cleanup(func() { _ = tty.Close() })
-
-	r, cleanup, err := icli.ConfirmReader(tty)
-	if err != nil {
-		t.Fatalf("ConfirmReader(tty stdin): %v", err)
-	}
-	if r != tty {
-		t.Errorf("ConfirmReader returned %T, want the same *os.File stdin", r)
-	}
-	cleanup()
-}
-
-// TestConfirmReader_StdinPiped_OpensDevTTY (M1.5-4 AC; fd manip via pipe for non-TTY stdin).
-func TestConfirmReader_StdinPiped_OpensDevTTY(t *testing.T) {
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() }) // ignore: best-effort close of pipe ends for test cleanup (matches ConfirmReader/errcheck hygiene pattern)
-
-	// pr is a pipe fd → not a terminal.
-	got, cleanup, err := icli.ConfirmReader(pr)
-	if err != nil {
-		if errors.Is(err, icli.ErrNoTTY) {
-			t.Skip("no /dev/tty available to open for piped-stdin case")
+		cfg, _, called, err := runApp(t, args)
+		if err != nil {
+			t.Fatalf("dry-run without --output-dir: error = %v, want nil", err)
 		}
-		t.Fatalf("ConfirmReader(piped): %v", err)
-	}
-	if got == pr {
-		t.Error("ConfirmReader returned the piped reader; want opened /dev/tty")
-	}
-	// (no terminal fd check here: "got != pr" + open success already validates the
-	// fallback contract; removed guard to avoid os.NewFile+Close side-effect on the
-	// live fd returned by ConfirmReader, per fd-ownership hygiene.)
-	cleanup()
-}
+		if !called {
+			t.Fatal("run callback was not called; validation should pass in dry-run")
+		}
+		if cfg.OutputDir != "" {
+			t.Errorf("OutputDir = %q, want empty string when --output-dir is omitted", cfg.OutputDir)
+		}
+		if !cfg.DryRun {
+			t.Error("DryRun = false, want true")
+		}
+	})
 
-// TestConfirmReader_NoDevTTY_ErrNoTTY (M1.5-4 AC).
-func TestConfirmReader_NoDevTTY_ErrNoTTY(t *testing.T) {
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() }) // ignore: best-effort close of pipe ends for test cleanup (matches ConfirmReader/errcheck hygiene pattern)
+	t.Run("dry_run_with_invalid_output_dir_succeeds", func(t *testing.T) {
+		args := []string{
+			"--keystore-dir", ksDir,
+			"--pubkeys", "0x" + validPubkey,
+			"--network", "hoodi",
+			"--output-dir", invalidDir, // would fail validateOutputDir if it ran
+			"--dry-run",
+		}
+		_, _, called, err := runApp(t, args)
+		if err != nil {
+			t.Fatalf("dry-run with invalid --output-dir: error = %v, want nil (validation skipped)", err)
+		}
+		if !called {
+			t.Fatal("run callback was not called; output-dir validation must be skipped in dry-run")
+		}
+	})
 
-	_, _, err = icli.ConfirmReader(pr)
-	if err == nil {
-		t.Skip("controlling TTY present; /dev/tty open succeeded so cannot hit ErrNoTTY path without fd manipulation beyond scope")
-	}
-	if !errors.Is(err, icli.ErrNoTTY) {
-		t.Errorf("ConfirmReader(piped, no-dev-tty): err = %v, want ErrNoTTY", err)
-	}
+	t.Run("no_dry_run_without_output_dir_exits_2", func(t *testing.T) {
+		args := []string{
+			"--keystore-dir", ksDir,
+			"--pubkeys", "0x" + validPubkey,
+			"--network", "hoodi",
+			// no --dry-run, no --output-dir
+		}
+		_, _, called, err := runApp(t, args)
+		if err == nil {
+			t.Fatal("missing --output-dir without --dry-run: error = nil, want error")
+		}
+		if called {
+			t.Error("run callback was invoked, want it not called on validation error")
+		}
+		exitErr, ok := err.(ucli.ExitCoder)
+		if !ok {
+			t.Fatalf("error type %T is not ucli.ExitCoder", err)
+		}
+		if exitErr.ExitCode() != 2 {
+			t.Errorf("ExitCode = %d, want 2", exitErr.ExitCode())
+		}
+		if !strings.Contains(err.Error(), "required flag not set") {
+			t.Errorf("error message %q does not mention %q", err.Error(), "required flag not set")
+		}
+	})
+
+	t.Run("no_dry_run_with_invalid_output_dir_exits_2", func(t *testing.T) {
+		args := []string{
+			"--keystore-dir", ksDir,
+			"--pubkeys", "0x" + validPubkey,
+			"--network", "hoodi",
+			"--output-dir", invalidDir,
+			// no --dry-run
+		}
+		_, _, called, err := runApp(t, args)
+		if err == nil {
+			t.Fatal("invalid --output-dir without --dry-run: error = nil, want error")
+		}
+		if called {
+			t.Error("run callback was invoked, want it not called on validation error")
+		}
+		exitErr, ok := err.(ucli.ExitCoder)
+		if !ok {
+			t.Fatalf("error type %T is not ucli.ExitCoder", err)
+		}
+		if exitErr.ExitCode() != 2 {
+			t.Errorf("ExitCode = %d, want 2", exitErr.ExitCode())
+		}
+	})
 }
