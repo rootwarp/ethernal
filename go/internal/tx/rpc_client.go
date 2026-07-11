@@ -61,8 +61,11 @@ type ethClient struct {
 func NewEthClient(ctx context.Context, rpcURL string) (*ethClient, error) {
 	c, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
-		// %w (M2.3-4 cleanup after M1.5-8; enables errors.Is on dial err; redaction prefix + §8.2 protects secrets).
-		return nil, fmt.Errorf("%w: %s: %w", ErrRPCDial, cli.Redact(rpcURL, 16), err)
+		// Redact the explicit URL via safeURL; keep err wrapped with %w (not %v)
+		// so any *url.Error it carries (eager ws:// dials) stays reachable via
+		// errors.As and is scrubbed by RedactURLString at the log boundary.
+		// HTTP(S) dials are lazy and rarely fail here — that leak surfaces later.
+		return nil, fmt.Errorf("%w: %s: %w", ErrRPCDial, safeURL(rpcURL), err)
 	}
 	return &ethClient{client: c}, nil
 }

@@ -83,7 +83,11 @@ Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=u
 	applyUsageErrorHook(app)
 
 	if err := app.Run(ctx, os.Args); err != nil {
-		slog.Error("fatal", "err", err)
+		// Redact any RPC URL embedded in the error (path/query API keys leak via
+		// the stdlib *url.Error from a failed estimation call) before it reaches
+		// stderr. RedactURLString scrubs the rendered message; ExitCodeFor still
+		// sees the untouched err, so classification is unaffected.
+		slog.Error("fatal", "err", internaltx.RedactURLString(err))
 		os.Exit(ExitCodeFor(err))
 	}
 }
