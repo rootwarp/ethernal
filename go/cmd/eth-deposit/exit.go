@@ -45,12 +45,18 @@ func ExitCodeFor(err error) int {
 	if errors.Is(err, ErrInvalidInput) {
 		return 2
 	}
+	// Exit code 2: build-side RPC configuration errors (tx).
+	if errors.Is(err, internaltx.ErrChainIDMismatch) ||
+		errors.Is(err, internaltx.ErrMissingFromForNonce) {
+		return 2
+	}
 	// Exit code 2: user / configuration errors (gen).
 	if errors.Is(err, keystore.ErrKeystoreMissing) ||
 		errors.Is(err, keystore.ErrKeystoreMalformed) ||
 		errors.Is(err, keystore.ErrKeystoreVersion) ||
 		errors.Is(err, keystore.ErrEnvVarEmpty) ||
 		errors.Is(err, keystore.ErrKeystoreNotFound) ||
+		errors.Is(err, keystore.ErrNoTTY) ||
 		errors.Is(err, deposit.ErrPubkeyMismatch) ||
 		errors.Is(err, errMainnetAckRequired) ||
 		errors.Is(err, ErrDepositCLINotFound) {
@@ -85,6 +91,7 @@ func ExitCodeFor(err error) int {
 	}
 	// Exit code 5: broadcast / RPC errors (tx).
 	if errors.Is(err, internaltx.ErrRPCDial) ||
+		errors.Is(err, internaltx.ErrRPCEstimation) ||
 		errors.Is(err, internaltx.ErrBroadcastFailed) ||
 		errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) ||
 		errors.Is(err, internaltx.ErrReceiptReverted) ||
