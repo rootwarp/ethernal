@@ -100,10 +100,11 @@ subcommands separately.
 
 Output artifacts:
   signed.json  — the full SignedTx JSON (fields: unsigned, from, hash, r, s, v, rawRLP)
-  signed.raw   — companion file containing only the 0x-prefixed RLP hex, written
-                 alongside signed.json when --output is a file path. This is the
-                 value to pass to eth_sendRawTransaction. The 0x prefix is included
-                 for grep/curl friendliness; strip it if your tool requires raw bytes.
+  signed.raw   — companion file (mode 0600) containing only the 0x-prefixed RLP
+                 hex, written alongside signed.json when --output is a file path.
+                 This is the value to pass to eth_sendRawTransaction. The 0x prefix
+                 is included for grep/curl friendliness; strip it if your tool
+                 requires raw bytes.
 
   When --output is omitted or "-", only SignedTx JSON is written to stdout; no .raw
   companion is produced.

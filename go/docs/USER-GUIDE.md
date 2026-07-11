@@ -492,7 +492,7 @@ unset ETH_DEPOSIT_TX_PRIVATE_KEY
 
 Outputs:
 - `signed_tx.json` (0o600) — SignedTx JSON
-- `signed_tx.raw` (0o600) — just the `rawRLP` hex, convenient for `cast publish` or curl
+- `signed_tx.raw` (0o600) — just the `rawRLP` hex (**0x-prefixed**), convenient for `cast publish` or curl. Written **only when `--output` is a file path**; with stdout output no `.raw` is produced.
 
 Pass `--keep-unsigned` to also write the intermediate `unsigned_tx.json` (useful for auditing what was actually signed). Pass `--raw-output PATH` to override the auto-derived `.raw` filename.
 
