@@ -100,6 +100,34 @@ func TestRedactURLString_PreservesChainAndScrubs(t *testing.T) {
 	}
 }
 
+// TestRedactURLString_ControlByteInURL is the BUG-001 regression guard: a control
+// byte in the URL (a trailing \n from an env var / CRLF file, or a mid-string \t)
+// makes url.Error.Error() %q-escape the URL, so a raw-string ReplaceAll misses it
+// and the key leaks. Assert the secret is ABSENT from the redacted output.
+func TestRedactURLString_ControlByteInURL(t *testing.T) {
+	const secret = "REALKEYSECRET"
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"trailing newline", "https://mainnet.infura.io/v3/" + secret + "\n"},
+		{"mid-string tab", "https://mainnet.infura.io/v3/\t" + secret},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ue := &url.Error{Op: "Post", URL: tc.url, Err: errors.New("connection refused")}
+			wrapped := fmt.Errorf("%w: %w", ErrBroadcastFailed, ue) // production wrap shape
+			if !strings.Contains(wrapped.Error(), secret) {
+				t.Fatalf("precondition: raw error should carry the secret, got %q", wrapped.Error())
+			}
+			got := RedactURLString(wrapped)
+			if strings.Contains(got, secret) {
+				t.Errorf("control byte defeated redaction, secret leaked: %q", got)
+			}
+		})
+	}
+}
+
 func TestRedactURLString_NonURLAndNil(t *testing.T) {
 	plain := errors.New("some non-url error with no secret")
 	if got := RedactURLString(plain); got != plain.Error() {

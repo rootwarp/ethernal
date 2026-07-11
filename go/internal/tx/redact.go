@@ -3,6 +3,7 @@ package tx
 import (
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -45,7 +46,15 @@ func RedactURLString(err error) string {
 	s := err.Error()
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) && urlErr.URL != "" {
-		s = strings.ReplaceAll(s, urlErr.URL, safeURL(urlErr.URL))
+		safe := safeURL(urlErr.URL)
+		// url.Error.Error() renders its URL via %q (strconv.Quote), so a control
+		// byte in the URL (a trailing \n from an env var / CRLF file, or a mid-
+		// string \t) is escaped in the rendered message — the RAW url string then
+		// no longer appears and ReplaceAll misses it, leaking the key. Replace the
+		// quoted form (load-bearing: url.Error always %q's the URL) and the raw
+		// form (harmless belt-and-suspenders for any non-%q rendering).
+		s = strings.ReplaceAll(s, strconv.Quote(urlErr.URL), strconv.Quote(safe))
+		s = strings.ReplaceAll(s, urlErr.URL, safe)
 	}
 	return s
 }
