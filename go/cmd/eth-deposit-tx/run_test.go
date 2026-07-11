@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 
@@ -32,7 +32,7 @@ func TestRunCommand_LocalSigner_HappyPath(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -84,7 +84,7 @@ func TestRunCommand_LocalSigner_StdoutOutput(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &bytes.Buffer{}
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -124,7 +124,7 @@ func TestRunCommand_LocalSigner_KeepUnsigned(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -180,7 +180,7 @@ func TestRunCommand_LocalSigner_RawOutput(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -220,7 +220,7 @@ func TestRunCommand_MissingSignerFlag(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -244,7 +244,7 @@ func TestRunCommand_LedgerNoDevice(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -278,7 +278,7 @@ func TestRunCommand_InvalidInput(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", badFile,
@@ -306,7 +306,7 @@ func TestRunCommand_BadKey(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -344,7 +344,7 @@ func TestRunCommand_AtomicWrite_OnRenameFailure(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -380,7 +380,7 @@ func TestRunCommand_KeepUnsigned_RequiresOutputFile(t *testing.T) {
 	app.ErrWriter = &buf
 
 	// --keep-unsigned without --output should fail with exit 2.
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -413,7 +413,7 @@ func TestRunCommand_OutputFilePermissions(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -452,7 +452,7 @@ func TestRunCommand_OutputDash_IsStdout(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &bytes.Buffer{}
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
@@ -480,7 +480,7 @@ func TestRunSubcommand_Help(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	_ = app.Run([]string{"eth-deposit-tx", "run", "--help"})
+	_ = app.Run(context.Background(), []string{"eth-deposit-tx", "run", "--help"})
 
 	s := buf.String()
 	if !strings.Contains(s, "signer") {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/crypto"
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/deposit"
@@ -47,7 +45,7 @@ type RunConfig struct {
 }
 
 // LoadRunConfig parses and validates run subcommand flags.
-func LoadRunConfig(c *ucli.Context) (*RunConfig, error) {
+func LoadRunConfig(c *ucli.Command) (*RunConfig, error) {
 	buildCfg, err := LoadBuildConfig(c)
 	if err != nil {
 		return nil, err
@@ -171,28 +169,12 @@ Exit codes:
 				Usage: "Override the auto-derived .raw companion filename for the RLP hex (default: <output>.raw → signed.raw when --output is signed.json)",
 			},
 		),
-		Action: func(c *ucli.Context) error {
+		Action: func(ctx context.Context, c *ucli.Command) error {
 			cfg, err := LoadRunConfig(c)
 			if err != nil {
 				return err
 			}
-			// M1.6-1 confirm-network match for run (equiv to build/sendAction logic).
-			// (Mainnet required pre-validated inside LoadBuildConfig called by LoadRunConfig.)
-			if cfg.Build.ConfirmNetwork != "" && cfg.Build.ConfirmNetwork != string(cfg.Build.NetworkParams.Name) {
-				return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match --network %q", cfg.Build.ConfirmNetwork, cfg.Build.NetworkParams.Name), 2)
-			}
-			// M1.6-2: local-signer-mainnet gate + warning already pre-validated in LoadRunConfig.
-			// Print multi-line warning (per PRD §9) to ErrWriter before proceeding to build/sign.
-			if cfg.Signer == "local" && cfg.Build.Network == network.Mainnet {
-				if c.App.ErrWriter != nil {
-					_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: --signer local combined with --network mainnet\n")
-					_, _ = fmt.Fprintf(c.App.ErrWriter, "The local signer reads your private key from an environment variable.\n")
-					_, _ = fmt.Fprintf(c.App.ErrWriter, "This key is visible to other processes, shell history, and core dumps.\n")
-					_, _ = fmt.Fprintf(c.App.ErrWriter, "A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.\n")
-					_, _ = fmt.Fprintf(c.App.ErrWriter, "If you accept the risk, the flag was already supplied; proceeding.\n")
-				}
-			}
-			return runAction(c, cfg)
+			return runAction(ctx, c, cfg)
 		},
 	}
 }
@@ -201,17 +183,18 @@ Exit codes:
 func buildFlags() []ucli.Flag {
 	return []ucli.Flag{
 		&ucli.StringFlag{
-			Name:    "input-file",
-			Aliases: []string{"input", "i"},
-			Usage:   "Path to deposit_data-*.json file (or '-' for stdin); --input is accepted as a shorter alias",
-			EnvVars: []string{"ETH_DEPOSIT_TX_INPUT_FILE"},
+			Name:     "input-file",
+			Aliases:  []string{"input", "i"},
+			Usage:    "Path to deposit_data-*.json file (or '-' for stdin); --input is accepted as a shorter alias",
+			Required: true,
+			Sources:  ucli.EnvVars("ETH_DEPOSIT_TX_INPUT_FILE"),
 		},
 		&ucli.StringFlag{
 			Name:    "network",
 			Aliases: []string{"n"},
 			Usage:   "Target network (mainnet, hoodi, sepolia, holesky)",
 			Value:   "hoodi",
-			EnvVars: []string{"ETH_DEPOSIT_TX_NETWORK"},
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_NETWORK"),
 		},
 		&ucli.StringFlag{
 			Name:  "confirm-network",
@@ -224,49 +207,49 @@ func buildFlags() []ucli.Flag {
 		&ucli.StringFlag{
 			Name:    "output",
 			Usage:   "Output file for the signed transaction (default: stdout)",
-			EnvVars: []string{"ETH_DEPOSIT_TX_OUTPUT"},
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_OUTPUT"),
 		},
 		&ucli.IntFlag{
 			Name:    "index",
 			Usage:   "Index of the deposit entry to use when the JSON contains multiple validators (default: 0)",
 			Value:   0,
-			EnvVars: []string{"ETH_DEPOSIT_TX_INDEX"},
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_INDEX"),
 		},
 		&ucli.StringFlag{
 			Name:    "rpc-url",
-			Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional on run for hybrid; when omitted, all gas and nonce flags must be supplied explicitly)",
-			EnvVars: []string{"ETH_DEPOSIT_TX_RPC_URL"},
+			Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional; when omitted, all gas and nonce flags must be supplied explicitly)",
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_RPC_URL"),
 		},
 		&ucli.StringFlag{
 			Name:    "gas-limit",
 			Usage:   fmt.Sprintf("Gas limit for the deposit transaction (default: %d)", defaultGasLimit),
-			EnvVars: []string{"ETH_DEPOSIT_TX_GAS_LIMIT"},
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_GAS_LIMIT"),
 		},
 		&ucli.StringFlag{
 			Name:    "max-fee-per-gas",
 			Usage:   "EIP-1559 maximum fee per gas in wei (decimal integer, e.g. 20000000000 for 20 Gwei)",
-			EnvVars: []string{"ETH_DEPOSIT_TX_MAX_FEE_PER_GAS"},
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_MAX_FEE_PER_GAS"),
 		},
 		&ucli.StringFlag{
 			Name:    "max-priority-fee-per-gas",
 			Usage:   "EIP-1559 maximum priority fee per gas in wei (decimal integer, e.g. 1000000000 for 1 Gwei)",
-			EnvVars: []string{"ETH_DEPOSIT_TX_MAX_PRIORITY_FEE_PER_GAS"},
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_MAX_PRIORITY_FEE_PER_GAS"),
 		},
 		&ucli.StringFlag{
 			Name:    "nonce",
 			Usage:   "Override the sender account nonce (non-negative integer; omit to fetch from RPC or set later)",
-			EnvVars: []string{"ETH_DEPOSIT_TX_NONCE"},
+			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_NONCE"),
 		},
 	}
 }
 
 // runAction orchestrates the build → sign pipeline in-process.
-func runAction(c *ucli.Context, cfg *RunConfig) error {
+func runAction(ctx context.Context, c *ucli.Command, cfg *RunConfig) error {
 	// 1. Read deposit data.
 	var rawData []byte
 	var err error
 	if cfg.Build.InputFile == "-" {
-		rawData, err = io.ReadAll(c.App.Reader)
+		rawData, err = io.ReadAll(c.Root().Reader)
 	} else {
 		rawData, err = os.ReadFile(cfg.Build.InputFile)
 	}
@@ -274,53 +257,8 @@ func runAction(c *ucli.Context, cfg *RunConfig) error {
 		return ucli.Exit(fmt.Sprintf("--input-file: %v", err), 2)
 	}
 
-	// 2. If --rpc-url provided (run only), construct client for auto nonce/fees (M1.3-5).
-	// build path rejects --rpc-url (see main.go); reuse resolveRPC via the EthRPC.
-	var rpcClient internaltx.EthRPC
-	if rpcURL := cfg.Build.RPCURL; rpcURL != "" {
-		rpcClient, err = newRPCClient(c.Context, rpcURL)
-		if err != nil {
-			return err
-		}
-		defer rpcClient.Close()
-	}
-
-	// 3. Build unsigned tx (in-process, no disk write). Thread rpc + from (for nonce) only on run hybrid.
-	var from [20]byte
-	if rpcClient != nil && cfg.Build.Nonce == nil && cfg.Signer == "local" {
-		// Derive sender addr from priv env (only for run+local+auto-nonce; ledger would require early device open).
-		// Avoids ErrMissingFromForNonce in resolveRPC. Follows signer zeroize/unset contract (M0.8/M1.1/GO-017): defer unset on read,
-		// zero decode buf b (and nil it) after use; see internal/signer/local.go:49 (NewFromHex) and :136 (Sign).
-		// Duplicates parse only for addr (no key retained); sign path still constructs full signer (which will re-read env before its unset).
-		hexKey := os.Getenv(cfg.PrivateKeyEnvVar)
-		nameForErr := cfg.PrivateKeyEnvVar
-		if len(nameForErr) > 32 {
-			nameForErr = cli.Redact(nameForErr, 4)
-		}
-		if hexKey == "" {
-			_ = os.Unsetenv(cfg.PrivateKeyEnvVar)
-			return fmt.Errorf("local signer: environment variable %q is not set or empty: %w", nameForErr, signer.ErrInvalidKey)
-		}
-		defer func() { _ = os.Unsetenv(cfg.PrivateKeyEnvVar) }()
-		stripped := strings.TrimPrefix(hexKey, "0x")
-		if b, decErr := hex.DecodeString(stripped); decErr == nil && len(b) == 32 {
-			defer func() {
-				for i := range b {
-					b[i] = 0
-				}
-				b = nil
-			}()
-			if priv, ecdErr := crypto.ToECDSA(b); ecdErr == nil {
-				addr := crypto.PubkeyToAddress(priv.PublicKey)
-				copy(from[:], addr[:])
-			} else {
-				return fmt.Errorf("local signer: environment variable %q: %w", nameForErr, signer.ErrInvalidKey)
-			}
-		} else {
-			return fmt.Errorf("local signer: environment variable %q: %w", nameForErr, signer.ErrInvalidKey)
-		}
-	}
-	unsigned, err := buildUnsignedTx(c.Context, cfg.Build, rawData, rpcClient, from)
+	// 2. Build unsigned tx (in-process, no disk write).
+	unsigned, err := buildUnsignedTx(ctx, cfg.Build, rawData)
 	if err != nil {
 		return err
 	}
@@ -345,7 +283,7 @@ func runAction(c *ucli.Context, cfg *RunConfig) error {
 		PrivateKeyEnvVar:            cfg.PrivateKeyEnvVar,
 		IAcceptLocalSignerOnMainnet: cfg.IAcceptLocalSignerOnMainnet,
 	}
-	signed, err := signUnsignedTx(c.Context, signCfg, c.App.ErrWriter, *unsigned)
+	signed, err := signUnsignedTx(ctx, signCfg, c.Root().ErrWriter, *unsigned)
 	if err != nil {
 		return err
 	}
@@ -359,7 +297,7 @@ func runAction(c *ucli.Context, cfg *RunConfig) error {
 
 	// 7. Write output.
 	if cfg.OutputFile == "" || cfg.OutputFile == "-" {
-		_, err = c.App.Writer.Write(signedJSON)
+		_, err = c.Root().Writer.Write(signedJSON)
 		return err
 	}
 

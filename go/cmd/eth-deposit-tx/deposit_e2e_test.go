@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
@@ -25,12 +25,12 @@ const (
 )
 
 // newE2EApp returns a full app including send, matching the production app minus signal handling.
-func newE2EApp() *ucli.App {
-	return &ucli.App{
+func newE2EApp() *ucli.Command {
+	return &ucli.Command{
 		Name:           "eth-deposit-tx",
 		Version:        "dev",
 		Commands:       []*ucli.Command{buildCommand(), signCommand(), runCommand(), sendCommand()},
-		ExitErrHandler: func(_ *ucli.Context, _ error) {},
+		ExitErrHandler: func(_ context.Context, _ *ucli.Command, _ error) {},
 	}
 }
 
@@ -74,7 +74,7 @@ func TestE2E_LocalSigner_FullPipeline_NoRPC(t *testing.T) {
 		t.Fatalf("resolve deposit fixture path: %v", err)
 	}
 
-	err = app.Run([]string{
+	err = app.Run(context.Background(), []string{
 		"eth-deposit-tx", "run",
 		"--network", "holesky",
 		"--input-file", absDepositFixture,
@@ -161,7 +161,7 @@ func TestE2E_LocalSigner_BuildSignSendMock(t *testing.T) {
 	signApp.Writer = &signOut
 	signApp.ErrWriter = &signErr
 
-	if err := signApp.Run([]string{
+	if err := signApp.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", absUnsigned,
@@ -190,7 +190,7 @@ func TestE2E_LocalSigner_BuildSignSendMock(t *testing.T) {
 	sendApp.Writer = &sendOut
 	sendApp.ErrWriter = &sendErr
 
-	if err := sendApp.Run([]string{
+	if err := sendApp.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", signedFile,
 		"--rpc-url", "http://mock.localhost:8545",
@@ -248,7 +248,7 @@ func TestE2E_SendMock_ReceiptPolling(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	if err := app.Run([]string{
+	if err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t), // reuse helper from send_test.go
 		"--rpc-url", "http://mock.localhost:8545",

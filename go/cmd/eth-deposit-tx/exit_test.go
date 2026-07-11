@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"

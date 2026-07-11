@@ -2,11 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 )
 
 // TestPhase2_HoleskyGolden runs build with the phase2 Holesky synthetic fixture
@@ -26,7 +27,7 @@ func TestPhase2_HoleskyGolden(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &out
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "build",
 		"--network", "holesky",
 		"--input-file", fixture,

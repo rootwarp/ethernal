@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strconv"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/network"
@@ -72,16 +72,7 @@ type Config struct {
 // It validates the result before returning. Unknown network or invalid numeric
 // inputs produce an error with exit code 2 via ucli.Exit so callers can return
 // the error directly to urfave.
-func LoadBuildConfig(c *ucli.Context) (*Config, error) {
-	// Pre-validate required flags early (before any other processing) so that
-	// urfave/cli's internal errRequiredFlags is never emitted for our required
-	// schemas. The flag names derive from the definitions in buildFlags (single
-	// source of truth since M2.2-3 / FR-P2-A15; M1.5-1 / FR-P1-F1). (No list/const
-	// introduced; names are the literal strings in the canonical flag defs.)
-	if c.String("input-file") == "" {
-		return nil, ucli.Exit("--input-file: required flag not set", 2)
-	}
-
+func LoadBuildConfig(c *ucli.Command) (*Config, error) {
 	// 1. Network — parse and look up constants.
 	net, err := network.ParseFlag(c.String("network"))
 	if err != nil {

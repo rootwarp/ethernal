@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -62,7 +62,7 @@ type SendConfig struct {
 }
 
 // LoadSendConfig parses and validates send subcommand flags.
-func LoadSendConfig(c *ucli.Context) (*SendConfig, error) {
+func LoadSendConfig(c *ucli.Command) (*SendConfig, error) {
 	inputFile := c.String("input")
 	if inputFile == "" {
 		return nil, ucli.Exit("--input: required flag not set", 2)
@@ -152,7 +152,7 @@ Exit codes:
 			&ucli.StringFlag{
 				Name:    "rpc-url",
 				Usage:   "JSON-RPC endpoint URL for broadcast",
-				EnvVars: []string{"ETH_DEPOSIT_TX_RPC_URL"},
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_RPC_URL"),
 			},
 			&ucli.BoolFlag{
 				Name:  "yes",
@@ -180,23 +180,23 @@ Exit codes:
 				Usage: "Write the transaction receipt JSON to this file (implies --wait-for-receipt)",
 			},
 		},
-		Action: func(c *ucli.Context) error {
+		Action: func(ctx context.Context, c *ucli.Command) error {
 			cfg, err := LoadSendConfig(c)
 			if err != nil {
 				return err
 			}
-			return sendAction(c, cfg)
+			return sendAction(ctx, c, cfg)
 		},
 	}
 }
 
 // sendAction executes the send workflow. Extracted for testability.
-func sendAction(c *ucli.Context, cfg *SendConfig) error {
+func sendAction(ctx context.Context, c *ucli.Command, cfg *SendConfig) error {
 	// 1. Read signed tx.
 	var raw []byte
 	var err error
 	if cfg.InputFile == "-" {
-		raw, err = io.ReadAll(c.App.Reader)
+		raw, err = io.ReadAll(c.Root().Reader)
 	} else {
 		raw, err = os.ReadFile(cfg.InputFile)
 	}
@@ -209,36 +209,15 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 		return ucli.Exit(fmt.Sprintf("invalid input JSON: %v", err), 2)
 	}
 
-	// 2. Compute netParams from *declared* JSON chainID (not RPC) so we can
-	//    call validateSignedAgainstRLP *before* any broadcaster.ChainID().
-	//    (enables TestSendAction_ValidateBeforeBroadcast_Order and validate-first).
-	declaredChainID := signed.Unsigned.ChainID
-	netParams, lookupErr := network.LookupByChainID(declaredChainID)
-	if lookupErr != nil {
-		// Non-fatal fallback for display/validate contract check (matches prior behavior).
-		netParams = network.Params{
-			Name:    network.Network(fmt.Sprintf("chain-%d", declaredChainID)),
-			ChainID: declaredChainID,
-		}
-	}
-
-	// 3. validate-first: RLP vs JSON + deposit contract (M0.6-5 restructure per
-	//    arch §7.3/§13.1). Uses declared net for contract check. All divergence
-	//    and type errors -> ucli.Exit(...,2) with descriptive msg.
-	rlpTx, err := validateSignedAgainstRLP(&signed, netParams)
-	if err != nil {
-		return err
-	}
-
-	// 4. Dial RPC (after validate).
-	broadcaster, err := newBroadcaster(c.Context, cfg.RPCURL)
+	// 2. Dial RPC.
+	broadcaster, err := newBroadcaster(ctx, cfg.RPCURL)
 	if err != nil {
 		return err
 	}
 	defer broadcaster.Close()
 
-	// 5. RPC chain ID guard now against the *decoded* rlpTx (not signed.Unsigned).
-	rpcChainID, err := broadcaster.BroadcasterChainID(c.Context)
+	// 3. Verify chain ID.
+	rpcChainID, err := broadcaster.BroadcasterChainID(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: fetch chain ID: %w", internaltx.ErrBroadcastFailed, err)
 	}
@@ -281,10 +260,16 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 		}
 	}
 
-	// M1.6-2: check site in sendAction before prompt/broadcast (per spec; reuse M1.6-1 hygiene).
-	// Local-signer gate is enforced at sign/run (where --signer is known); send carries flag for
-	// symmetry only. Thus ledger-signed mainnet requires no --i-accept-local-signer-on-mainnet.
-	_ = cfg.IAcceptLocalSignerOnMainnet
+	fmt.Fprintf(c.Root().ErrWriter, "\n")
+	fmt.Fprintf(c.Root().ErrWriter, "> You are about to BROADCAST a %s deposit transaction.\n", formatETH(valueBigWei))
+	fmt.Fprintf(c.Root().ErrWriter, ">   Network:        %s (chain ID %d)\n", netParams.Name, netParams.ChainID)
+	fmt.Fprintf(c.Root().ErrWriter, ">   From:           %s\n", signed.From)
+	fmt.Fprintf(c.Root().ErrWriter, ">   To (deposit):   %s\n", signed.Unsigned.To)
+	fmt.Fprintf(c.Root().ErrWriter, ">   Value:          %s\n", formatETH(valueBigWei))
+	fmt.Fprintf(c.Root().ErrWriter, ">   Nonce:          %d\n", signed.Unsigned.Nonce)
+	fmt.Fprintf(c.Root().ErrWriter, ">   MaxFeePerGas:   %s\n", formatGwei(maxFeeBigWei))
+	fmt.Fprintf(c.Root().ErrWriter, ">   Tx hash:        %s\n", signed.Hash)
+	fmt.Fprintf(c.Root().ErrWriter, ">\n")
 
 	// 7. Print the "about to broadcast" prompt from *decoded* rlpTx values,
 	//    labelled "(decoded from RLP)" (existing prompt code updated to take
@@ -308,54 +293,38 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 
 	// 8. Confirmation.
 	if !cfg.Yes {
-		var confirmR io.Reader
-		var cleanup func()
-		var cErr error
-		if cfg.InputFile == "-" {
-			// only for --input - (where app.Reader was consumed for JSON) do we need
-			// ConfirmReader to possibly return /dev/tty or ErrNoTTY; for normal file
-			// input the pre-existing direct use of (possibly faked-in-test) c.App.Reader
-			// for the prompt must be preserved for testability/env independence.
-			confirmR, cleanup, cErr = cli.ConfirmReader(c.App.Reader)
-			defer cleanup()
-			if errors.Is(cErr, cli.ErrNoTTY) {
-				return ucli.Exit(cErr.Error(), 2)
-			}
-		} else {
-			confirmR = c.App.Reader
-		}
-		_, _ = fmt.Fprintf(c.App.ErrWriter, "> Type the network name to confirm: ") // ignore: best-effort to ErrWriter
-		reader := bufio.NewReader(confirmR)
+		fmt.Fprintf(c.Root().ErrWriter, "> Type the network name to confirm: ")
+		reader := bufio.NewReader(c.Root().Reader)
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			// EOF or any read error → abort
-			_, _ = fmt.Fprintf(c.App.ErrWriter, "\nAborted.\n") // ignore: best-effort to ErrWriter
-			return fmt.Errorf("%w: %w", ErrUserAborted, err)
+			fmt.Fprintf(c.Root().ErrWriter, "\nAborted.\n")
+			return fmt.Errorf("%w: %v", ErrUserAborted, err)
 		}
 		input = strings.TrimSpace(input)
 		if !strings.EqualFold(input, string(netParams.Name)) {
-			_, _ = fmt.Fprintf(c.App.ErrWriter, "> Confirmation failed (got %q, want %q). Aborted.\n", input, netParams.Name) // ignore: best-effort to ErrWriter
+			fmt.Fprintf(c.Root().ErrWriter, "> Confirmation failed (got %q, want %q). Aborted.\n", input, netParams.Name)
 			return ErrUserAborted
 		}
 	}
 
-	// 9. Broadcast.
-	_, _ = fmt.Fprintf(c.App.ErrWriter, "> Broadcasting...\n") // ignore: best-effort to ErrWriter
-	txHash, err := broadcaster.SendRawTransaction(c.Context, signed.RawRLP)
+	// 7. Broadcast.
+	fmt.Fprintf(c.Root().ErrWriter, "> Broadcasting...\n")
+	txHash, err := broadcaster.SendRawTransaction(ctx, signed.RawRLP)
 	if err != nil {
 		return err
 	}
 
-	// 10. Print result.
-	_, _ = fmt.Fprintf(c.App.Writer, "Tx hash: %s\n", txHash) // ignore: best-effort to Writer
+	// 8. Print result.
+	fmt.Fprintf(c.Root().Writer, "Tx hash: %s\n", txHash)
 	if netParams.ExplorerURL != "" {
-		_, _ = fmt.Fprintf(c.App.Writer, "Explorer: %s/tx/%s\n", netParams.ExplorerURL, txHash) // ignore: best-effort to Writer
+		fmt.Fprintf(c.Root().Writer, "Explorer: %s/tx/%s\n", netParams.ExplorerURL, txHash)
 	}
 	slog.Info("broadcast succeeded", "hash", txHash, "network", netParams.Name)
 
 	// 11. Optionally wait for receipt.
 	if cfg.WaitForReceipt {
-		rec, err := pollReceipt(c.Context, broadcaster, txHash, cfg.ReceiptTimeout)
+		rec, err := pollReceipt(ctx, broadcaster, txHash, cfg.ReceiptTimeout)
 		if err != nil {
 			return fmt.Errorf("receipt: %w", err)
 		}
@@ -364,8 +333,8 @@ func sendAction(c *ucli.Context, cfg *SendConfig) error {
 			if rec.Status == 0 {
 				statusStr = "REVERTED"
 			}
-			_, _ = fmt.Fprintf(c.App.Writer, "Receipt: status=%s block=%d gasUsed=%d\n",
-				statusStr, rec.BlockNumber, rec.GasUsed) // ignore: best-effort to Writer
+			fmt.Fprintf(c.Root().Writer, "Receipt: status=%s block=%d gasUsed=%d\n",
+				statusStr, rec.BlockNumber, rec.GasUsed)
 
 			if cfg.ReceiptOutputFile != "" {
 				recJSON, err := json.MarshalIndent(rec, "", "  ")

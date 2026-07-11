@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 )
 
 // TestPhase3_HoleskyLocalSignerGolden signs the Phase 3 unsigned fixture with the
@@ -42,7 +43,7 @@ func TestPhase3_HoleskyLocalSignerGolden(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err = app.Run([]string{
+	err = app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", unsignedPath,

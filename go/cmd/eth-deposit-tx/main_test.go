@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -9,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 )
 
 // TestBuild_GoldenOutput compares the exact JSON produced by build (with default
@@ -27,7 +28,7 @@ func TestBuild_GoldenOutput(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &out
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "build",
 		"--network", "holesky",
 		"--input-file", fixture,
@@ -71,7 +72,7 @@ func TestApp_Help(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	_ = app.Run([]string{"eth-deposit-tx", "--help"})
+	_ = app.Run(context.Background(), []string{"eth-deposit-tx", "--help"})
 
 	s := buf.String()
 	if !strings.Contains(s, "eth-deposit-tx") {
@@ -88,7 +89,7 @@ func TestApp_Version(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	_ = app.Run([]string{"eth-deposit-tx", "--version"})
+	_ = app.Run(context.Background(), []string{"eth-deposit-tx", "--version"})
 
 	s := buf.String()
 	if !strings.Contains(s, "dev") && !strings.Contains(s, "eth-deposit-tx") {
@@ -102,7 +103,7 @@ func TestBuildSubcommand_Help(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	_ = app.Run([]string{"eth-deposit-tx", "build", "--help"})
+	_ = app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--help"})
 
 	s := buf.String()
 	if !strings.Contains(s, "input-file") {
@@ -116,7 +117,7 @@ func TestSignSubcommand_Help(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	_ = app.Run([]string{"eth-deposit-tx", "sign", "--help"})
+	_ = app.Run(context.Background(), []string{"eth-deposit-tx", "sign", "--help"})
 
 	s := buf.String()
 	if !strings.Contains(s, "signer") {
@@ -139,7 +140,7 @@ func TestBuildSubcommand_Action_Success(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &out
 
-	err := app.Run([]string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", fixture})
+	err := app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", fixture})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestBuildSubcommand_Action_StdinInput(t *testing.T) {
 	app.ErrWriter = &out
 	app.Reader = bytes.NewReader(rawData)
 
-	err = app.Run([]string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", "-"})
+	err = app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", "-"})
 	if err != nil {
 		t.Fatalf("stdin input: unexpected error: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestBuildSubcommand_Action_StdoutDefault(t *testing.T) {
 	app.ErrWriter = &out
 
 	// No --output flag: output goes to stdout (app.Writer)
-	err := app.Run([]string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", fixture})
+	err := app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", fixture})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +223,7 @@ func TestBuildSubcommand_Action_OutputToFile(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{"eth-deposit-tx", "build", "--network", "holesky",
+	err := app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "holesky",
 		"--input-file", fixture, "--output", outFile})
 	if err != nil {
 		t.Fatalf("output to file: unexpected error: %v", err)
@@ -246,7 +247,7 @@ func TestBuildSubcommand_Action_MissingInputFile(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{"eth-deposit-tx", "build", "--network", "holesky",
+	err := app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "holesky",
 		"--input-file", "/nonexistent/path/deposit.json"})
 	if err == nil {
 		t.Fatal("expected error for missing input file, got nil")
@@ -268,7 +269,7 @@ func TestBuildSubcommand_Action_InvalidJSON(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", badFile})
+	err := app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "holesky", "--input-file", badFile})
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
@@ -287,7 +288,7 @@ func TestBuildSubcommand_Action_IndexOutOfBounds(t *testing.T) {
 	app.ErrWriter = &buf
 
 	// fixture has 1 entry (index 0); request index 5
-	err := app.Run([]string{"eth-deposit-tx", "build", "--network", "holesky",
+	err := app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "holesky",
 		"--input-file", fixture, "--index", "5"})
 	if err == nil {
 		t.Fatal("expected error for out-of-bounds index, got nil")
@@ -304,7 +305,7 @@ func TestBuildSubcommand_Action_BadNetwork(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &out
 
-	err := app.Run([]string{"eth-deposit-tx", "build", "--network", "badnet", "--input-file", "deposit.json"})
+	err := app.Run(context.Background(), []string{"eth-deposit-tx", "build", "--network", "badnet", "--input-file", "deposit.json"})
 	if err == nil {
 		t.Fatal("expected error for unknown network, got nil")
 	}
@@ -321,7 +322,7 @@ func TestBuildSubcommand_InputAlias(t *testing.T) {
 	app.ErrWriter = &bytes.Buffer{}
 
 	// --input is an alias for --input-file on build.
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "build",
 		"--network", "holesky",
 		"--input", fixtureAbsPath(t),
@@ -346,7 +347,7 @@ func TestBuildSubcommand_Action_OutputDash_IsStdout(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &bytes.Buffer{}
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "build",
 		"--network", "holesky",
 		"--input-file", fixture,
@@ -361,8 +362,8 @@ func TestBuildSubcommand_Action_OutputDash_IsStdout(t *testing.T) {
 }
 
 // newTestApp returns a minimal app instance for testing (avoids side effects of the real main).
-func newTestApp() *ucli.App {
-	return &ucli.App{
+func newTestApp() *ucli.Command {
+	return &ucli.Command{
 		Name:     "eth-deposit-tx",
 		Usage:    "Create and sign Ethereum deposit transactions from deposit data JSON",
 		Version:  "dev",

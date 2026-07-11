@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"os"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
@@ -42,9 +42,7 @@ type SignConfig struct {
 }
 
 // LoadSignConfig parses and validates sign subcommand flags.
-func LoadSignConfig(c *ucli.Context) (*SignConfig, error) {
-	// Pre-validate required --signer (was Required:true in flag schema) here so
-	// urfave never produces its internal required error for it.
+func LoadSignConfig(c *ucli.Command) (*SignConfig, error) {
 	signerType := c.String("signer")
 	if signerType == "" {
 		return nil, ucli.Exit("--signer: required flag not set", 2)
@@ -156,23 +154,23 @@ Exit codes:
 				Usage: "Allow signing when the 'to' address is not the deposit contract for ChainID (the strict 42-char hex check still applies; advanced, use with caution)",
 			},
 		},
-		Action: func(c *ucli.Context) error {
+		Action: func(ctx context.Context, c *ucli.Command) error {
 			cfg, err := LoadSignConfig(c)
 			if err != nil {
 				return err
 			}
-			return signAction(c, cfg)
+			return signAction(ctx, c, cfg)
 		},
 	}
 }
 
 // signAction executes the sign workflow. Extracted for testability.
-func signAction(c *ucli.Context, cfg *SignConfig) error {
+func signAction(ctx context.Context, c *ucli.Command, cfg *SignConfig) error {
 	// 1. Read input.
 	var raw []byte
 	var err error
 	if cfg.InputFile == "-" {
-		raw, err = io.ReadAll(c.App.Reader)
+		raw, err = io.ReadAll(c.Root().Reader)
 	} else {
 		raw, err = os.ReadFile(cfg.InputFile)
 	}
@@ -205,7 +203,7 @@ func signAction(c *ucli.Context, cfg *SignConfig) error {
 	}
 
 	// 3. Sign.
-	signed, err := signUnsignedTx(c.Context, cfg, c.App.ErrWriter, unsigned)
+	signed, err := signUnsignedTx(ctx, cfg, c.Root().ErrWriter, unsigned)
 	if err != nil {
 		return err
 	}
@@ -219,7 +217,7 @@ func signAction(c *ucli.Context, cfg *SignConfig) error {
 
 	// 5. Write output.
 	if cfg.OutputFile == "" || cfg.OutputFile == "-" {
-		_, err = c.App.Writer.Write(out)
+		_, err = c.Root().Writer.Write(out)
 		return err
 	}
 	// 0o600: signed tx bytes contain sensitive metadata (from address, tx hash, etc.)

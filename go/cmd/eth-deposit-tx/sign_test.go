@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
@@ -54,7 +54,7 @@ func TestSignCommand_LocalSigner_Success(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -99,7 +99,7 @@ func TestSignCommand_LocalSigner_MissingEnvKey(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -135,7 +135,7 @@ func TestSignCommand_LocalSigner_BadKey(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -168,7 +168,7 @@ func TestSignCommand_InvalidSigner(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "foo",
 		"--input", inFile,
@@ -191,7 +191,7 @@ func TestSignCommand_MissingInput(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		// no --input
@@ -222,7 +222,7 @@ func TestSignCommand_InvalidInputJSON(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", badFile,
@@ -252,7 +252,7 @@ func TestSignCommand_LocalSigner_StdinInput(t *testing.T) {
 	app.ErrWriter = &out
 	app.Reader = bytes.NewReader(unsignedTxJSON())
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", "-",
@@ -290,7 +290,7 @@ func TestSignCommand_LocalSigner_StdoutOutput(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &bytes.Buffer{}
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -332,7 +332,7 @@ func TestSignCommand_Ledger_NotSupported_OnCGOPath(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "ledger",
 		"--input", inFile,
@@ -363,7 +363,7 @@ func TestSignCommand_InvalidEnvVarName_Lowercase(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -393,7 +393,7 @@ func TestSignCommand_InvalidEnvVarName_KeyPassedDirectly(t *testing.T) {
 	app.ErrWriter = &buf
 
 	// Simulate user accidentally passing the actual hex key as the env var name.
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -436,7 +436,7 @@ func TestSignCommand_OutputWriteError_Exit2(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -470,7 +470,7 @@ func TestSignCommand_OutputFilePermissions(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,
@@ -509,7 +509,7 @@ func TestSignCommand_OutputDash_IsStdout(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &bytes.Buffer{}
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "sign",
 		"--signer", "local",
 		"--input", inFile,

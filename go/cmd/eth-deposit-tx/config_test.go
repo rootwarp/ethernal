@@ -1,11 +1,12 @@
 package main
 
 import (
+	"context"
 	"math/big"
 	"os"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
@@ -27,14 +28,14 @@ func captureConfig(t *testing.T, args []string) (*Config, error) {
 	var actionErr error
 
 	cmd := buildCommand()
-	cmd.Action = func(c *ucli.Context) error {
+	cmd.Action = func(ctx context.Context, c *ucli.Command) error {
 		cfg, err := LoadBuildConfig(c)
 		captured = cfg
 		actionErr = err
 		return err
 	}
 
-	app := &ucli.App{
+	app := &ucli.Command{
 		Name:     "eth-deposit-tx",
 		Commands: []*ucli.Command{cmd},
 	}
@@ -42,7 +43,7 @@ func captureConfig(t *testing.T, args []string) (*Config, error) {
 	app.Writer = os.Stderr
 	app.ErrWriter = os.Stderr
 
-	_ = app.Run(append([]string{"eth-deposit-tx"}, args...))
+	_ = app.Run(context.Background(), append([]string{"eth-deposit-tx"}, args...))
 	return captured, actionErr
 }
 

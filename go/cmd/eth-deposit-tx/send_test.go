@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/ethereum/go-ethereum/core/types"
 
@@ -100,12 +100,12 @@ func withMockBroadcaster(t *testing.T, mock *mockBroadcaster) {
 }
 
 // newSendTestApp returns a minimal app with all subcommands.
-func newSendTestApp() *ucli.App {
-	return &ucli.App{
+func newSendTestApp() *ucli.Command {
+	return &ucli.Command{
 		Name:           "eth-deposit-tx",
 		Version:        "dev",
 		Commands:       []*ucli.Command{buildCommand(), signCommand(), runCommand(), sendCommand()},
-		ExitErrHandler: func(_ *ucli.Context, _ error) {},
+		ExitErrHandler: func(_ context.Context, _ *ucli.Command, _ error) {},
 	}
 }
 
@@ -127,7 +127,7 @@ func TestSendCommand_HappyPath(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -170,7 +170,7 @@ func TestSendCommand_ConfirmPrompt_Accept(t *testing.T) {
 	app.ErrWriter = &errOut
 	app.Reader = strings.NewReader("holesky\n")
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -203,7 +203,7 @@ func TestSendCommand_ConfirmPrompt_Reject(t *testing.T) {
 	app.ErrWriter = &errOut
 	app.Reader = strings.NewReader("mainnet\n") // wrong network name
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -239,7 +239,7 @@ func TestSendCommand_ConfirmPrompt_EOF(t *testing.T) {
 	app.ErrWriter = &errOut
 	app.Reader = strings.NewReader("") // EOF immediately
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -322,7 +322,7 @@ func TestSendCommand_ChainIDMismatch(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -355,7 +355,7 @@ func TestSendCommand_RPCFailure(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -379,7 +379,7 @@ func TestSendCommand_MissingRPC(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		// no --rpc-url
@@ -412,7 +412,7 @@ func TestSendCommand_InvalidInput(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", badFile,
 		"--rpc-url", "http://localhost:8545",
@@ -454,7 +454,7 @@ func TestSendCommand_BroadcastReceiptWrite(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -506,7 +506,7 @@ func TestSendCommand_ConfirmPrompt_CaseInsensitive(t *testing.T) {
 	app.ErrWriter = &errOut
 	app.Reader = strings.NewReader("Holesky\n") // mixed case
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -534,7 +534,7 @@ func TestSendCommand_WaitForReceipt_Timeout(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:8545",
@@ -560,7 +560,7 @@ func TestSendCommand_MissingInput(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--rpc-url", "http://localhost:8545",
 		"--yes",
@@ -579,7 +579,7 @@ func TestSendSubcommand_Help(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	_ = app.Run([]string{"eth-deposit-tx", "send", "--help"})
+	_ = app.Run(context.Background(), []string{"eth-deposit-tx", "send", "--help"})
 
 	s := buf.String()
 	if !strings.Contains(s, "rpc-url") {
@@ -606,7 +606,7 @@ func TestSendCommand_RPCDialFailure(t *testing.T) {
 	app.Writer = &out
 	app.ErrWriter = &errOut
 
-	err := app.Run([]string{
+	err := app.Run(context.Background(), []string{
 		"eth-deposit-tx", "send",
 		"--input", writeTempSignedTx(t),
 		"--rpc-url", "http://localhost:9999",

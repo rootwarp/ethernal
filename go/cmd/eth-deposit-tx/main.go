@@ -1,3 +1,14 @@
+// Package main is the entry point for eth-deposit-tx.
+// It sets up the urfave/cli/v3 application and wires the build, sign, run, and send subcommands.
+//
+// Exit codes:
+//
+//	0 — success
+//	1 — unexpected / internal error
+//	2 — user / configuration error (bad input, unknown network, missing file, etc.)
+//	3 — signer / crypto error (bad key, no device, app not open, chain ID mismatch)
+//	4 — user abort (SIGINT or Ledger rejection)
+//	5 — broadcast / RPC error (dial failure, eth_sendRawTransaction error)
 package main
 
 import (
@@ -6,6 +17,21 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	ucli "github.com/urfave/cli/v3"
+
+	"github.com/rootwarp/eth-utils/go/internal/deposit"
+	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
+)
+
+// version, commit, and date are set at build time via -ldflags.
+// Default values are used for local/dev builds.
+// Canonical first release: v0.1.0 — signals first usable release, not yet
+// feature-complete vs roadmap (mainnet Ledger heuristics deferred to v0.2.0).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 func main() {
@@ -15,8 +41,214 @@ func main() {
 	go func() { <-ctx.Done(); stop() }()
 	defer stop()
 
-	if err := newTxApp().RunContext(ctx, os.Args); err != nil {
+	app := &ucli.Command{
+		Name:  "eth-deposit-tx",
+		Usage: "Create and sign Ethereum deposit transactions from deposit data JSON",
+		UsageText: `eth-deposit-tx build [options]
+   eth-deposit-tx sign [options]
+   eth-deposit-tx run [options]
+   eth-deposit-tx send [options]`,
+		Version: fmt.Sprintf("%s (commit=%s, built=%s)", version, commit, date),
+		Description: `eth-deposit-tx converts Launchpad-compatible deposit_data JSON into raw Ethereum transactions
+for the Beacon Chain deposit contract.
+
+It supports a secure two-phase workflow:
+  build  - Construct an unsigned transaction (supports offline/air-gapped mode)
+  sign   - Sign the transaction, with Ledger hardware as the primary method
+  run    - Convenience: build + sign in one step (same machine, no serialization to disk)
+  send   - Broadcast a signed tx via JSON-RPC (requires explicit network-name confirmation)
+
+The tool produces standard hex-encoded RLP output ready for eth_sendRawTransaction.
+
+Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=user abort, 5=broadcast/RPC error.`,
+		Commands: []*ucli.Command{
+			buildCommand(),
+			signCommand(),
+			runCommand(),
+			sendCommand(),
+		},
+		// Suppress urfave's default ExitCoder printer; we log via slog below.
+		ExitErrHandler: func(_ context.Context, _ *ucli.Command, _ error) {},
+	}
+
+	if err := app.Run(ctx, os.Args); err != nil {
 		slog.Error("fatal", "err", err)
 		os.Exit(ExitCodeFor(err))
 	}
 }
+
+func buildCommand() *ucli.Command {
+	return &ucli.Command{
+		Name:  "build",
+		Usage: "Construct an unsigned deposit transaction from deposit data",
+		Description: `Reads a deposit_data JSON file (produced by eth-deposit-gen or the Ethereum Launchpad)
+and produces an unsigned EIP-1559 transaction for the Beacon Chain deposit contract.
+
+Supports offline/air-gapped mode (no --rpc-url required) when all gas and nonce
+flags are supplied explicitly, and hybrid mode when --rpc-url is provided.
+Output is written to stdout by default; use --output FILE or --output - for explicit stdout.
+
+Examples:
+
+  # Output unsigned tx to stdout (pipe-friendly):
+  eth-deposit-tx build --network holesky --input-file deposit_data.json
+
+  # Save unsigned tx to a file for the air-gapped sign step:
+  eth-deposit-tx build --network holesky --input-file deposit_data.json --output unsigned.json
+
+  # Read deposit data from stdin (e.g. from a hardware-encrypted volume):
+  cat deposit_data.json | eth-deposit-tx build --network holesky --input-file -
+
+  # Offline / air-gapped: supply all gas and nonce explicitly (no RPC needed):
+  eth-deposit-tx build --network holesky --input-file deposit_data.json \
+    --nonce 7 --gas-limit 250000 \
+    --max-fee-per-gas 20000000000 --max-priority-fee-per-gas 1000000000 \
+    --output unsigned.json
+
+Exit codes:
+  0  Success
+  2  User / configuration error (missing file, invalid JSON, bad --network, out-of-range --index)
+  1  Unexpected internal error`,
+		UsageText: `eth-deposit-tx build --input-file FILE --network NET [options]`,
+		Flags: []ucli.Flag{
+			&ucli.StringFlag{
+				Name:     "input-file",
+				Aliases:  []string{"input", "i"},
+				Usage:    "Path to deposit_data-*.json file (or '-' for stdin); --input is accepted as a shorter alias",
+				Required: true,
+				Sources:  ucli.EnvVars("ETH_DEPOSIT_TX_INPUT_FILE"),
+			},
+			&ucli.StringFlag{
+				Name:    "network",
+				Aliases: []string{"n"},
+				Usage:   "Target network (mainnet, hoodi, sepolia, holesky)",
+				Value:   "hoodi",
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_NETWORK"),
+			},
+			&ucli.StringFlag{
+				Name:    "output",
+				Usage:   "Output file for the unsigned transaction (default: stdout)",
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_OUTPUT"),
+			},
+			&ucli.IntFlag{
+				Name:    "index",
+				Usage:   "Index of the deposit entry to use when the JSON contains multiple validators (default: 0)",
+				Value:   0,
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_INDEX"),
+			},
+			&ucli.StringFlag{
+				Name:    "rpc-url",
+				Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional; when omitted, all gas and nonce flags must be supplied explicitly)",
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_RPC_URL"),
+			},
+			&ucli.StringFlag{
+				Name:    "gas-limit",
+				Usage:   fmt.Sprintf("Gas limit for the deposit transaction (default: %d)", defaultGasLimit),
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_GAS_LIMIT"),
+			},
+			&ucli.StringFlag{
+				Name:    "max-fee-per-gas",
+				Usage:   "EIP-1559 maximum fee per gas in wei (decimal integer, e.g. 20000000000 for 20 Gwei)",
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_MAX_FEE_PER_GAS"),
+			},
+			&ucli.StringFlag{
+				Name:    "max-priority-fee-per-gas",
+				Usage:   "EIP-1559 maximum priority fee per gas in wei (decimal integer, e.g. 1000000000 for 1 Gwei)",
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_MAX_PRIORITY_FEE_PER_GAS"),
+			},
+			&ucli.StringFlag{
+				Name:    "nonce",
+				Usage:   "Override the sender account nonce (non-negative integer; omit to fetch from RPC or set later)",
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_NONCE"),
+			},
+		},
+		Action: func(ctx context.Context, c *ucli.Command) error {
+			cfg, err := LoadBuildConfig(c)
+			if err != nil {
+				return err
+			}
+
+			// Read deposit data from file or stdin.
+			var rawData []byte
+			if cfg.InputFile == "-" {
+				rawData, err = io.ReadAll(c.Root().Reader)
+			} else {
+				rawData, err = os.ReadFile(cfg.InputFile)
+			}
+			if err != nil {
+				return ucli.Exit(fmt.Sprintf("--input-file: %v", err), 2)
+			}
+
+			unsignedTx, err := buildUnsignedTx(ctx, cfg, rawData)
+			if err != nil {
+				return err
+			}
+
+			out, err := json.MarshalIndent(unsignedTx, "", "  ")
+			if err != nil {
+				return ucli.Exit(fmt.Sprintf("build: marshal: %v", err), 2)
+			}
+			out = append(out, '\n')
+
+			if cfg.OutputFile == "" || cfg.OutputFile == "-" {
+				_, err = c.Root().Writer.Write(out)
+				return err
+			}
+			if err := os.WriteFile(cfg.OutputFile, out, 0o644); err != nil {
+				return err
+			}
+			slog.Info("wrote unsigned tx", "path", cfg.OutputFile, "network", cfg.Network)
+			return nil
+		},
+	}
+}
+
+// buildUnsignedTx converts raw deposit data bytes + build config into an UnsignedTx.
+// It is extracted so runAction can call it without re-reading from disk.
+func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte) (*internaltx.UnsignedTx, error) {
+	entries, err := deposit.EntriesFromJSON(rawData)
+	if err != nil {
+		return nil, ucli.Exit(fmt.Sprintf("--input-file: invalid JSON: %v", err), 2)
+	}
+	if len(entries) == 0 {
+		return nil, ucli.Exit("--input-file: file contains no deposit entries", 2)
+	}
+	if cfg.Index < 0 || cfg.Index >= len(entries) {
+		return nil, ucli.Exit(fmt.Sprintf("--index %d: out of bounds (file has %d entries)", cfg.Index, len(entries)), 2)
+	}
+	entry := entries[cfg.Index]
+
+	if err := entry.Validate(); err != nil {
+		return nil, ucli.Exit(fmt.Sprintf("deposit entry validation: %v", err), 2)
+	}
+
+	buildCfg := internaltx.BuildConfig{
+		NetworkParams:        cfg.NetworkParams,
+		RPCURL:               cfg.RPCURL,
+		GasLimit:             cfg.GasLimit,
+		MaxFeePerGas:         cfg.MaxFeePerGas,
+		MaxPriorityFeePerGas: cfg.MaxPriorityFeePerGas,
+		Nonce:                cfg.Nonce,
+	}
+	if buildCfg.MaxFeePerGas == nil {
+		buildCfg.MaxFeePerGas = defaultMaxFeePerGas()
+	}
+	if buildCfg.MaxPriorityFeePerGas == nil {
+		buildCfg.MaxPriorityFeePerGas = defaultMaxPriorityFeePerGas()
+	}
+	if buildCfg.GasLimit == 0 {
+		buildCfg.GasLimit = defaultGasLimit
+	}
+	if buildCfg.Nonce == nil {
+		var z uint64
+		buildCfg.Nonce = &z
+	}
+
+	builder := internaltx.NewBuilder()
+	unsignedTx, err := builder.BuildUnsigned(ctx, entry, buildCfg)
+	if err != nil {
+		return nil, WrapInputErr("build", err)
+	}
+	return unsignedTx, nil
+}
+
