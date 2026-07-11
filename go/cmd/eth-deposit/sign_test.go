@@ -55,7 +55,7 @@ func TestSignCommand_LocalSigner_Success(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--output", outFile,
@@ -100,7 +100,7 @@ func TestSignCommand_LocalSigner_MissingEnvKey(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--private-key-env", envVar,
@@ -136,7 +136,7 @@ func TestSignCommand_LocalSigner_BadKey(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--private-key-env", envVar,
@@ -169,7 +169,7 @@ func TestSignCommand_InvalidSigner(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "foo",
 		"--input", inFile,
 	})
@@ -192,7 +192,7 @@ func TestSignCommand_MissingInput(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		// no --input
 	})
@@ -223,7 +223,7 @@ func TestSignCommand_InvalidInputJSON(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", badFile,
 		"--private-key-env", envVar,
@@ -253,7 +253,7 @@ func TestSignCommand_LocalSigner_StdinInput(t *testing.T) {
 	app.Reader = bytes.NewReader(unsignedTxJSON())
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", "-",
 		"--output", outFile,
@@ -291,7 +291,7 @@ func TestSignCommand_LocalSigner_StdoutOutput(t *testing.T) {
 	app.ErrWriter = &bytes.Buffer{}
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		// no --output — should write to stdout
@@ -333,7 +333,7 @@ func TestSignCommand_Ledger_NotSupported_OnCGOPath(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "ledger",
 		"--input", inFile,
 	})
@@ -364,7 +364,7 @@ func TestSignCommand_InvalidEnvVarName_Lowercase(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--private-key-env", "my_lowercase_var",
@@ -394,7 +394,7 @@ func TestSignCommand_InvalidEnvVarName_KeyPassedDirectly(t *testing.T) {
 
 	// Simulate user accidentally passing the actual hex key as the env var name.
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--private-key-env", "0x" + generateTestPrivKey(t),
@@ -437,7 +437,7 @@ func TestSignCommand_OutputWriteError_Exit2(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--output", outFile,
@@ -471,7 +471,7 @@ func TestSignCommand_OutputFilePermissions(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--output", outFile,
@@ -510,7 +510,7 @@ func TestSignCommand_OutputDash_IsStdout(t *testing.T) {
 	app.ErrWriter = &bytes.Buffer{}
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", inFile,
 		"--output", "-",

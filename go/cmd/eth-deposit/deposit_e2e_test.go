@@ -27,7 +27,7 @@ const (
 // newE2EApp returns a full app including send, matching the production app minus signal handling.
 func newE2EApp() *ucli.Command {
 	return &ucli.Command{
-		Name:           "eth-deposit-tx",
+		Name:           "eth-deposit",
 		Version:        "dev",
 		Commands:       []*ucli.Command{buildCommand(), signCommand(), runCommand(), sendCommand()},
 		ExitErrHandler: func(_ context.Context, _ *ucli.Command, _ error) {},
@@ -75,7 +75,7 @@ func TestE2E_LocalSigner_FullPipeline_NoRPC(t *testing.T) {
 	}
 
 	err = app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", absDepositFixture,
 		"--signer", "local",
@@ -162,7 +162,7 @@ func TestE2E_LocalSigner_BuildSignSendMock(t *testing.T) {
 	signApp.ErrWriter = &signErr
 
 	if err := signApp.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", absUnsigned,
 		"--output", signedFile,
@@ -191,7 +191,7 @@ func TestE2E_LocalSigner_BuildSignSendMock(t *testing.T) {
 	sendApp.ErrWriter = &sendErr
 
 	if err := sendApp.Run(context.Background(), []string{
-		"eth-deposit-tx", "send",
+		"eth-deposit", "send",
 		"--input", signedFile,
 		"--rpc-url", "http://mock.localhost:8545",
 		"--yes",
@@ -249,7 +249,7 @@ func TestE2E_SendMock_ReceiptPolling(t *testing.T) {
 	app.ErrWriter = &errOut
 
 	if err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "send",
+		"eth-deposit", "send",
 		"--input", writeTempSignedTx(t), // reuse helper from send_test.go
 		"--rpc-url", "http://mock.localhost:8545",
 		"--yes",

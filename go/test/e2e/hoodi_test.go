@@ -1,5 +1,5 @@
 // Package e2e contains end-to-end golden-file integration tests for the
-// eth-deposit-gen deposit pipeline. These tests are NOT skipped by default;
+// eth-deposit gen deposit pipeline. These tests are NOT skipped by default;
 // they run as part of the normal `go test ./...` invocation.
 //
 // The golden fixtures in testdata/hoodi/ were generated programmatically from a

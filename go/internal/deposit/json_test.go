@@ -80,7 +80,7 @@ func TestEntriesFromJSON_InvalidEntry(t *testing.T) {
 }
 
 // TestEntriesFromJSON_GoldenFile verifies that the golden output from
-// eth-deposit-gen is parseable by EntriesFromJSON.
+// eth-deposit gen is parseable by EntriesFromJSON.
 func TestEntriesFromJSON_GoldenFile(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/hoodi/deposit_data-expected.json")
 	if err != nil {

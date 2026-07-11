@@ -119,20 +119,20 @@ Partial-failure behavior:
 Examples:
 
   # Local signer — output to stdout (pipe into send):
-  ETH_DEPOSIT_TX_PRIVATE_KEY=0x<your-dev-key> eth-deposit-tx run \
+  ETH_DEPOSIT_TX_PRIVATE_KEY=0x<your-dev-key> eth-deposit run \
     --network holesky \
     --input-file deposit_data.json \
     --signer local
 
   # Local signer — save to file, then broadcast separately:
-  ETH_DEPOSIT_TX_PRIVATE_KEY=0x<your-dev-key> eth-deposit-tx run \
+  ETH_DEPOSIT_TX_PRIVATE_KEY=0x<your-dev-key> eth-deposit run \
     --network holesky \
     --input-file deposit_data.json \
     --signer local \
     --output signed.json
 
   # Ledger hardware wallet — keep unsigned tx for audit trail:
-  eth-deposit-tx run \
+  eth-deposit run \
     --network holesky \
     --input-file deposit_data.json \
     --signer ledger \
@@ -147,7 +147,7 @@ Exit codes:
   3  Signer / crypto error (bad key, no Ledger device, Ethereum app not open)
   4  User abort (Ctrl-C or rejection on Ledger device)
   1  Unexpected internal error`,
-		UsageText: `eth-deposit-tx run --input-file FILE --network NET --signer local|ledger [options]`,
+		UsageText: `eth-deposit run --input-file FILE --network NET --signer local|ledger [options]`,
 		Flags: append(
 			buildFlags(),
 			// Sign-specific flags (no --input since we build in-process).
@@ -326,7 +326,7 @@ func runAction(ctx context.Context, c *ucli.Command, cfg *RunConfig) error {
 // in the same directory as path so the rename is guaranteed atomic on a single filesystem.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".tmp-eth-deposit-tx-*")
+	tmp, err := os.CreateTemp(dir, ".tmp-eth-deposit-*")
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}

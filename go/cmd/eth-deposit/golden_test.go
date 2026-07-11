@@ -28,7 +28,7 @@ func TestPhase2_HoleskyGolden(t *testing.T) {
 	app.ErrWriter = &out
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "build",
+		"eth-deposit", "build",
 		"--network", "holesky",
 		"--input-file", fixture,
 	})

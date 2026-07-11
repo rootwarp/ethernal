@@ -121,12 +121,12 @@ Use --yes to bypass the confirmation prompt (for automation only).
 Examples:
 
   # Broadcast with interactive confirmation (type "holesky" when prompted):
-  eth-deposit-tx send \
+  eth-deposit send \
     --input signed.json \
     --rpc-url https://holesky.infura.io/v3/<your-key>
 
   # Broadcast non-interactively and wait for receipt (CI / automation):
-  eth-deposit-tx send \
+  eth-deposit send \
     --input signed.json \
     --rpc-url https://holesky.infura.io/v3/<your-key> \
     --yes \
@@ -134,15 +134,15 @@ Examples:
     --receipt-output receipt.json
 
   # Read signed tx from stdin (e.g. piped from run --output -):
-  eth-deposit-tx run --signer local ... --output - | \
-    eth-deposit-tx send --input - --rpc-url https://... --yes
+  eth-deposit run --signer local ... --output - | \
+    eth-deposit send --input - --rpc-url https://... --yes
 
 Exit codes:
   0  Success
   2  User / configuration error (missing flags, invalid JSON)
   4  User abort (Ctrl-C or declined confirmation)
   5  Broadcast / RPC error (dial failure, chain ID mismatch, node rejection)`,
-		UsageText: `eth-deposit-tx send --input FILE --rpc-url URL [--yes] [--wait-for-receipt] [--receipt-output FILE]`,
+		UsageText: `eth-deposit send --input FILE --rpc-url URL [--yes] [--wait-for-receipt] [--receipt-output FILE]`,
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{
 				Name:    "input",

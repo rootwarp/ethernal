@@ -23,7 +23,7 @@ func defaultMaxFeePerGas() *big.Int { return big.NewInt(20_000_000_000) }
 // defaultMaxPriorityFeePerGas returns 1 Gwei as the fallback EIP-1559 tip.
 func defaultMaxPriorityFeePerGas() *big.Int { return big.NewInt(1_000_000_000) }
 
-// Config holds the validated, parsed inputs for eth-deposit-tx build.
+// Config holds the validated, parsed inputs for eth-deposit build.
 type Config struct {
 	// Network is the selected Ethereum consensus network.
 	Network network.Network

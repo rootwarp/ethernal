@@ -1,6 +1,7 @@
 // Package cli defines the urfave/cli/v3 application, flag schema, and input
-// validation for eth-deposit-gen. It converts raw CLI flags into a typed Config
-// and invokes the caller-supplied run function only after all validations pass.
+// validation for eth-deposit's "gen" subcommand. It converts raw CLI flags
+// into a typed Config and invokes the caller-supplied run function only
+// after all validations pass.
 package cli
 
 import (
@@ -101,44 +102,29 @@ type Config struct {
 // can print them to ErrWriter and exit cleanly.
 func NewApp(run func(context.Context, Config) error) *ucli.Command {
 	app := &ucli.Command{}
-	app.Name = "eth-deposit-gen"
+	app.Name = "gen"
 	app.Usage = "Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys"
-	app.UsageText = `eth-deposit-gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]`
+	app.UsageText = `eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR [--passphrase-env VAR]`
 	app.Description = `Produces deposit_data-<ts>.json for one or more BLS validator public keys by
 signing each deposit message with the BLS key loaded from an EIP-2335 keystore.
-Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.`
+Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.
 
-	app.CustomRootCommandHelpTemplate = `NAME:
-   {{.Name}} - {{.Usage}}
+Examples:
 
-USAGE:
-   {{.UsageText}}
+  # Hoodi testnet, two pubkeys (keystores directory contains one .json per validator)
+  eth-deposit gen \
+    --network hoodi \
+    --keystore-dir ./keystores/ \
+    --pubkeys 0x93247f2209abcafd...,0xa1b2c3d4e5f6... \
+    --output-dir ./out
 
-DESCRIPTION:
-   {{.Description}}
-
-EXAMPLES:
-   # Hoodi testnet, two pubkeys (keystores directory contains one .json per validator)
-   eth-deposit-gen \
-     --network hoodi \
-     --keystore-dir ./keystores/ \
-     --pubkeys 0x93247f2209abcafd...,0xa1b2c3d4e5f6... \
-     --output-dir ./out \
-     --withdrawal-address 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed
-
-   # Mainnet, single pubkey (requires explicit acknowledgement)
-   eth-deposit-gen \
-     --network mainnet \
-     --i-understand-this-is-mainnet \
-     --keystore-dir ./keystores/ \
-     --pubkeys 0x93247f2209abcafd... \
-     --output-dir ./out \
-     --withdrawal-address 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed
-
-OPTIONS:
-   {{range .VisibleFlags}}{{.}}
-   {{end}}
-`
+  # Mainnet, single pubkey (requires explicit acknowledgement)
+  eth-deposit gen \
+    --network mainnet \
+    --i-understand-this-is-mainnet \
+    --keystore-dir ./keystores/ \
+    --pubkeys 0x93247f2209abcafd... \
+    --output-dir ./out`
 
 	app.Flags = []ucli.Flag{
 		&ucli.StringFlag{
@@ -209,13 +195,13 @@ OPTIONS:
 		// Validation order: network first (per spec), then mainnet ack, then pubkeys,
 		// then keystore-dir (directory readability probe), then output-dir.
 
-		// 1. Parse and validate --network (eth-deposit-gen only supports mainnet and hoodi)
+		// 1. Parse and validate --network (gen only supports mainnet and hoodi)
 		net, err := network.ParseFlag(cmd.String("network"))
 		if err != nil {
 			return ucli.Exit(fmt.Sprintf("--network: %v", err), 2)
 		}
 		if net != network.Mainnet && net != network.Hoodi {
-			return ucli.Exit(fmt.Sprintf(`--network: %q is not supported by eth-deposit-gen; must be %q or %q`, net, network.Mainnet, network.Hoodi), 2)
+			return ucli.Exit(fmt.Sprintf(`--network: %q is not supported by "eth-deposit gen"; must be %q or %q`, net, network.Mainnet, network.Hoodi), 2)
 		}
 
 		// 1a. Mainnet safety gate: require explicit operator acknowledgement before
@@ -296,7 +282,7 @@ OPTIONS:
 		}
 
 		// 5. Print confirmation banner to stderr before invoking run.
-		printBanner(cmd.ErrWriter, cfg)
+		printBanner(cmd.Root().ErrWriter, cfg)
 
 		return run(ctx, cfg)
 	}
@@ -393,7 +379,7 @@ func validateOutputDir(dir string) error {
 	}
 
 	// Probe writability: create a temp file then remove it immediately.
-	f, err := os.CreateTemp(dir, ".eth-deposit-gen-probe-*")
+	f, err := os.CreateTemp(dir, ".eth-deposit-probe-*")
 	if err != nil {
 		return fmt.Errorf("directory %q is not writable: %w", dir, err)
 	}
@@ -412,8 +398,8 @@ func networkDisplay(n network.Network) string {
 	return string(n)
 }
 
-// printBanner writes the confirmation banner to w (which should be app.ErrWriter).
-// Format: eth-deposit-gen: network=<net> first_pubkey=<hex> last_pubkey=<hex> count=<n>
+// printBanner writes the confirmation banner to w (which should be cmd.Root().ErrWriter).
+// Format: eth-deposit gen: network=<net> first_pubkey=<hex> last_pubkey=<hex> count=<n>
 // Pubkeys are rendered as 0x-prefixed lowercase hex. Mainnet is shown as "MAINNET".
 func printBanner(w io.Writer, cfg Config) {
 	if len(cfg.Pubkeys) == 0 {
@@ -421,7 +407,7 @@ func printBanner(w io.Writer, cfg Config) {
 	}
 	first := cfg.Pubkeys[0]
 	last := cfg.Pubkeys[len(cfg.Pubkeys)-1]
-	_, _ = fmt.Fprintf(w, "eth-deposit-gen: network=%s first_pubkey=0x%x last_pubkey=0x%x count=%d\n",
+	fmt.Fprintf(w, "eth-deposit gen: network=%s first_pubkey=0x%x last_pubkey=0x%x count=%d\n",
 		networkDisplay(cfg.Network),
 		first[:],
 		last[:],

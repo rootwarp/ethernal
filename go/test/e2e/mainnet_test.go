@@ -1,5 +1,5 @@
 // Package e2e contains end-to-end golden-file integration tests for the
-// eth-deposit-gen deposit pipeline. These tests are NOT skipped by default;
+// eth-deposit gen deposit pipeline. These tests are NOT skipped by default;
 // they run as part of the normal `go test ./...` invocation.
 //
 // The golden fixtures in testdata/mainnet/ were generated programmatically from
@@ -223,7 +223,7 @@ func TestMainnetBanner(t *testing.T) {
 	app.ExitErrHandler = func(_ context.Context, _ *ucli.Command, _ error) {} // prevent os.Exit in tests
 
 	args := []string{
-		"eth-deposit-gen",
+		"eth-deposit",
 		"--network", "mainnet",
 		"--i-understand-this-is-mainnet",
 		"--keystore-dir", mainnetTestdataDir + "/keystores",

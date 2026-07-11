@@ -44,7 +44,7 @@ func TestPhase3_HoleskyLocalSignerGolden(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err = app.Run(context.Background(), []string{
-		"eth-deposit-tx", "sign",
+		"eth-deposit", "sign",
 		"--signer", "local",
 		"--input", unsignedPath,
 		"--output", outFile,

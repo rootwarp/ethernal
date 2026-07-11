@@ -33,7 +33,7 @@ func TestRunCommand_LocalSigner_HappyPath(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -85,7 +85,7 @@ func TestRunCommand_LocalSigner_StdoutOutput(t *testing.T) {
 	app.ErrWriter = &bytes.Buffer{}
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -125,7 +125,7 @@ func TestRunCommand_LocalSigner_KeepUnsigned(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -181,7 +181,7 @@ func TestRunCommand_LocalSigner_RawOutput(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -221,7 +221,7 @@ func TestRunCommand_MissingSignerFlag(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		// no --signer
@@ -245,7 +245,7 @@ func TestRunCommand_LedgerNoDevice(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "ledger",
@@ -279,7 +279,7 @@ func TestRunCommand_InvalidInput(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", badFile,
 		"--signer", "local",
@@ -307,7 +307,7 @@ func TestRunCommand_BadKey(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -345,7 +345,7 @@ func TestRunCommand_AtomicWrite_OnRenameFailure(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -357,7 +357,7 @@ func TestRunCommand_AtomicWrite_OnRenameFailure(t *testing.T) {
 	}
 
 	// No leftover temp files should remain.
-	matches, err := filepath.Glob(filepath.Join(dir, ".tmp-eth-deposit-tx-*"))
+	matches, err := filepath.Glob(filepath.Join(dir, ".tmp-eth-deposit-*"))
 	if err != nil {
 		t.Fatalf("glob error: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestRunCommand_KeepUnsigned_RequiresOutputFile(t *testing.T) {
 
 	// --keep-unsigned without --output should fail with exit 2.
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -414,7 +414,7 @@ func TestRunCommand_OutputFilePermissions(t *testing.T) {
 	app.ErrWriter = &buf
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -453,7 +453,7 @@ func TestRunCommand_OutputDash_IsStdout(t *testing.T) {
 	app.ErrWriter = &bytes.Buffer{}
 
 	err := app.Run(context.Background(), []string{
-		"eth-deposit-tx", "run",
+		"eth-deposit", "run",
 		"--network", "holesky",
 		"--input-file", fixtureAbsPath(t),
 		"--signer", "local",
@@ -480,7 +480,7 @@ func TestRunSubcommand_Help(t *testing.T) {
 	app.Writer = &buf
 	app.ErrWriter = &buf
 
-	_ = app.Run(context.Background(), []string{"eth-deposit-tx", "run", "--help"})
+	_ = app.Run(context.Background(), []string{"eth-deposit", "run", "--help"})
 
 	s := buf.String()
 	if !strings.Contains(s, "signer") {

@@ -1,4 +1,4 @@
-// Package main — exit code conventions for eth-deposit-tx:
+// Package main — exit code conventions for eth-deposit:
 //
 //	0 — success
 //	2 — user / configuration errors (bad input, validation, unknown network,
@@ -19,6 +19,8 @@ import (
 
 	ucli "github.com/urfave/cli/v3"
 
+	"github.com/rootwarp/eth-utils/go/internal/deposit"
+	"github.com/rootwarp/eth-utils/go/internal/keystore"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
@@ -30,7 +32,7 @@ var ErrInvalidInput = errors.New("invalid input")
 // ErrUserAborted is the sentinel for SIGINT/SIGTERM / context cancellation (exit code 4).
 var ErrUserAborted = errors.New("user aborted")
 
-// ExitCodeFor maps err to an exit code per the eth-deposit-tx convention.
+// ExitCodeFor maps err to an exit code per the eth-deposit convention.
 func ExitCodeFor(err error) int {
 	if err == nil {
 		return 0
@@ -39,8 +41,19 @@ func ExitCodeFor(err error) int {
 	if errors.Is(err, context.Canceled) || errors.Is(err, ErrUserAborted) {
 		return 4
 	}
-	// Exit code 2: user / configuration errors (typed sentinel).
+	// Exit code 2: user / configuration errors (tx typed sentinel).
 	if errors.Is(err, ErrInvalidInput) {
+		return 2
+	}
+	// Exit code 2: user / configuration errors (gen).
+	if errors.Is(err, keystore.ErrKeystoreMissing) ||
+		errors.Is(err, keystore.ErrKeystoreMalformed) ||
+		errors.Is(err, keystore.ErrKeystoreVersion) ||
+		errors.Is(err, keystore.ErrEnvVarEmpty) ||
+		errors.Is(err, keystore.ErrKeystoreNotFound) ||
+		errors.Is(err, deposit.ErrPubkeyMismatch) ||
+		errors.Is(err, errMainnetAckRequired) ||
+		errors.Is(err, ErrDepositCLINotFound) {
 		return 2
 	}
 	// Exit code 2: urfave/cli validation errors that set code 2.
@@ -48,26 +61,11 @@ func ExitCodeFor(err error) int {
 	if errors.As(err, &ec) && ec.ExitCode() == 2 {
 		return 2
 	}
-	// Substring fallback for urfave required-flag errors (errRequiredFlags is
-	// unexported and not reported as ExitCoder code 2; it defaults to exit 1).
-	// Matches "Required flag ..." (singular) and "Required flags ..." (plural).
-	// Pre-validation in the Load*Config functions (M1.5-1) ensures the internal
-	// error is never produced for our schemas; this is the documented safety net
-	// per issue/research/10 (fragility acknowledged; leave as-is per smallest).
-	// + covers synthetic cases in TestExitCodeFor_RequiredFlagsSubstring_Exit2.
-	if strings.Contains(err.Error(), "Required flag") {
-		return 2
-	}
-	// Exit code 2: To address failed strict IsHex+len+cross-check validation
-	// (ErrInvalidToAddress per M0.6-1/M0.6-2; input error, not signer/crypto).
-	if errors.Is(err, signer.ErrInvalidToAddress) {
-		return 2
-	}
-	// Exit code 4: user rejected signing on hardware device.
+	// Exit code 4: user rejected signing on hardware device (tx).
 	if errors.Is(err, signer.ErrUserRejected) {
 		return 4
 	}
-	// Exit code 3: signer / crypto errors.
+	// Exit code 3: signer / crypto errors (tx).
 	if errors.Is(err, signer.ErrSignerClosed) ||
 		errors.Is(err, signer.ErrNoDevice) ||
 		errors.Is(err, signer.ErrDeviceUnavailable) ||
@@ -78,7 +76,14 @@ func ExitCodeFor(err error) int {
 		errors.Is(err, signer.ErrSenderMismatch) {
 		return 3
 	}
-	// Exit code 5: broadcast / RPC errors.
+	// Exit code 3: crypto / signer errors and external verification failures (gen).
+	if errors.Is(err, keystore.ErrWrongPassphrase) ||
+		errors.Is(err, deposit.ErrSelfVerifyFailed) ||
+		errors.Is(err, errBLSInit) ||
+		errors.Is(err, ErrDepositCLIFailed) {
+		return 3
+	}
+	// Exit code 5: broadcast / RPC errors (tx).
 	if errors.Is(err, internaltx.ErrRPCDial) ||
 		errors.Is(err, internaltx.ErrBroadcastFailed) ||
 		errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) ||

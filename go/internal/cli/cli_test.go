@@ -90,7 +90,7 @@ func runApp(t *testing.T, args []string) (cfg icli.Config, stderr string, runCal
 	// the error propagates back to the caller instead of calling os.Exit.
 	app.ExitErrHandler = func(_ context.Context, _ *ucli.Command, _ error) {}
 
-	fullArgs := append([]string{"eth-deposit-gen"}, args...)
+	fullArgs := append([]string{"eth-deposit"}, args...)
 	err = app.Run(context.Background(), fullArgs)
 	return capturedCfg, errBuf.String(), called, err
 }
@@ -384,8 +384,8 @@ func TestSinglePubkeyHappyPath(t *testing.T) {
 	}
 
 	// Verify banner on stderr
-	if !strings.Contains(stderr, "eth-deposit-gen:") {
-		t.Errorf("stderr = %q, want banner containing %q", stderr, "eth-deposit-gen:")
+	if !strings.Contains(stderr, "eth-deposit gen:") {
+		t.Errorf("stderr = %q, want banner containing %q", stderr, "eth-deposit gen:")
 	}
 	if !strings.Contains(stderr, "network=hoodi") {
 		t.Errorf("stderr = %q, want banner containing %q", stderr, "network=hoodi")
@@ -496,7 +496,7 @@ func TestBannerFormat(t *testing.T) {
 	}
 
 	// Assert full banner structure: network, first/last pubkey (0x-prefixed hex), count.
-	want := fmt.Sprintf("eth-deposit-gen: network=hoodi first_pubkey=0x%s last_pubkey=0x%s count=2",
+	want := fmt.Sprintf("eth-deposit gen: network=hoodi first_pubkey=0x%s last_pubkey=0x%s count=2",
 		validPubkey, validPubkey2)
 	if !strings.Contains(stderr, want) {
 		t.Errorf("stderr banner = %q\nwant to contain %q", stderr, want)

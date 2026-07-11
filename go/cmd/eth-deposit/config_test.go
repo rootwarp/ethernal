@@ -36,14 +36,14 @@ func captureConfig(t *testing.T, args []string) (*Config, error) {
 	}
 
 	app := &ucli.Command{
-		Name:     "eth-deposit-tx",
+		Name:     "eth-deposit",
 		Commands: []*ucli.Command{cmd},
 	}
 	// suppress usage output in tests
 	app.Writer = os.Stderr
 	app.ErrWriter = os.Stderr
 
-	_ = app.Run(context.Background(), append([]string{"eth-deposit-tx"}, args...))
+	_ = app.Run(context.Background(), append([]string{"eth-deposit"}, args...))
 	return captured, actionErr
 }
 

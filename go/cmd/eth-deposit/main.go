@@ -1,5 +1,8 @@
-// Package main is the entry point for eth-deposit-tx.
-// It sets up the urfave/cli/v3 application and wires the build, sign, run, and send subcommands.
+// Package main is the entry point for eth-deposit.
+// It sets up the urfave/cli/v3 application and wires the gen, build, sign, run,
+// and send subcommands (formerly the separate eth-deposit-gen and
+// eth-deposit-tx binaries; merged so the full deposit-data -> broadcast
+// pipeline ships as one tool).
 //
 // Exit codes:
 //
@@ -26,8 +29,8 @@ import (
 
 // version, commit, and date are set at build time via -ldflags.
 // Default values are used for local/dev builds.
-// Canonical first release: v0.1.0 — signals first usable release, not yet
-// feature-complete vs roadmap (mainnet Ledger heuristics deferred to v0.2.0).
+// eth-deposit-gen shipped v1.0.0 and eth-deposit-tx was never tagged before
+// the two were merged into this binary; see CHANGELOG.md for the merge note.
 var (
 	version = "dev"
 	commit  = "none"
@@ -42,17 +45,19 @@ func main() {
 	defer stop()
 
 	app := &ucli.Command{
-		Name:  "eth-deposit-tx",
-		Usage: "Create and sign Ethereum deposit transactions from deposit data JSON",
-		UsageText: `eth-deposit-tx build [options]
-   eth-deposit-tx sign [options]
-   eth-deposit-tx run [options]
-   eth-deposit-tx send [options]`,
+		Name:  "eth-deposit",
+		Usage: "Generate, build, sign, and broadcast Ethereum Beacon Chain deposit transactions",
+		UsageText: `eth-deposit gen [options]
+   eth-deposit build [options]
+   eth-deposit sign [options]
+   eth-deposit run [options]
+   eth-deposit send [options]`,
 		Version: fmt.Sprintf("%s (commit=%s, built=%s)", version, commit, date),
-		Description: `eth-deposit-tx converts Launchpad-compatible deposit_data JSON into raw Ethereum transactions
-for the Beacon Chain deposit contract.
+		Description: `eth-deposit takes BLS validator keystores all the way through to a broadcast
+Ethereum deposit transaction for the Beacon Chain deposit contract.
 
-It supports a secure two-phase workflow:
+It supports a secure, five-step workflow:
+  gen    - Generate Launchpad-compatible deposit_data JSON from BLS validator keystores
   build  - Construct an unsigned transaction (supports offline/air-gapped mode)
   sign   - Sign the transaction, with Ledger hardware as the primary method
   run    - Convenience: build + sign in one step (same machine, no serialization to disk)
@@ -62,6 +67,7 @@ The tool produces standard hex-encoded RLP output ready for eth_sendRawTransacti
 
 Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=user abort, 5=broadcast/RPC error.`,
 		Commands: []*ucli.Command{
+			genCommand(),
 			buildCommand(),
 			signCommand(),
 			runCommand(),
@@ -81,7 +87,7 @@ func buildCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "build",
 		Usage: "Construct an unsigned deposit transaction from deposit data",
-		Description: `Reads a deposit_data JSON file (produced by eth-deposit-gen or the Ethereum Launchpad)
+		Description: `Reads a deposit_data JSON file (produced by "eth-deposit gen" or the Ethereum Launchpad)
 and produces an unsigned EIP-1559 transaction for the Beacon Chain deposit contract.
 
 Supports offline/air-gapped mode (no --rpc-url required) when all gas and nonce
@@ -91,16 +97,16 @@ Output is written to stdout by default; use --output FILE or --output - for expl
 Examples:
 
   # Output unsigned tx to stdout (pipe-friendly):
-  eth-deposit-tx build --network holesky --input-file deposit_data.json
+  eth-deposit build --network holesky --input-file deposit_data.json
 
   # Save unsigned tx to a file for the air-gapped sign step:
-  eth-deposit-tx build --network holesky --input-file deposit_data.json --output unsigned.json
+  eth-deposit build --network holesky --input-file deposit_data.json --output unsigned.json
 
   # Read deposit data from stdin (e.g. from a hardware-encrypted volume):
-  cat deposit_data.json | eth-deposit-tx build --network holesky --input-file -
+  cat deposit_data.json | eth-deposit build --network holesky --input-file -
 
   # Offline / air-gapped: supply all gas and nonce explicitly (no RPC needed):
-  eth-deposit-tx build --network holesky --input-file deposit_data.json \
+  eth-deposit build --network holesky --input-file deposit_data.json \
     --nonce 7 --gas-limit 250000 \
     --max-fee-per-gas 20000000000 --max-priority-fee-per-gas 1000000000 \
     --output unsigned.json
@@ -109,7 +115,7 @@ Exit codes:
   0  Success
   2  User / configuration error (missing file, invalid JSON, bad --network, out-of-range --index)
   1  Unexpected internal error`,
-		UsageText: `eth-deposit-tx build --input-file FILE --network NET [options]`,
+		UsageText: `eth-deposit build --input-file FILE --network NET [options]`,
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{
 				Name:     "input-file",

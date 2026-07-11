@@ -90,7 +90,7 @@ func signCommand() *ucli.Command {
 	return &ucli.Command{
 		Name:  "sign",
 		Usage: "Sign a previously built unsigned deposit transaction",
-		Description: `Signs an unsigned transaction produced by "eth-deposit-tx build".
+		Description: `Signs an unsigned transaction produced by "eth-deposit build".
 
 Two signing methods are supported:
 
@@ -102,7 +102,7 @@ Two signing methods are supported:
     real-fund keys. The key must never appear in CLI arguments or shell history.
 
     Example:
-      ETH_DEPOSIT_TX_PRIVATE_KEY=0x<hex-key> eth-deposit-tx sign \
+      ETH_DEPOSIT_TX_PRIVATE_KEY=0x<hex-key> eth-deposit sign \
         --signer local --input unsigned.json --output signed.json
 
   --signer ledger
@@ -113,14 +113,14 @@ Two signing methods are supported:
     The user will be prompted to confirm the transaction on the device.
 
     Example:
-      eth-deposit-tx sign --signer ledger --input unsigned.json --output signed.json
+      eth-deposit sign --signer ledger --input unsigned.json --output signed.json
 
 Exit codes:
   0  Success
   2  User / configuration error (bad --signer, missing --input, invalid JSON)
   3  Signer / crypto error (bad key, no Ledger device, Ethereum app not open)
   4  User abort (Ctrl-C or rejection on Ledger device)`,
-		UsageText: `eth-deposit-tx sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR] [--allow-non-deposit-recipient]`,
+		UsageText: `eth-deposit sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]`,
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{
 				Name:  "signer",

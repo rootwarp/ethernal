@@ -11,10 +11,10 @@ import (
 	"github.com/rootwarp/eth-utils/go/internal/ssz"
 )
 
-// JSONEntry is the canonical wire representation (shared with internal/output)
-// of a single entry in a Launchpad deposit_data-*.json file. Field names, types,
-// and JSON tag order are the schema source of truth (architecture §10.4).
-type JSONEntry struct {
+// jsonEntry is the wire representation of a single entry in a Launchpad
+// deposit_data-*.json file. Field names and types must match exactly what
+// eth-deposit gen and the official staking-deposit-cli produce.
+type jsonEntry struct {
 	Pubkey                string `json:"pubkey"`
 	WithdrawalCredentials string `json:"withdrawal_credentials"`
 	Amount                uint64 `json:"amount"`
