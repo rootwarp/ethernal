@@ -114,7 +114,7 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 	if tip == nil {
 		tip, err = cfg.RPC.SuggestGasTipCap(ctx)
 		if err != nil {
-			return 0, nil, nil, 0, fmt.Errorf("SuggestGasTipCap: %w", err)
+			return 0, nil, nil, 0, fmt.Errorf("%w: SuggestGasTipCap: %w", ErrRPCEstimation, err)
 		}
 	}
 
@@ -123,7 +123,7 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 	if maxFee == nil {
 		baseFee, bErr := cfg.RPC.BlockBaseFee(ctx)
 		if bErr != nil {
-			return 0, nil, nil, 0, fmt.Errorf("BlockBaseFee: %w", bErr)
+			return 0, nil, nil, 0, fmt.Errorf("%w: BlockBaseFee: %w", ErrRPCEstimation, bErr)
 		}
 		// maxFeePerGas = 2 * baseFee + tip
 		maxFee = new(big.Int).Add(new(big.Int).Mul(big.NewInt(2), baseFee), tip)
@@ -138,7 +138,7 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 		}
 		nonce, err = cfg.RPC.PendingNonceAt(ctx, cfg.From)
 		if err != nil {
-			return 0, nil, nil, 0, fmt.Errorf("PendingNonceAt: %w", err)
+			return 0, nil, nil, 0, fmt.Errorf("%w: PendingNonceAt: %w", ErrRPCEstimation, err)
 		}
 	}
 
@@ -154,7 +154,7 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 		}
 		estimate, eErr := cfg.RPC.EstimateGas(ctx, msg)
 		if eErr != nil {
-			return 0, nil, nil, 0, fmt.Errorf("EstimateGas: %w", eErr)
+			return 0, nil, nil, 0, fmt.Errorf("%w: EstimateGas: %w", ErrRPCEstimation, eErr)
 		}
 		// Sanity-check ceiling (per architecture §6.8 / M1.3-3 impl notes): document
 		// guard against absurd RPC estimate for a deposit call. (Smallest change;

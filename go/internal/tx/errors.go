@@ -39,9 +39,11 @@ var (
 
 	// Broadcast sentinel errors (exit code 5).
 	ErrRPCDial = errors.New("failed to dial RPC endpoint")
-	// ErrBroadcastFailed is returned when broadcast failed.
-	ErrBroadcastFailed = errors.New("broadcast failed")
-	// ErrBroadcastChainIDMismatch is returned when signed tx chain ID does not match RPC chain ID; refusing to broadcast.
+	// ErrRPCEstimation tags a gas/fee/nonce estimation CALL failure in RPC mode
+	// (SuggestGasTipCap / BlockBaseFee / PendingNonceAt / EstimateGas). Exit code 5.
+	// Distinct from ErrRPCDial (connection) and ErrChainIDMismatch (config).
+	ErrRPCEstimation            = errors.New("RPC estimation call failed")
+	ErrBroadcastFailed          = errors.New("broadcast failed")
 	ErrBroadcastChainIDMismatch = errors.New("signed tx chain ID does not match RPC chain ID; refusing to broadcast")
 	// ErrReceiptReverted is returned when on-chain deposit reverted (status=0).
 	ErrReceiptReverted = errors.New("on-chain deposit reverted (status=0)")

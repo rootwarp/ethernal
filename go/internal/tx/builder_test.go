@@ -567,6 +567,9 @@ func TestBuilder_BuildUnsigned_RPCMode_EstimateGasError(t *testing.T) {
 	if !strings.Contains(err.Error(), "EstimateGas") {
 		t.Errorf("error should mention EstimateGas, got: %v", err)
 	}
+	if !errors.Is(err, ErrRPCEstimation) {
+		t.Errorf("error should satisfy errors.Is(err, ErrRPCEstimation), got: %v", err)
+	}
 }
 
 func TestBuilder_BuildUnsigned_RPCMode_GasMargin(t *testing.T) {
@@ -665,6 +668,9 @@ func TestBuilder_BuildUnsigned_RPCMode_SuggestGasTipCapError(t *testing.T) {
 	if !strings.Contains(err.Error(), "SuggestGasTipCap") {
 		t.Errorf("error should mention SuggestGasTipCap, got: %v", err)
 	}
+	if !errors.Is(err, ErrRPCEstimation) {
+		t.Errorf("error should satisfy errors.Is(err, ErrRPCEstimation), got: %v", err)
+	}
 }
 
 func TestBuilder_BuildUnsigned_RPCMode_BlockBaseFeeError(t *testing.T) {
@@ -697,6 +703,9 @@ func TestBuilder_BuildUnsigned_RPCMode_BlockBaseFeeError(t *testing.T) {
 	if !strings.Contains(err.Error(), "BlockBaseFee") {
 		t.Errorf("error should mention BlockBaseFee, got: %v", err)
 	}
+	if !errors.Is(err, ErrRPCEstimation) {
+		t.Errorf("error should satisfy errors.Is(err, ErrRPCEstimation), got: %v", err)
+	}
 }
 
 func TestBuilder_BuildUnsigned_RPCMode_PendingNonceAtError(t *testing.T) {
@@ -726,6 +735,48 @@ func TestBuilder_BuildUnsigned_RPCMode_PendingNonceAtError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "PendingNonceAt") {
 		t.Errorf("error should mention PendingNonceAt, got: %v", err)
+	}
+	if !errors.Is(err, ErrRPCEstimation) {
+		t.Errorf("error should satisfy errors.Is(err, ErrRPCEstimation), got: %v", err)
+	}
+}
+
+// TestBuilder_BuildUnsigned_ConfigErrors_NotRPCEstimation guards against
+// over-broad tagging: the RPC-mode config errors (chain-ID mismatch and
+// missing-From-for-nonce) are exit-2 configuration failures, not exit-5
+// estimation-call failures, so they must NOT satisfy errors.Is(ErrRPCEstimation).
+func TestBuilder_BuildUnsigned_ConfigErrors_NotRPCEstimation(t *testing.T) {
+	ctx := context.Background()
+	entry := makeValidEntry()
+	params := holeskyParams(t)
+	b := NewBuilder()
+
+	// Chain-ID mismatch: RPC reports a different chain ID than configured.
+	var mismatchFrom [20]byte
+	mismatchFrom[0] = 0x0b
+	_, mismatchErr := b.BuildUnsigned(ctx, entry, BuildConfig{
+		NetworkParams: params,
+		RPC:           makeMockRPC(1), // wrong chain ID (mainnet vs holesky)
+		From:          mismatchFrom,
+	})
+	if !errors.Is(mismatchErr, ErrChainIDMismatch) {
+		t.Fatalf("expected ErrChainIDMismatch, got: %v", mismatchErr)
+	}
+	if errors.Is(mismatchErr, ErrRPCEstimation) {
+		t.Errorf("ErrChainIDMismatch must NOT be tagged ErrRPCEstimation, got: %v", mismatchErr)
+	}
+
+	// Missing From with nil Nonce: cannot fetch nonce via RPC.
+	_, missingFromErr := b.BuildUnsigned(ctx, entry, BuildConfig{
+		NetworkParams: params,
+		RPC:           makeMockRPC(params.ChainID),
+		From:          [20]byte{}, // zero address, Nonce nil
+	})
+	if !errors.Is(missingFromErr, ErrMissingFromForNonce) {
+		t.Fatalf("expected ErrMissingFromForNonce, got: %v", missingFromErr)
+	}
+	if errors.Is(missingFromErr, ErrRPCEstimation) {
+		t.Errorf("ErrMissingFromForNonce must NOT be tagged ErrRPCEstimation, got: %v", missingFromErr)
 	}
 }
 
