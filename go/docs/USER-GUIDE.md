@@ -249,11 +249,12 @@ Produces an EIP-1559 unsigned transaction in JSON. No signing happens — runs f
 | `--network NET` / `-n NET` | `mainnet`, `hoodi`, `sepolia`, `holesky` | `hoodi` |
 | `--output PATH` | Output file for unsigned tx JSON; omit or `-` for stdout | stdout |
 | `--index N` | Which deposit entry to use when the JSON has multiple validators | `0` |
-| `--rpc-url URL` | RPC endpoint for dynamic gas/nonce fetch (Phase 4 wiring; currently accepted-but-stored only) | — |
+| `--rpc-url URL` | JSON-RPC endpoint. When set, any gas/fee/nonce not passed explicitly is fetched from the node (requires `--from`); when omitted, the build is fully offline | — |
 | `--gas-limit N` | EIP-1559 gas limit | `250000` |
 | `--max-fee-per-gas WEI` | EIP-1559 max fee per gas (decimal wei) | `20000000000` (20 gwei) |
 | `--max-priority-fee-per-gas WEI` | EIP-1559 priority fee per gas (decimal wei) | `1000000000` (1 gwei) |
-| `--nonce N` | Sender account nonce; omit defaults to 0 (correct only for first-time sender) | `0` |
+| `--nonce N` | Sender account nonce. With `--rpc-url` and omitted, the node's pending nonce is used; offline, omitting defaults to 0 (first-time sender only) | `0` (offline) |
+| `--from ADDR` | Sender address (0x-prefixed, 20-byte hex). Required with `--rpc-url` when `--nonce`/`--gas-limit` is omitted, to fetch the pending nonce and estimate gas | — |
 
 ### Examples
 
@@ -630,10 +631,10 @@ All `eth-deposit` subcommands use a consistent set of exit codes you can script 
 |---|---|
 | 0 | Success |
 | 1 | Unexpected internal error |
-| 2 | User / configuration error (bad input, missing flag, invalid JSON, unknown network) |
-| 3 | Signer / crypto error (Ledger not found, Ethereum app not open, invalid key, BLS/SSZ failure) |
+| 2 | User / configuration error (bad input, missing/invalid flag, unknown network, missing `--from`/`--nonce`/`--gas-limit` for RPC mode, build-side RPC chain-ID mismatch) |
+| 3 | Signer / crypto error (Ledger not found, Ethereum app not open, invalid key, signer-side chain-ID mismatch, BLS/SSZ failure) |
 | 4 | User abort (SIGINT, or rejected confirmation prompt) |
-| 5 | Broadcast / RPC error — `send` only (chain-ID mismatch, RPC dial failure, broadcast failure) |
+| 5 | Broadcast / RPC error (RPC dial failure, gas/nonce estimation failure, broadcast-side chain-ID mismatch, node rejection) — `build`/`run` estimation and `send` broadcast |
 
 Script around these:
 
@@ -689,7 +690,7 @@ Reject on the device if anything is off. The CLI exits with code 4 and no broadc
 
 ### Exit codes as a security tool
 
-The typed exit codes let your automation distinguish between "operator rejected" (code 4 — likely intentional), "signer/crypto problem" (code 3 — investigate), and "broadcast safety guard tripped" (code 5 — wrong network, do not retry blindly). Treat code 5 with care: it usually means a chain-ID mismatch caught a real bug.
+The typed exit codes let your automation distinguish between "operator rejected" (code 4 — likely intentional), "signer/crypto problem" (code 3 — investigate), and "RPC / broadcast error" (code 5). Code 5 covers an endpoint dial or gas/nonce estimation failure (`build`/`run`) and, on `send`, the broadcast safety guard tripping on a chain-ID mismatch — treat a send-side chain-ID mismatch as "wrong network, do not retry blindly".
 
 ---
 
@@ -831,8 +832,8 @@ cast decode-typed-tx "$RAW"
 
 | Symptom | Cause / fix |
 |---|---|
-| `signed tx chain ID does not match RPC chain ID; refusing to broadcast: signed tx has chain ID ... but RPC reports ...` (ErrBroadcastChainIDMismatch) (exit 5) | The RPC endpoint reports a different chain ID than the (decoded RLP) signed tx (full from send.go:247 %w after guard). You're pointing at the wrong network. Do NOT use `--yes` to bypass. (emitted by send) |
-| `failed to dial RPC endpoint` (ErrRPCDial) (exit 5) | Bad `--rpc-url` or network connectivity issue (exact from tx/errors.go:30 + §15). |
+| `signed tx chain ID does not match RPC chain ID; refusing to broadcast` (exit 5) | The RPC endpoint reports a different chain ID than the signed tx. You're pointing at the wrong network. Do NOT use `--yes` to bypass. |
+| `dial RPC: ...` (exit 5) | Bad `--rpc-url` or network connectivity issue. |
 | `eth_sendRawTransaction: nonce too low` (exit 5) | The sender's actual nonce is higher than what you signed. Rebuild with a correct `--nonce`, re-sign, retry. |
 | `eth_sendRawTransaction: insufficient funds` (exit 5) | The sender address doesn't have 32 ETH + gas. Fund it. |
 | `eth_sendRawTransaction: known transaction` (exit 5) | This exact tx was already broadcast. Check the explorer for the receipt. |

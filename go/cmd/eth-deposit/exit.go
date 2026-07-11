@@ -2,12 +2,14 @@
 //
 //	0 — success
 //	2 — user / configuration errors (bad input, validation, unknown network,
-//	    missing/malformed file, invalid hex, out-of-bounds --index, negative fees)
+//	    missing/malformed file, invalid hex, out-of-bounds --index, negative fees,
+//	    build-side RPC chain-ID mismatch)
 //	3 — signer / crypto errors (bad key, no Ledger device, Ethereum app not open,
-//	    chain ID mismatch, signer closed)
+//	    signer-side chain ID mismatch, signer closed)
 //	4 — user abort (SIGINT / context.Canceled / Ledger device rejection)
-//	5 — broadcast / RPC errors (dial failure, eth_sendRawTransaction error,
-//	    chain ID mismatch between signed tx and RPC node, receipt reverted/timeout)
+//	5 — broadcast / RPC errors (dial failure, gas/nonce estimation failure,
+//	    eth_sendRawTransaction error, broadcast-side chain ID mismatch between
+//	    signed tx and RPC node)
 //	1 — fallback for any other error
 package main
 

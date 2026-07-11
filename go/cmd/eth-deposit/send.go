@@ -141,7 +141,7 @@ Exit codes:
   0  Success
   2  User / configuration error (missing flags, invalid JSON)
   4  User abort (Ctrl-C or declined confirmation)
-  5  Broadcast / RPC error (dial failure, chain ID mismatch, node rejection)`,
+  5  Broadcast / RPC error (dial failure, broadcast-side chain ID mismatch, node rejection)`,
 		UsageText: `eth-deposit send --input FILE --rpc-url URL [--yes] [--wait-for-receipt] [--receipt-output FILE]`,
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{

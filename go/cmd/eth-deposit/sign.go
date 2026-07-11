@@ -118,7 +118,7 @@ Two signing methods are supported:
 Exit codes:
   0  Success
   2  User / configuration error (bad --signer, missing --input, invalid JSON)
-  3  Signer / crypto error (bad key, no Ledger device, Ethereum app not open)
+  3  Signer / crypto error (bad key, no Ledger device, Ethereum app not open, signer-side chain-ID mismatch)
   4  User abort (Ctrl-C or rejection on Ledger device)`,
 		UsageText: `eth-deposit sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]`,
 		Flags: []ucli.Flag{

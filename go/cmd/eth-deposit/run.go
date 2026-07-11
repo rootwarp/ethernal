@@ -144,9 +144,11 @@ Examples:
 
 Exit codes:
   0  Success
-  2  User / configuration error (missing file, bad --network, missing --signer)
-  3  Signer / crypto error (bad key, no Ledger device, Ethereum app not open)
+  2  User / configuration error (missing file, bad --network, missing --signer,
+     missing --nonce/--gas-limit for ledger RPC mode, RPC chain-ID mismatch)
+  3  Signer / crypto error (bad key, no Ledger device, Ethereum app not open, signer-side chain-ID mismatch)
   4  User abort (Ctrl-C or rejection on Ledger device)
+  5  RPC error (endpoint unreachable, gas/nonce estimation failed)
   1  Unexpected internal error`,
 		UsageText: `eth-deposit run --input-file FILE --network NET --signer local|ledger [options]`,
 		Flags: append(

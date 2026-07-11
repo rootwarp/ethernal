@@ -8,10 +8,13 @@
 //
 //	0 — success
 //	1 — unexpected / internal error
-//	2 — user / configuration error (bad input, unknown network, missing file, etc.)
-//	3 — signer / crypto error (bad key, no device, app not open, chain ID mismatch)
+//	2 — user / configuration error (bad input, unknown network, missing file,
+//	    missing required flag, build-side RPC chain-ID mismatch)
+//	3 — signer / crypto error (bad key, no device, app not open,
+//	    signer-side chain-ID mismatch)
 //	4 — user abort (SIGINT or Ledger rejection)
-//	5 — broadcast / RPC error (dial failure, eth_sendRawTransaction error)
+//	5 — broadcast / RPC error (dial failure, gas/nonce estimation failure,
+//	    eth_sendRawTransaction error, broadcast-side chain-ID mismatch)
 package main
 
 import (
@@ -143,7 +146,11 @@ Examples:
 
 Exit codes:
   0  Success
-  2  User / configuration error (missing file, invalid JSON, bad --network, out-of-range --index)
+  2  User / configuration error (missing/invalid input, bad --network, out-of-range
+     --index, missing required flag, missing --from for RPC nonce/gas estimation,
+     RPC chain-ID mismatch)
+  4  User abort (Ctrl-C during RPC estimation)
+  5  RPC error (endpoint unreachable, gas/nonce estimation failed)
   1  Unexpected internal error`,
 		UsageText: `eth-deposit build --input-file FILE --network NET [options]`,
 		Flags: []ucli.Flag{
@@ -252,13 +259,14 @@ Exit codes:
 // unset, --from is mandatory. Both the pending-nonce fetch and the 32-ETH gas
 // estimation need a funded sender, so a zero From would otherwise surface later
 // as a confusing exit-5 estimation failure instead of a clean exit-2 config
-// error. resolveRPC's ErrMissingFromForNonce remains the backstop for the nonce
-// path. This gate lives in build's Action, not shared LoadBuildConfig, because
-// run derives From from the signing key instead.
+// error. resolveRPC's ErrMissingFromForNonce is now builder-level
+// defense-in-depth only — this gate catches the build path first. It lives in
+// build's Action, not shared LoadBuildConfig, because run derives From from the
+// signing key instead.
 //
-// The cfg.GasLimit == 0 half is inert until P2-2 removes the eager gas default
-// in LoadBuildConfig (GasLimit is never 0 today); the cfg.Nonce == nil half is
-// live now.
+// Both halves are live: P2-2 removed LoadBuildConfig's eager gas default, so
+// cfg.GasLimit == 0 when --gas-limit is omitted and cfg.Nonce == nil when
+// --nonce is omitted.
 func requireFromForRPC(cfg *Config) error {
 	if cfg.RPCURL != "" && cfg.From == ([20]byte{}) && (cfg.Nonce == nil || cfg.GasLimit == 0) {
 		return ucli.Exit("--from: required when --rpc-url is set and --nonce or --gas-limit is omitted "+
