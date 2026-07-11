@@ -184,10 +184,18 @@ Exit codes:
 				Usage:   "Override the sender account nonce (non-negative integer; omit to fetch from RPC or set later)",
 				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_NONCE"),
 			},
+			&ucli.StringFlag{
+				Name:    "from",
+				Usage:   "Sender address (0x-prefixed, 20-byte hex). Required with --rpc-url when --nonce or --gas-limit is omitted, to fetch the pending nonce and estimate gas.",
+				Sources: ucli.EnvVars("ETH_DEPOSIT_TX_FROM"),
+			},
 		},
 		Action: func(ctx context.Context, c *ucli.Command) error {
 			cfg, err := LoadBuildConfig(c)
 			if err != nil {
+				return err
+			}
+			if err := requireFromForRPC(cfg); err != nil {
 				return err
 			}
 
@@ -224,6 +232,26 @@ Exit codes:
 			return nil
 		},
 	}
+}
+
+// requireFromForRPC enforces the config-time --from requirement for build: in
+// RPC mode, when no sender was supplied and either the nonce or the gas limit is
+// unset, --from is mandatory. Both the pending-nonce fetch and the 32-ETH gas
+// estimation need a funded sender, so a zero From would otherwise surface later
+// as a confusing exit-5 estimation failure instead of a clean exit-2 config
+// error. resolveRPC's ErrMissingFromForNonce remains the backstop for the nonce
+// path. This gate lives in build's Action, not shared LoadBuildConfig, because
+// run derives From from the signing key instead.
+//
+// The cfg.GasLimit == 0 half is inert until P2-2 removes the eager gas default
+// in LoadBuildConfig (GasLimit is never 0 today); the cfg.Nonce == nil half is
+// live now.
+func requireFromForRPC(cfg *Config) error {
+	if cfg.RPCURL != "" && cfg.From == ([20]byte{}) && (cfg.Nonce == nil || cfg.GasLimit == 0) {
+		return ucli.Exit("--from: required when --rpc-url is set and --nonce or --gas-limit is omitted "+
+			"(the sender is needed to fetch the pending nonce and to estimate gas for the 32-ETH deposit call)", 2)
+	}
+	return nil
 }
 
 // buildUnsignedTx converts raw deposit data bytes + build config into an UnsignedTx.
@@ -274,4 +302,3 @@ func buildUnsignedTx(ctx context.Context, cfg *Config, rawData []byte) (*interna
 	}
 	return unsignedTx, nil
 }
-

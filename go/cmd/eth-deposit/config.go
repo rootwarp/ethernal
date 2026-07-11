@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"regexp"
 	"strconv"
+	"strings"
 
 	ucli "github.com/urfave/cli/v3"
 
@@ -43,6 +45,10 @@ type Config struct {
 	// RPCURL is an optional JSON-RPC endpoint for gas/nonce estimation.
 	// Empty means the caller must supply all gas/nonce flags explicitly.
 	RPCURL string
+
+	// From is the sender address, parsed from --from. Zero value means unset.
+	// Used only in RPC mode to fetch the pending nonce when --nonce is omitted.
+	From [20]byte
 
 	// GasLimit is the EIP-1559 gas limit for the deposit transaction.
 	GasLimit uint64
@@ -164,6 +170,18 @@ func LoadBuildConfig(c *ucli.Command) (*Config, error) {
 		ConfirmNetwork:              confirmNet,
 		IAcceptLocalSignerOnMainnet: acceptLocal,
 	}
+
+	// 6. Sender address — optional, strict 20-byte hex. common.HexToAddress is
+	// deliberately avoided: it is lenient and silently truncates/pads.
+	if s := c.String("from"); s != "" {
+		h := strings.TrimPrefix(s, "0x")
+		b, err := hex.DecodeString(h)
+		if err != nil || len(b) != 20 {
+			return nil, ucli.Exit(fmt.Sprintf("--from: invalid address %q: must be a 20-byte hex address", s), 2)
+		}
+		copy(cfg.From[:], b)
+	}
+
 	return cfg, nil
 }
 
