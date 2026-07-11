@@ -76,10 +76,27 @@ Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=u
 		// Suppress urfave's default ExitCoder printer; we log via slog below.
 		ExitErrHandler: func(_ context.Context, _ *ucli.Command, _ error) {},
 	}
+	applyUsageErrorHook(app)
 
 	if err := app.Run(ctx, os.Args); err != nil {
 		slog.Error("fatal", "err", err)
 		os.Exit(ExitCodeFor(err))
+	}
+}
+
+// onUsageError converts urfave usage errors (missing required flag, unknown
+// flag, bad flag value, arg-parse failures) into an exit-code-2 ExitCoder, so
+// every subcommand agrees that usage errors are user/config errors (F2).
+func onUsageError(_ context.Context, _ *ucli.Command, err error, _ bool) error {
+	return ucli.Exit(err.Error(), 2)
+}
+
+// applyUsageErrorHook sets onUsageError on every subcommand of app. OnUsageError
+// is read from the subcommand (not inherited from root), so it must be set on
+// each. Must be called after the command list is built.
+func applyUsageErrorHook(app *ucli.Command) {
+	for _, c := range app.Commands {
+		c.OnUsageError = onUsageError
 	}
 }
 
