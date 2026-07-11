@@ -221,7 +221,7 @@ func buildFlags() []ucli.Flag {
 		},
 		&ucli.StringFlag{
 			Name:    "rpc-url",
-			Usage:   "JSON-RPC endpoint URL for gas/nonce estimation (optional; when omitted, all gas and nonce flags must be supplied explicitly)",
+			Usage:   "JSON-RPC endpoint URL. When set, any gas/fee/nonce value not given explicitly is resolved from the node; --signer local derives the sender from its key, while --signer ledger requires --nonce. When omitted, all gas and nonce flags must be supplied explicitly.",
 			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_RPC_URL"),
 		},
 		&ucli.StringFlag{
@@ -259,6 +259,30 @@ func runAction(ctx context.Context, c *ucli.Command, cfg *RunConfig) error {
 	}
 	if err != nil {
 		return ucli.Exit(fmt.Sprintf("--input-file: %v", err), 2)
+	}
+
+	// 1b. Local signer + RPC mode: derive From from the signing key so resolveRPC
+	// can fetch the pending nonce AND estimate gas for the 32-ETH deposit call
+	// (both need a funded sender). Derive unconditionally in RPC mode — it is cheap
+	// and harmless when the address ends up unused (nonce and gas both explicit).
+	//
+	// Security: the key is read twice — here and again in signUnsignedTx below —
+	// and each LocalSigner zeroizes its key buffer on Close. Reading from the env
+	// var is idempotent. signUnsignedTx's signature is deliberately left untouched
+	// so the shared sign path (also used by the standalone sign command) is
+	// unaffected. Ledger keeps From zero (no early device query, N1); with --nonce
+	// omitted resolveRPC then returns ErrMissingFromForNonce → exit 2.
+	if cfg.Signer == "local" && cfg.Build.RPCURL != "" {
+		s, signerErr := signer.NewLocalSignerFromEnv(cfg.PrivateKeyEnvVar)
+		if signerErr != nil {
+			return fmt.Errorf("local signer: %w", signerErr) // ErrInvalidKey → exit 3
+		}
+		addr, addrErr := s.Address()
+		_ = s.Close()
+		if addrErr != nil {
+			return fmt.Errorf("local signer: %w", addrErr)
+		}
+		cfg.Build.From = [20]byte(addr)
 	}
 
 	// 2. Build unsigned tx (in-process, no disk write).
