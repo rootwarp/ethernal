@@ -180,7 +180,10 @@ Exit codes:
 	}
 }
 
-// buildFlags returns the flag list shared between build and run subcommands.
+// buildFlags returns the flag list for the run subcommand. Despite the name it
+// is NOT shared with build — build declares its flags inline in buildCommand, so
+// a flag added here affects run only (e.g. --from must NOT be added here: run
+// derives From from the signing key, it does not accept a --from flag).
 func buildFlags() []ucli.Flag {
 	return []ucli.Flag{
 		&ucli.StringFlag{

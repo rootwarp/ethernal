@@ -45,6 +45,24 @@ func TestLoadBuildConfig_FromNoPrefix(t *testing.T) {
 	}
 }
 
+func TestLoadBuildConfig_FromMixedCase(t *testing.T) {
+	// Mixed-case hex is accepted as-is: hex.DecodeString is case-insensitive and
+	// we do NOT perform EIP-55 checksum validation (From only selects whose
+	// nonce/gas to read, so a checksum check would add friction with no benefit).
+	const addr = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+	cfg, err := captureConfig(t, []string{
+		"build", "--network", "holesky", "--input-file", "deposit.json",
+		"--from", addr,
+	})
+	if err != nil {
+		t.Fatalf("mixed-case --from should be accepted, got: %v", err)
+	}
+	want, _ := hex.DecodeString(strings.TrimPrefix(addr, "0x"))
+	if !bytes.Equal(cfg.From[:], want) {
+		t.Errorf("From: got %x, want %x", cfg.From, want)
+	}
+}
+
 func TestLoadBuildConfig_FromUnset(t *testing.T) {
 	cfg, err := captureConfig(t, []string{"build", "--network", "holesky", "--input-file", "deposit.json"})
 	if err != nil {
