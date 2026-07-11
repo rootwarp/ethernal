@@ -3,8 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"math/big"
+	"strings"
 	"testing"
 
 	ucli "github.com/urfave/cli/v3"
@@ -12,6 +12,19 @@ import (
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
+
+// withNoDialEthRPC traps any dial attempt: a config-time gate under test must
+// fire before buildUnsignedTx reaches the RPC seam. If it doesn't, the trap fails
+// the test loudly instead of letting a real/mocked dial mask the regression.
+func withNoDialEthRPC(t *testing.T) {
+	t.Helper()
+	orig := newEthRPC
+	newEthRPC = func(ctx context.Context, rpcURL string) (internaltx.EthRPC, error) {
+		t.Fatal("newEthRPC called: the config-time gate should fire before any dial")
+		return nil, nil
+	}
+	t.Cleanup(func() { newEthRPC = orig })
+}
 
 // Case 10: run --signer local + --rpc-url with --nonce omitted derives From from
 // the key, so resolveRPC's PendingNonceAt and the 32-ETH EstimateGas both receive
@@ -183,27 +196,17 @@ func TestRunCommand_LocalSigner_RPCBadKey_Exit3(t *testing.T) {
 }
 
 // Case 11: run --signer ledger + --rpc-url with --nonce omitted → From stays zero
-// (N1: no early device query), so resolveRPC returns ErrMissingFromForNonce →
-// exit 2, before any signing or device interaction. Exit 2 (not 3=ErrNoDevice) is
-// the discriminator that proves the ledger was never touched.
+// (N1: no early device query). The config-time gate (requireLedgerFlagsForRPC)
+// now rejects this up front with exit 2 naming both flags — before any file read,
+// dial, or device interaction. This supersedes the resolveRPC
+// ErrMissingFromForNonce backstop (still covered at builder level); the gate
+// catches it first.
 func TestRunCommand_LedgerSigner_RPCNonceOmitted_Exit2(t *testing.T) {
 	orig := ucli.OsExiter
 	ucli.OsExiter = func(int) {}
 	t.Cleanup(func() { ucli.OsExiter = orig })
 
-	withMockEthRPC(t, &mockEthRPC{
-		ChainIDFn:          func(context.Context) (*big.Int, error) { return big.NewInt(int64(holeskyChainID)), nil },
-		SuggestGasTipCapFn: func(context.Context) (*big.Int, error) { return big.NewInt(1_000_000_000), nil },
-		BlockBaseFeeFn:     func(context.Context) (*big.Int, error) { return big.NewInt(10_000_000_000), nil },
-		PendingNonceAtFn: func(context.Context, [20]byte) (uint64, error) {
-			t.Fatal("PendingNonceAt must not run: ledger From is zero → ErrMissingFromForNonce first")
-			return 0, nil
-		},
-		EstimateGasFn: func(context.Context, internaltx.CallMsg) (uint64, error) {
-			t.Fatal("EstimateGas must not run for a zero From")
-			return 0, nil
-		},
-	})
+	withNoDialEthRPC(t) // the gate must fire before any dial
 
 	app := newTestApp()
 	var out bytes.Buffer
@@ -219,12 +222,131 @@ func TestRunCommand_LedgerSigner_RPCNonceOmitted_Exit2(t *testing.T) {
 		// --nonce omitted
 	})
 	if err == nil {
-		t.Fatal("expected ErrMissingFromForNonce exit 2, got nil")
-	}
-	if !errors.Is(err, internaltx.ErrMissingFromForNonce) {
-		t.Errorf("error should be ErrMissingFromForNonce, got: %v", err)
+		t.Fatal("expected config-time exit 2, got nil")
 	}
 	if got := ExitCodeFor(err); got != 2 {
-		t.Errorf("exit code = %d, want 2 (not 3 — no device interaction); err = %v", got, err)
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	if !strings.Contains(err.Error(), "--nonce") || !strings.Contains(err.Error(), "--gas-limit") {
+		t.Errorf("error should name both --nonce and --gas-limit, got: %v", err)
+	}
+}
+
+// The gas-omitted half: --nonce set but --gas-limit omitted still needs a funded
+// From for EstimateGas, which ledger cannot provide — gated at config time.
+func TestRunCommand_LedgerSigner_RPCGasOmitted_Exit2(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	withNoDialEthRPC(t)
+
+	app := newTestApp()
+	var out bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &out
+
+	err := app.Run(context.Background(), []string{
+		"eth-deposit", "run",
+		"--network", "holesky",
+		"--input-file", fixtureAbsPath(t),
+		"--rpc-url", "http://node.example",
+		"--signer", "ledger",
+		"--nonce", "5", // nonce set; --gas-limit omitted
+	})
+	if err == nil {
+		t.Fatal("expected config-time exit 2, got nil")
+	}
+	if got := ExitCodeFor(err); got != 2 {
+		t.Errorf("exit code = %d, want 2; err = %v", got, err)
+	}
+	if !strings.Contains(err.Error(), "--gas-limit") {
+		t.Errorf("error should name --gas-limit, got: %v", err)
+	}
+}
+
+// With both --nonce and --gas-limit supplied, the gate passes and the run
+// proceeds to signing — which fails with no Ledger device (exit 3), NOT the
+// gate's exit-2 error. A mock is injected so the build reaches the sign step.
+func TestRunCommand_LedgerSigner_RPCBothFlags_PassesGate(t *testing.T) {
+	orig := ucli.OsExiter
+	ucli.OsExiter = func(int) {}
+	t.Cleanup(func() { ucli.OsExiter = orig })
+
+	withMockEthRPC(t, &mockEthRPC{
+		ChainIDFn:          func(context.Context) (*big.Int, error) { return big.NewInt(int64(holeskyChainID)), nil },
+		SuggestGasTipCapFn: func(context.Context) (*big.Int, error) { t.Fatal("explicit flags → no fee resolve"); return nil, nil },
+		BlockBaseFeeFn:     func(context.Context) (*big.Int, error) { t.Fatal("explicit flags → no fee resolve"); return nil, nil },
+		PendingNonceAtFn: func(context.Context, [20]byte) (uint64, error) {
+			t.Fatal("explicit nonce → no nonce resolve")
+			return 0, nil
+		},
+		EstimateGasFn: func(context.Context, internaltx.CallMsg) (uint64, error) {
+			t.Fatal("explicit gas → no gas resolve")
+			return 0, nil
+		},
+	})
+
+	app := newTestApp()
+	var out bytes.Buffer
+	app.Writer = &out
+	app.ErrWriter = &out
+
+	err := app.Run(context.Background(), []string{
+		"eth-deposit", "run",
+		"--network", "holesky",
+		"--input-file", fixtureAbsPath(t),
+		"--rpc-url", "http://node.example",
+		"--signer", "ledger",
+		"--nonce", "5",
+		"--gas-limit", "250000",
+		"--max-fee-per-gas", "20000000000",
+		"--max-priority-fee-per-gas", "1000000000",
+	})
+	if err == nil {
+		t.Fatal("expected a downstream ledger no-device error after passing the gate")
+	}
+	if strings.Contains(err.Error(), "requires both --nonce and --gas-limit") {
+		t.Errorf("gate should have passed with both flags set, got the gate error: %v", err)
+	}
+	if got := ExitCodeFor(err); got != 3 {
+		t.Errorf("exit code = %d, want 3 (ledger no device, past the gate); err = %v", got, err)
+	}
+}
+
+// TestRequireLedgerFlagsForRPC exercises the gate condition directly.
+func TestRequireLedgerFlagsForRPC(t *testing.T) {
+	nonce := func() *uint64 { n := uint64(5); return &n }
+	cases := []struct {
+		name    string
+		cfg     RunConfig
+		wantErr bool
+	}{
+		{"offline ledger (no rpc)", RunConfig{Signer: "ledger", Build: &Config{}}, false},
+		{"ledger rpc nonce omitted", RunConfig{Signer: "ledger", Build: &Config{RPCURL: "http://n", GasLimit: 250_000}}, true},
+		{"ledger rpc gas omitted", RunConfig{Signer: "ledger", Build: &Config{RPCURL: "http://n", Nonce: nonce()}}, true},
+		{"ledger rpc both omitted", RunConfig{Signer: "ledger", Build: &Config{RPCURL: "http://n"}}, true},
+		{"ledger rpc both set", RunConfig{Signer: "ledger", Build: &Config{RPCURL: "http://n", Nonce: nonce(), GasLimit: 250_000}}, false},
+		{"local rpc both omitted (exempt)", RunConfig{Signer: "local", Build: &Config{RPCURL: "http://n"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := requireLedgerFlagsForRPC(&tc.cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if got := ExitCodeFor(err); got != 2 {
+					t.Errorf("exit code = %d, want 2; err = %v", got, err)
+				}
+				if !strings.Contains(err.Error(), "--nonce") || !strings.Contains(err.Error(), "--gas-limit") {
+					t.Errorf("error should name both flags, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("expected nil, got: %v", err)
+			}
+		})
 	}
 }

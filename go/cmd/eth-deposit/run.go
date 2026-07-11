@@ -247,8 +247,31 @@ func buildFlags() []ucli.Flag {
 	}
 }
 
+// requireLedgerFlagsForRPC enforces PRD F1.3's ledger SHOULD: run --signer ledger
+// in RPC mode is never queried for its address (N1), so From stays zero and the
+// node can resolve neither the pending nonce nor the gas estimate for the 32-ETH
+// deposit call. Both --nonce and --gas-limit must be supplied explicitly, which
+// gives a clean config-time exit 2 instead of a confusing runtime exit 5
+// (PendingNonceAt / EstimateGas rejected on the zero address). The local signer
+// derives From, so it is exempt. Mirrors build's requireFromForRPC.
+func requireLedgerFlagsForRPC(cfg *RunConfig) error {
+	if cfg.Signer == "ledger" && cfg.Build.RPCURL != "" && (cfg.Build.Nonce == nil || cfg.Build.GasLimit == 0) {
+		return ucli.Exit("--signer ledger with --rpc-url requires both --nonce and --gas-limit: "+
+			"the Ledger sender address is not queried, so the node cannot fetch the pending nonce "+
+			"or estimate gas for the 32-ETH deposit call", 2)
+	}
+	return nil
+}
+
 // runAction orchestrates the build → sign pipeline in-process.
 func runAction(ctx context.Context, c *ucli.Command, cfg *RunConfig) error {
+	// 0. Config-time gate: ledger in RPC mode cannot derive a sender, so require
+	// both --nonce and --gas-limit up front (clean exit 2, no dial). Runs before
+	// any file read or dial.
+	if err := requireLedgerFlagsForRPC(cfg); err != nil {
+		return err
+	}
+
 	// 1. Read deposit data.
 	var rawData []byte
 	var err error
@@ -270,8 +293,9 @@ func runAction(ctx context.Context, c *ucli.Command, cfg *RunConfig) error {
 	// and each LocalSigner zeroizes its key buffer on Close. Reading from the env
 	// var is idempotent. signUnsignedTx's signature is deliberately left untouched
 	// so the shared sign path (also used by the standalone sign command) is
-	// unaffected. Ledger keeps From zero (no early device query, N1); with --nonce
-	// omitted resolveRPC then returns ErrMissingFromForNonce → exit 2.
+	// unaffected. Ledger keeps From zero (no early device query, N1) and is gated
+	// earlier by requireLedgerFlagsForRPC, so it never reaches this block in RPC
+	// mode without both --nonce and --gas-limit.
 	if cfg.Signer == "local" && cfg.Build.RPCURL != "" {
 		s, signerErr := signer.NewLocalSignerFromEnv(cfg.PrivateKeyEnvVar)
 		if signerErr != nil {
