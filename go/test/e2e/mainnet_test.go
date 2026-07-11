@@ -36,7 +36,7 @@ import (
 	"testing"
 	"time"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/atomicio"
 	"github.com/rootwarp/eth-utils/go/internal/bls"
@@ -220,7 +220,7 @@ func TestMainnetBanner(t *testing.T) {
 	})
 	app.Writer = io.Discard // suppress urfave help-text noise
 	app.ErrWriter = &bannerBuf
-	app.ExitErrHandler = func(_ *ucli.Context, _ error) {} // prevent os.Exit in tests
+	app.ExitErrHandler = func(_ context.Context, _ *ucli.Command, _ error) {} // prevent os.Exit in tests
 
 	args := []string{
 		"eth-deposit-gen",
@@ -232,7 +232,7 @@ func TestMainnetBanner(t *testing.T) {
 		"--output-dir", t.TempDir(),
 	}
 
-	if err := app.Run(args); err != nil {
+	if err := app.Run(context.Background(), args); err != nil {
 		t.Fatalf("app.Run: %v", err)
 	}
 

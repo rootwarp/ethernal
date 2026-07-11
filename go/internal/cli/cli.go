@@ -1,4 +1,4 @@
-// Package cli defines the urfave/cli/v2 application, flag schema, and input
+// Package cli defines the urfave/cli/v3 application, flag schema, and input
 // validation for eth-deposit-gen. It converts raw CLI flags into a typed Config
 // and invokes the caller-supplied run function only after all validations pass.
 package cli
@@ -17,9 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	ucli "github.com/urfave/cli/v2"
-	"golang.org/x/term"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/deposit"
@@ -97,12 +95,12 @@ type Config struct {
 	DepositCLIPath string
 }
 
-// NewApp constructs and returns a configured *cli.App. The run callback receives
+// NewApp constructs and returns a configured *cli.Command. The run callback receives
 // a validated Config; it is only invoked when all flags are present and valid.
-// Validation errors are returned as cli.Exit errors (exit code 2, per PRD for
-// user/configuration errors) so that urfave can print them to ErrWriter and exit cleanly.
-func NewApp(run func(context.Context, Config) error) *ucli.App {
-	app := ucli.NewApp()
+// Validation errors are returned as cli.Exit errors (exit code 1) so that urfave
+// can print them to ErrWriter and exit cleanly.
+func NewApp(run func(context.Context, Config) error) *ucli.Command {
+	app := &ucli.Command{}
 	app.Name = "eth-deposit-gen"
 	app.Usage = "Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys"
 	app.UsageText = `eth-deposit-gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]`
@@ -110,7 +108,7 @@ func NewApp(run func(context.Context, Config) error) *ucli.App {
 signing each deposit message with the BLS key loaded from an EIP-2335 keystore.
 Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.`
 
-	app.CustomAppHelpTemplate = `NAME:
+	app.CustomRootCommandHelpTemplate = `NAME:
    {{.Name}} - {{.Usage}}
 
 USAGE:
@@ -207,13 +205,12 @@ OPTIONS:
 		},
 	}
 
-	app.Action = func(c *ucli.Context) error {
-		// Validation order: network first (per spec), then mainnet ack, then
-		// --withdrawal-address (M0.4-1 EIP-55 guard), then pubkeys, then
-		// keystore-dir (directory readability probe), then output-dir.
+	app.Action = func(ctx context.Context, cmd *ucli.Command) error {
+		// Validation order: network first (per spec), then mainnet ack, then pubkeys,
+		// then keystore-dir (directory readability probe), then output-dir.
 
 		// 1. Parse and validate --network (eth-deposit-gen only supports mainnet and hoodi)
-		net, err := network.ParseFlag(c.String("network"))
+		net, err := network.ParseFlag(cmd.String("network"))
 		if err != nil {
 			return ucli.Exit(fmt.Sprintf("--network: %v", err), 2)
 		}
@@ -223,7 +220,7 @@ OPTIONS:
 
 		// 1a. Mainnet safety gate: require explicit operator acknowledgement before
 		// any signing work begins. This must happen before printBanner and before run().
-		mainnetAck := c.Bool("i-understand-this-is-mainnet")
+		mainnetAck := cmd.Bool("i-understand-this-is-mainnet")
 		if net == network.Mainnet && !mainnetAck {
 			return ucli.Exit("mainnet selected; pass --i-understand-this-is-mainnet to acknowledge", 2)
 		}
@@ -256,26 +253,26 @@ OPTIONS:
 		}
 
 		// 2. Parse and validate --pubkeys
-		pubkeys, err := parsePubkeys(c.String("pubkeys"))
+		pubkeys, err := parsePubkeys(cmd.String("pubkeys"))
 		if err != nil {
 			return ucli.Exit(fmt.Sprintf("--pubkeys: %v", err), 2)
 		}
 
 		// 3. Validate --keystore-dir
-		keystoreDir := c.String("keystore-dir")
+		keystoreDir := cmd.String("keystore-dir")
 		if err := validateKeystoreDir(keystoreDir); err != nil {
 			return ucli.Exit(fmt.Sprintf("--keystore-dir: %v", err), 2)
 		}
 
 		// 4. Validate --output-dir
-		outputDir := c.String("output-dir")
+		outputDir := cmd.String("output-dir")
 		if err := validateOutputDir(outputDir); err != nil {
 			return ucli.Exit(fmt.Sprintf("--output-dir: %v", err), 2)
 		}
 
-		// 5. Validate --parallel: must be in [1, runtime.NumCPU()*parallelismMultiplier].
-		parallel := c.Int("parallel")
-		maxParallel := runtime.NumCPU() * parallelismMultiplier
+		// 5. Validate --parallel: must be in [1, runtime.NumCPU()*4].
+		parallel := cmd.Int("parallel")
+		maxParallel := runtime.NumCPU() * 4
 		if parallel <= 0 {
 			return ucli.Exit(fmt.Sprintf("--parallel: value %d is invalid; must be >= 1", parallel), 2)
 		}
@@ -288,21 +285,20 @@ OPTIONS:
 			Pubkeys:              pubkeys,
 			Network:              net,
 			OutputDir:            outputDir,
-			PassphraseEnv:        c.String("passphrase-env"),
+			PassphraseEnv:        cmd.String("passphrase-env"),
 			MainnetAck:           mainnetAck,
-			DryRun:               c.Bool("dry-run"),
-			Verbose:              c.Bool("verbose"),
-			JSONLogs:             c.Bool("json-logs"),
+			DryRun:               cmd.Bool("dry-run"),
+			Verbose:              cmd.Bool("verbose"),
+			JSONLogs:             cmd.Bool("json-logs"),
 			Parallel:             parallel,
-			VerifyWithDepositCLI: c.Bool("verify-with-deposit-cli"),
-			DepositCLIPath:       c.String("deposit-cli-path"),
-			WithdrawalAddress:    withdrawalAddr,
+			VerifyWithDepositCLI: cmd.Bool("verify-with-deposit-cli"),
+			DepositCLIPath:       cmd.String("deposit-cli-path"),
 		}
 
 		// 5. Print confirmation banner to stderr before invoking run.
-		printBanner(c.App.ErrWriter, cfg)
+		printBanner(cmd.ErrWriter, cfg)
 
-		return run(c.Context, cfg)
+		return run(ctx, cfg)
 	}
 
 	return app

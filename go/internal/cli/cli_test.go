@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	blspkg "github.com/rootwarp/eth-utils/go/internal/bls"
 	icli "github.com/rootwarp/eth-utils/go/internal/cli"
@@ -88,10 +88,10 @@ func runApp(t *testing.T, args []string) (cfg icli.Config, stderr string, runCal
 	// Suppress os.Exit during tests: ExitErrHandler is called by urfave/cli
 	// when an ExitCoder error is returned from Action. We override it so that
 	// the error propagates back to the caller instead of calling os.Exit.
-	app.ExitErrHandler = func(_ *ucli.Context, _ error) {}
+	app.ExitErrHandler = func(_ context.Context, _ *ucli.Command, _ error) {}
 
 	fullArgs := append([]string{"eth-deposit-gen"}, args...)
-	err = app.Run(fullArgs)
+	err = app.Run(context.Background(), fullArgs)
 	return capturedCfg, errBuf.String(), called, err
 }
 

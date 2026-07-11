@@ -9,7 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
+	"golang.org/x/term"
 
 	"github.com/rootwarp/eth-utils/go/internal/cli"
 )
@@ -31,11 +32,11 @@ func main() {
 
 	app := cli.NewApp(cli.Run)
 	app.Version = version
-	ucli.VersionPrinter = func(c *ucli.Context) {
-		_, _ = fmt.Fprintf(c.App.Writer, "%s version %s (commit=%s, built=%s)\n",
-			c.App.Name, c.App.Version, commit, date) // ignore: best-effort version banner to stdout
+	ucli.VersionPrinter = func(cmd *ucli.Command) {
+		fmt.Fprintf(cmd.Writer, "%s version %s (commit=%s, built=%s)\n",
+			cmd.Name, cmd.Version, commit, date)
 	}
-	if err := app.RunContext(ctx, os.Args); err != nil {
-		os.Exit(cli.ExitCodeFor(err))
+	if err := app.Run(ctx, os.Args); err != nil {
+		os.Exit(exitCodeFor(err))
 	}
 }

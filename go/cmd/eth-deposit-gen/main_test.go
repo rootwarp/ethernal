@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	ucli "github.com/urfave/cli/v2"
+	ucli "github.com/urfave/cli/v3"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -1889,11 +1889,11 @@ func TestVersionFlag(t *testing.T) {
 	var buf bytes.Buffer
 	app := cli.NewApp(func(_ context.Context, _ cli.Config) error { return nil })
 	app.Version = version
-	ucli.VersionPrinter = func(c *ucli.Context) {
-		fmt.Fprintf(&buf, "%s version %s\n", c.App.Name, c.App.Version)
+	ucli.VersionPrinter = func(cmd *ucli.Command) {
+		fmt.Fprintf(&buf, "%s version %s\n", cmd.Name, cmd.Version)
 	}
 
-	err := app.Run([]string{"eth-deposit-gen", "--version"})
+	err := app.Run(context.Background(), []string{"eth-deposit-gen", "--version"})
 	if err != nil {
 		t.Fatalf("--version returned error: %v", err)
 	}
