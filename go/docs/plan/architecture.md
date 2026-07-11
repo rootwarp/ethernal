@@ -171,7 +171,7 @@ build's are inline at `main.go:121-172`, run's come from `buildFlags()` at `run.
 ```go
 &ucli.StringFlag{
 	Name:    "from",
-	Usage:   "Sender address (0x-prefixed, 20-byte hex). Required with --rpc-url when --nonce is omitted, to fetch the pending nonce.",
+	Usage:   "Sender address (0x-prefixed, 20-byte hex). Required with --rpc-url when --nonce or --gas-limit is omitted, to fetch the pending nonce and estimate gas.",
 	Sources: ucli.EnvVars("ETH_DEPOSIT_TX_FROM"),
 },
 ```
