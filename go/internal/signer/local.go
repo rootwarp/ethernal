@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
@@ -188,8 +189,23 @@ func (s *LocalSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx) 
 	}, nil
 }
 
-func (s *LocalSigner) Name() string                  { return localSignerName }
-func (s *LocalSigner) RequiresUserInteraction() bool { return false }
+// Address derives the Ethereum address for the in-memory signing key.
+// It is defined on the concrete *LocalSigner only, deliberately NOT on the
+// Signer interface, so a hardware signer (Ledger) is never forced to expose
+// an address without a connected device.
+func (s *LocalSigner) Address() (common.Address, error) {
+	if s.closed.Load() {
+		return common.Address{}, ErrSignerClosed
+	}
+	priv, err := gethcrypto.ToECDSA(s.key)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("failed to parse signing key: %w", ErrInvalidKey)
+	}
+	return gethcrypto.PubkeyToAddress(priv.PublicKey), nil
+}
+
+func (s *LocalSigner) Name() string                    { return localSignerName }
+func (s *LocalSigner) RequiresUserInteraction() bool   { return false }
 
 // Close zeroizes the in-memory key bytes. Subsequent Sign calls return
 // ErrSignerClosed. Idempotent.

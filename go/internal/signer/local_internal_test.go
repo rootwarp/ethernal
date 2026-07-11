@@ -120,6 +120,16 @@ func TestNewLocalSignerFromEnv_BadValue_WrappedSentinel(t *testing.T) {
 	}
 }
 
+func TestLocalSigner_Address_InvalidKey(t *testing.T) {
+	// White-box: a signer holding a non-canonical (all-zero) scalar cannot
+	// arise via the validating constructors, but Address must still surface
+	// ErrInvalidKey rather than panic on the parse failure.
+	s := &LocalSigner{key: make([]byte, 32)}
+	if _, err := s.Address(); !errors.Is(err, ErrInvalidKey) {
+		t.Fatalf("want ErrInvalidKey for non-canonical key, got %v", err)
+	}
+}
+
 func TestLocalSigner_Close_ZeroizesKey(t *testing.T) {
 	priv, err := gethcrypto.GenerateKey()
 	if err != nil {

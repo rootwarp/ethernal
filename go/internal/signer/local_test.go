@@ -337,6 +337,37 @@ func TestLocalSigner_RequiresUserInteraction(t *testing.T) {
 	}
 }
 
+func TestLocalSigner_Address_ReturnsKeyAddress(t *testing.T) {
+	keyHex, wantAddr := validHexKey(t)
+	s, err := signer.NewLocalSignerFromHex(keyHex)
+	if err != nil {
+		t.Fatalf("NewLocalSignerFromHex: %v", err)
+	}
+	defer s.Close()
+
+	addr, err := s.Address()
+	if err != nil {
+		t.Fatalf("Address: %v", err)
+	}
+	if !strings.EqualFold(addr.Hex(), wantAddr) {
+		t.Errorf("Address() = %q, want %q", addr.Hex(), wantAddr)
+	}
+}
+
+func TestLocalSigner_Address_AfterClose(t *testing.T) {
+	keyHex, _ := validHexKey(t)
+	s, err := signer.NewLocalSignerFromHex(keyHex)
+	if err != nil {
+		t.Fatalf("NewLocalSignerFromHex: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := s.Address(); !errors.Is(err, signer.ErrSignerClosed) {
+		t.Errorf("want ErrSignerClosed, got %v", err)
+	}
+}
+
 // --- Must Fix 1: ChainID=0 rejection ---
 
 func TestLocalSigner_Sign_ChainID0_Rejected(t *testing.T) {
