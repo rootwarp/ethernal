@@ -34,20 +34,29 @@ func (e *envSource) Zeroize() {}
 // suppression, writing a prompt to a provided writer.
 type termPromptSource struct {
 	w io.Writer
+	// openTTY opens the controlling terminal. It is a field so tests can force
+	// the no-TTY error path without depending on the real /dev/tty, which is
+	// non-deterministic under `go test`.
+	openTTY func() (*os.File, error)
 }
 
 // NewTermPromptSource returns a PassphraseSource that prompts on w and reads
 // the passphrase from /dev/tty using golang.org/x/term.ReadPassword.
 // Echo is suppressed so the passphrase is never displayed.
 func NewTermPromptSource(w io.Writer) PassphraseSource {
-	return &termPromptSource{w: w}
+	return &termPromptSource{w: w, openTTY: openControllingTTY}
+}
+
+// openControllingTTY opens the process's controlling terminal for read/write.
+func openControllingTTY() (*os.File, error) {
+	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
 }
 
 // Read prompts the user and reads a passphrase from /dev/tty without echo.
 func (t *termPromptSource) Read() ([]byte, error) {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	tty, err := t.openTTY()
 	if err != nil {
-		return nil, fmt.Errorf("open tty: %w", err)
+		return nil, fmt.Errorf("%w: cannot open /dev/tty (%v); for non-interactive or piped use, supply the passphrase via --passphrase-env VAR", ErrNoTTY, err)
 	}
 	defer func() { _ = tty.Close() }() // ignore: best-effort tty close after read; does not affect returned passphrase or error
 

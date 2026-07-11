@@ -41,6 +41,10 @@ var (
 	// ErrEnvVarEmpty is returned by NewEnvSource when the named environment
 	// variable is unset or empty. This maps to exit code 2 (user error).
 	ErrEnvVarEmpty = errors.New("passphrase environment variable is unset or empty")
+
+	// ErrNoTTY is returned when an interactive passphrase prompt is needed but no
+	// controlling terminal is available (piped/non-interactive use). Exit code 2.
+	ErrNoTTY = errors.New("no controlling terminal for passphrase prompt")
 )
 
 // MaxKeystoreSize is the maximum number of bytes that will be read from a
