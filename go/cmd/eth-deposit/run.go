@@ -221,7 +221,7 @@ func buildFlags() []ucli.Flag {
 		},
 		&ucli.StringFlag{
 			Name:    "rpc-url",
-			Usage:   "JSON-RPC endpoint URL. When set, any gas/fee/nonce value not given explicitly is resolved from the node; --signer local derives the sender from its key, while --signer ledger requires --nonce. When omitted, all gas and nonce flags must be supplied explicitly.",
+			Usage:   "JSON-RPC endpoint URL. When set, any gas/fee/nonce value not given explicitly is resolved from the node; --signer local derives the sender from its key, while --signer ledger has no derivable sender and so must supply both --nonce and --gas-limit (the node cannot fetch either without a funded sender). When omitted, all gas and nonce flags must be supplied explicitly.",
 			Sources: ucli.EnvVars("ETH_DEPOSIT_TX_RPC_URL"),
 		},
 		&ucli.StringFlag{
