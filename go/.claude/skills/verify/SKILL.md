@@ -40,10 +40,19 @@ Verify on-chain: `cast tx --rpc-url http://127.0.0.1:8599 <hash>`; deposit contr
 
 Interactive send confirmation: pipe the network name (`echo hoodi | … send …` without `--yes`); wrong name → exit 4.
 
+## Hybrid (RPC) mode probes
+
+Since the findings-resolution release, `--rpc-url` on build/run is real:
+
+- `build --rpc-url <node> --from <addr>` with nonce/gas omitted resolves nonce (pending), maxFee (2·baseFee+tip), and gas (estimate·6/5) from the node — probe by `anvil_setNonce` to a nonzero value and asserting it appears in the output.
+- `build --rpc-url` without `--from` when `--nonce` or `--gas-limit` is omitted → exit 2 at config time.
+- `run --signer local --rpc-url` derives the sender from the key (no --from flag); `run --signer ledger --rpc-url` requires both `--nonce` and `--gas-limit` → exit 2 otherwise.
+- Dead RPC endpoint → exit 5; RPC chain-ID mismatch vs `--network` → exit 2; API keys in the RPC URL are redacted from stderr (grep for the key — must be absent).
+
 ## Gotchas
 
-- `gen` needs `--passphrase-env` in pipes — without it it prompts on /dev/tty and dies when no TTY.
-- `gen --dry-run` still requires a valid existing `--output-dir` even though it writes nothing.
-- `build --rpc-url` is inert (accepted-but-stored, USER-GUIDE §build); nonce defaults to 0 — pass `--nonce` explicitly for accounts with history.
-- Exit codes: 0 ok, 2 user error, 3 signer/crypto, 4 abort, 5 broadcast/RPC (send-side chain-ID mismatch is 5, not 3).
+- `gen` needs `--passphrase-env` in pipes — without it it prompts on /dev/tty and dies when no TTY (exit 2, message names the flag).
+- `gen --dry-run` does NOT require `--output-dir` (writes JSON to stdout).
+- Missing required flags exit 2 on all subcommands.
+- Exit codes: 0 ok, 2 user/config error (incl. build-side chain-ID mismatch), 3 signer/crypto (signer-side chain-ID mismatch), 4 abort (incl. SIGINT during RPC estimation), 5 broadcast/RPC (incl. broadcast-side chain-ID mismatch).
 - Ledger signer path needs hardware — not coverable here.
