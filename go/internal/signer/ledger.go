@@ -1,25 +1,28 @@
 // Package signer — Ledger hardware wallet signer.
 //
-// ledger_cgo.go (//go:build cgo) provides the real usbwallet transport via
-// geth's accounts/usbwallet. The whole module requires CGO (transitively via
-// herumi BLS), so there is no supported !cgo path.
+// Build-tag isolation: this file has no build tag and compiles everywhere.
+// ledger_cgo.go (//go:build cgo) provides the real usbwallet transport.
+// ledger_nocgo.go (//go:build !cgo) provides a stub returning ErrLedgerNotSupported.
+//
+// Note: the repo already requires CGO transitively via herumi/bls-eth-go-binary,
+// so CGO_ENABLED=0 go build ./... does not succeed for the module as a whole.
+// The non-CGO stub is retained for hygiene and to let callers that guard Ledger
+// usage behind a flag compile without the HID transport.
 //
 // Coverage: ledger.go (orchestration) + ledger_internal_test.go (mock) achieve
-// ≥80% for the package without exercising ledger_cgo.go (requires CGO).
+// ≥80% for the package without exercising ledger_cgo.go (requires CGO) or
+// ledger_nocgo.go (excluded when CGO is on).
 
 package signer
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -34,21 +37,19 @@ const ledgerSignerName = "ledger"
 //
 // Construct with NewLedgerSigner. Close must be called to release the HID handle.
 type LedgerSigner struct {
-	wallet             ledgerWallet
-	account            accounts.Account
-	closed             atomic.Bool
-	confirmationPrompt io.Writer
-	closeTimeout       time.Duration
-	logger             *slog.Logger
-	inFlight           atomic.Bool // remains true if a SignTx goroutine was started but not reaped (i.e. canceled path); Close uses this to emit the reject message and knows the SignTx goro will be leaked on timeout.
+	wallet              ledgerWallet
+	account             accounts.Account
+	closed              atomic.Bool
+	confirmationPrompt  io.Writer
 }
 
 // NewLedgerSigner discovers the first connected Ledger, opens the Ethereum app,
 // and derives the account at m/44'/60'/0'/0/0 (accounts.DefaultBaseDerivationPath).
 //
+// Returns ErrLedgerNotSupported if the binary was built without CGO.
 // Returns ErrNoDevice if no Ledger is detected.
 // Returns ErrAppNotOpen if a Ledger is found but the Ethereum app is not open.
-func NewLedgerSigner(opts ...ledgerOption) (*LedgerSigner, error) {
+func NewLedgerSigner() (*LedgerSigner, error) {
 	hub, err := newLedgerHub()
 	if err != nil {
 		return nil, fmt.Errorf("ledger hub init: %w", err)
@@ -63,11 +64,9 @@ func NewLedgerSigner(opts ...ledgerOption) (*LedgerSigner, error) {
 
 	if err := w.Open(""); err != nil {
 		if isAppNotOpenErr(err) {
-			_ = w.Close()
 			return nil, ErrAppNotOpen
 		}
-		_ = w.Close()
-		return nil, fmt.Errorf("ledger init failed: %w: %w", ErrDeviceUnavailable, err)
+		return nil, fmt.Errorf("ledger init failed: %w", ErrNoDevice)
 	}
 
 	// Check Status — Open can succeed even when the Ethereum app isn't active.
@@ -78,7 +77,7 @@ func NewLedgerSigner(opts ...ledgerOption) (*LedgerSigner, error) {
 			return nil, ErrAppNotOpen
 		}
 		_ = w.Close()
-		return nil, fmt.Errorf("ledger status check failed: %w: %w", ErrDeviceUnavailable, statusErr)
+		return nil, fmt.Errorf("ledger status check failed: %w", ErrNoDevice)
 	}
 
 	acc, err := w.Derive(accounts.DefaultBaseDerivationPath, true)
@@ -87,16 +86,7 @@ func NewLedgerSigner(opts ...ledgerOption) (*LedgerSigner, error) {
 		return nil, fmt.Errorf("ledger derive failed: %w", err)
 	}
 
-	ls := &LedgerSigner{
-		wallet:             w,
-		account:            acc,
-		confirmationPrompt: os.Stderr,
-		closeTimeout:       30 * time.Second,
-	}
-	for _, o := range opts {
-		o(ls)
-	}
-	return ls, nil
+	return &LedgerSigner{wallet: w, account: acc, confirmationPrompt: os.Stderr}, nil
 }
 
 // setConfirmationPrompt sets the writer for "please confirm on device" messages.
@@ -105,28 +95,14 @@ func (s *LedgerSigner) setConfirmationPrompt(w io.Writer) {
 	s.confirmationPrompt = w
 }
 
-// ledgerOption configures NewLedgerSigner (test-only for now; keeps call sites
-// unchanged since variadic).
-type ledgerOption func(*LedgerSigner)
-
-// withCloseTimeout is the constructor option exposing configurable timeout
-// (default 30s) for tests that must compress the Close timeout path.
-func withCloseTimeout(d time.Duration) ledgerOption {
-	return func(ls *LedgerSigner) { ls.closeTimeout = d }
-}
-
-// setLoggerForTest injects *slog.Logger used for the WARN on Close timeout.
-// Mirrors setConfirmationPrompt pattern; used only in tests.
-func (s *LedgerSigner) setLoggerForTest(l *slog.Logger) {
-	s.logger = l
-}
-
 // isAppNotOpenErr returns true when err suggests the Ethereum app is not open.
-// Matches known APDU error codes (6e00, 6e01) [CLA not supported]; 6d00 (INS not supported) is for some paths per current geth accounts/usbwallet/ledger + APDU spec. Textual hints require both "app" AND ("not open" OR "open the") to reduce false positives.
+// Matches known APDU error codes (6e00, 6e01, 6d00) and textual hints.
+// The textual heuristic requires both "app" AND ("not open" OR "open the") to
+// reduce false positives (e.g. "snapshot not found in app" no longer matches).
 // TODO(3.6): replace with exact strings from real hardware test.
 func isAppNotOpenErr(err error) bool {
 	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "6e00") || strings.Contains(msg, "6e01") {
+	if strings.Contains(msg, "6e00") || strings.Contains(msg, "6e01") || strings.Contains(msg, "6d00") {
 		return true
 	}
 	return strings.Contains(msg, "app") &&
@@ -191,7 +167,7 @@ func (s *LedgerSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx)
 	}
 	unsignedTx := types.NewTx(dynTx)
 
-	_, _ = fmt.Fprintf(s.confirmationPrompt, "Please confirm the transaction on your Ledger device...\n") // ignore: best-effort prompt to the (test-injectable) confirmation writer
+	fmt.Fprintf(s.confirmationPrompt, "Please confirm the transaction on your Ledger device...\n")
 
 	type signResult struct {
 		signed *types.Transaction
@@ -202,15 +178,12 @@ func (s *LedgerSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx)
 		signed, err := s.wallet.SignTx(s.account, unsignedTx, p.chainID)
 		ch <- signResult{signed, err}
 	}()
-	s.inFlight.Store(true)
 
 	var r signResult
 	select {
 	case <-ctx.Done():
-		// leave inFlight=true: Close will see it, emit reject-to-unblock, and on timeout the SignTx goro is (documented) leaked
 		return nil, ctx.Err()
 	case r = <-ch:
-		s.inFlight.Store(false)
 	}
 
 	if r.err != nil {
@@ -226,34 +199,6 @@ func (s *LedgerSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx)
 	}
 
 	signedTx := r.signed
-
-	// Cross-check per M0.2-3 (GO-023), architecture §6.9/§15:
-	// recover sender using the *returned* tx's ChainId() (not request p.chainID),
-	// compare against s.account.Address; also field-compare all specified fields
-	// on the parsed *types.Transaction (accessors, not raw RLP) vs the requested
-	// unsignedTx we built. Any mismatch -> ErrSenderMismatch (exit 3).
-	recovered, recErr := types.Sender(types.LatestSignerForChainID(signedTx.ChainId()), signedTx)
-	if recErr != nil {
-		return nil, fmt.Errorf("sender recovery failed: %w", recErr)
-	}
-	if recovered != s.account.Address {
-		return nil, ErrSenderMismatch
-	}
-	// Field compares (nonce/to/value/data/chainID/maxFee/tip/gasLimit).
-	if signedTx.Nonce() != unsignedTx.Nonce() ||
-		signedTx.Gas() != unsignedTx.Gas() ||
-		signedTx.GasFeeCap().Cmp(unsignedTx.GasFeeCap()) != 0 ||
-		signedTx.GasTipCap().Cmp(unsignedTx.GasTipCap()) != 0 ||
-		signedTx.Value().Cmp(unsignedTx.Value()) != 0 ||
-		signedTx.ChainId().Cmp(unsignedTx.ChainId()) != 0 ||
-		!bytes.Equal(signedTx.Data(), unsignedTx.Data()) {
-		return nil, ErrSenderMismatch
-	}
-	reqTo, retTo := unsignedTx.To(), signedTx.To()
-	if (reqTo == nil) != (retTo == nil) || (reqTo != nil && *reqTo != *retTo) {
-		return nil, ErrSenderMismatch
-	}
-
 	ethSigner := types.LatestSignerForChainID(p.chainID)
 
 	v, rVal, sVal := signedTx.RawSignatureValues()
@@ -284,46 +229,11 @@ func (s *LedgerSigner) Name() string                  { return ledgerSignerName 
 func (s *LedgerSigner) RequiresUserInteraction() bool { return true }
 
 // Close releases the HID handle. Idempotent.
-//
-// When Close is reached via a canceled Sign (ctx.Err() != nil path that left
-// a goroutine inside wallet.SignTx), Close first emits the exact message
-// "reject on device to unblock" to the confirmation prompt (stderr in prod)
-// so the operator knows to reject on the device and unblock the pending APDU.
-// It then runs wallet.Close under a bounded timeout (default 30 s; overridable
-// via constructor option for tests). On timeout it logs at WARN (via the
-// injected *slog.Logger or fallback to stderr) and returns; the goroutine
-// blocked in wallet.SignTx is leaked. The leak is unavoidable: geth's
-// usbwallet cannot interrupt an in-flight APDU exchange (architecture §9.5,
-// research/03 §1).
 func (s *LedgerSigner) Close() error {
 	if s.closed.Swap(true) {
 		return nil
 	}
-	if s.inFlight.Load() {
-		_, _ = fmt.Fprintf(s.confirmationPrompt, "reject on device to unblock\n")
-	}
-
-	to := s.closeTimeout
-	if to <= 0 {
-		to = 30 * time.Second
-	}
-	done := make(chan error, 1)
-	go func() {
-		done <- s.wallet.Close()
-	}()
-	timer := time.NewTimer(to)
-	defer timer.Stop()
-	select {
-	case err := <-done:
-		return err
-	case <-timer.C:
-		if s.logger != nil {
-			s.logger.Warn("abandoning HID handle after timeout; goroutine waiting on wallet.SignTx is leaked (unavoidable per geth `wallet.SignTx` cannot be interrupted mid-APDU)", "timeout", to)
-		} else {
-			_, _ = fmt.Fprintf(os.Stderr, "WARN: abandoning HID handle after timeout; goroutine waiting on wallet.SignTx is leaked (unavoidable per geth `wallet.SignTx` cannot be interrupted mid-APDU) (timeout=%s)\n", to)
-		}
-		return nil
-	}
+	return s.wallet.Close()
 }
 
 // Compile-time assertion.

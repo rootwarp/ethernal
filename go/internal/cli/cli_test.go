@@ -3,7 +3,6 @@ package cli_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,12 +23,6 @@ var (
 	validPubkey  string
 	validPubkey2 string
 )
-
-// validWithdrawal is a well-formed EIP-55 address (mixed-case checksummed form) used
-// in all test cases that exercise the new required --withdrawal-address flag (M0.4-1).
-// Both the checksummed and its all-lower form are accepted by the validator; this
-// value is the canonical checksummed form per go-ethereum common.Hex().
-const validWithdrawal = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
 
 func TestMain(m *testing.M) {
 	if err := blspkg.Init(); err != nil {
@@ -107,27 +100,27 @@ func TestMissingRequiredFlags(t *testing.T) {
 	}{
 		{
 			name:    "missing_keystore_dir",
-			args:    []string{"--pubkeys", "0x" + validPubkey, "--network", "hoodi", "--output-dir", dir, "--withdrawal-address", validWithdrawal},
+			args:    []string{"--pubkeys", "0x" + validPubkey, "--network", "hoodi", "--output-dir", dir},
 			wantErr: true,
 		},
 		{
 			name:    "missing_pubkeys",
-			args:    []string{"--keystore-dir", ksDir, "--network", "hoodi", "--output-dir", dir, "--withdrawal-address", validWithdrawal},
+			args:    []string{"--keystore-dir", ksDir, "--network", "hoodi", "--output-dir", dir},
 			wantErr: true,
 		},
 		{
 			name:    "missing_network",
-			args:    []string{"--keystore-dir", ksDir, "--pubkeys", "0x" + validPubkey, "--output-dir", dir, "--withdrawal-address", validWithdrawal},
+			args:    []string{"--keystore-dir", ksDir, "--pubkeys", "0x" + validPubkey, "--output-dir", dir},
 			wantErr: true,
 		},
 		{
 			name:    "missing_output_dir",
-			args:    []string{"--keystore-dir", ksDir, "--pubkeys", "0x" + validPubkey, "--network", "hoodi", "--withdrawal-address", validWithdrawal},
+			args:    []string{"--keystore-dir", ksDir, "--pubkeys", "0x" + validPubkey, "--network", "hoodi"},
 			wantErr: true,
 		},
 		{
 			name:    "all_required_flags_present",
-			args:    []string{"--keystore-dir", ksDir, "--pubkeys", "0x" + validPubkey, "--network", "hoodi", "--output-dir", dir, "--withdrawal-address", validWithdrawal},
+			args:    []string{"--keystore-dir", ksDir, "--pubkeys", "0x" + validPubkey, "--network", "hoodi", "--output-dir", dir},
 			wantErr: false,
 		},
 	}
@@ -169,7 +162,6 @@ func TestInvalidNetwork(t *testing.T) {
 				"--pubkeys", "0x" + validPubkey,
 				"--network", tc.network,
 				"--output-dir", dir,
-				"--withdrawal-address", validWithdrawal,
 			}
 			// Empty network will be a missing flag scenario; add it anyway
 			if tc.network == "" {
@@ -177,7 +169,6 @@ func TestInvalidNetwork(t *testing.T) {
 					"--keystore-dir", ksDir,
 					"--pubkeys", "0x" + validPubkey,
 					"--output-dir", dir,
-					"--withdrawal-address", validWithdrawal,
 				}
 			}
 			// Mainnet requires the ack flag; supply it so this test focuses on
@@ -246,7 +237,6 @@ func TestPubkeyHexLength(t *testing.T) {
 				"--pubkeys", tc.pubkeys,
 				"--network", "hoodi",
 				"--output-dir", dir,
-				"--withdrawal-address", validWithdrawal,
 			}
 			_, _, _, err := runApp(t, args)
 			if tc.wantErr && err == nil {
@@ -271,7 +261,6 @@ func TestPubkeyInvalidHexChars(t *testing.T) {
 		"--pubkeys", invalidHex,
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, _, _, err := runApp(t, args)
 	if err == nil {
@@ -291,7 +280,6 @@ func TestPubkeyMixedPrefix(t *testing.T) {
 		"--pubkeys", mixed,
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, _, _, err := runApp(t, args)
 	if err == nil {
@@ -308,7 +296,6 @@ func TestNonexistentOutputDir(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "hoodi",
 		"--output-dir", nonExistent,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, _, _, err := runApp(t, args)
 	if err == nil {
@@ -330,7 +317,7 @@ func TestReadOnlyOutputDir(t *testing.T) {
 	}
 	// Register cleanup to restore perms so t.TempDir() cleanup can remove it
 	t.Cleanup(func() {
-		_ = os.Chmod(roDir, 0o755) // ignore: test cleanup chmod; failure does not affect test validity
+		os.Chmod(roDir, 0o755) //nolint:errcheck
 	})
 	if err := os.Chmod(roDir, 0o555); err != nil {
 		t.Fatalf("Chmod: %v", err)
@@ -342,7 +329,6 @@ func TestReadOnlyOutputDir(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "hoodi",
 		"--output-dir", roDir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, _, _, err := runApp(t, args)
 	if err == nil {
@@ -359,7 +345,6 @@ func TestSinglePubkeyHappyPath(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	cfg, stderr, called, err := runApp(t, args)
 	if err != nil {
@@ -405,7 +390,6 @@ func TestMultiPubkeyHappyPath(t *testing.T) {
 		"--pubkeys", pubkeys,
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	cfg, stderr, called, err := runApp(t, args)
 	if err != nil {
@@ -442,7 +426,6 @@ func TestPassphraseEnvOptional(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		cfg, _, called, err := runApp(t, args)
 		if err != nil {
@@ -462,8 +445,6 @@ func TestPassphraseEnvOptional(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
-			"--withdrawal-address", validWithdrawal,
 			"--passphrase-env", "MY_PASSPHRASE",
 		}
 		cfg, _, called, err := runApp(t, args)
@@ -488,7 +469,6 @@ func TestBannerFormat(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey + ",0x" + validPubkey2,
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, stderr, _, err := runApp(t, args)
 	if err != nil {
@@ -512,7 +492,6 @@ func TestUnprefixedPubkeys(t *testing.T) {
 		"--pubkeys", validPubkey + "," + validPubkey2,
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	cfg, _, called, err := runApp(t, args)
 	if err != nil {
@@ -535,7 +514,6 @@ func TestNetworkParsedBeforeOtherWork(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "invalidnet",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, _, called, err := runApp(t, args)
 	if err == nil {
@@ -554,7 +532,7 @@ func TestOutputDirIsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
-	_ = f.Close() // ignore: close error on temp file used only for path in test setup
+	f.Close()
 	filePath := f.Name()
 
 	args := []string{
@@ -562,7 +540,6 @@ func TestOutputDirIsFile(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "hoodi",
 		"--output-dir", filePath,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, _, _, err = runApp(t, args)
 	if err == nil {
@@ -571,8 +548,7 @@ func TestOutputDirIsFile(t *testing.T) {
 }
 
 // TestErrorIsExitCoder verifies that validation errors returned by the app are
-// ucli.ExitCoder values with exit code 2 (user errors per PRD), matching the
-// urfave/cli ExitCoder + exitCodeFor contract.
+// ucli.ExitCoder values with exit code 1, matching the urfave/cli convention.
 func TestErrorIsExitCoder(t *testing.T) {
 	dir := t.TempDir()
 	ksDir := t.TempDir()
@@ -581,7 +557,6 @@ func TestErrorIsExitCoder(t *testing.T) {
 		"--pubkeys", "not-valid-hex!!!",
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 	}
 	_, _, _, err := runApp(t, args)
 	if err == nil {
@@ -607,7 +582,6 @@ func TestMainnetWithoutAck(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "mainnet",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 		// Intentionally omitting --i-understand-this-is-mainnet
 	}
 	_, stderr, called, err := runApp(t, args)
@@ -646,7 +620,6 @@ func TestMainnetWithExplicitFalseAck(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "mainnet",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 		"--i-understand-this-is-mainnet=false", // explicit negation — gate must still fire
 	}
 	_, stderr, called, err := runApp(t, args)
@@ -679,7 +652,6 @@ func TestMainnetAckRepeatedOverride(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "mainnet",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 		"--i-understand-this-is-mainnet",       // first: true
 		"--i-understand-this-is-mainnet=false", // second (last): false → gate fires
 	}
@@ -709,7 +681,6 @@ func TestMainnetWithAck(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "mainnet",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 		"--i-understand-this-is-mainnet",
 	}
 	cfg, stderr, called, err := runApp(t, args)
@@ -740,7 +711,6 @@ func TestHoodiWithAckFlag(t *testing.T) {
 		"--pubkeys", "0x" + validPubkey,
 		"--network", "hoodi",
 		"--output-dir", dir,
-		"--withdrawal-address", validWithdrawal,
 		"--i-understand-this-is-mainnet", // supplying the ack flag on hoodi is harmless
 	}
 	cfg, stderr, called, err := runApp(t, args)
@@ -772,7 +742,6 @@ func TestDryRunFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		cfg, _, called, err := runApp(t, args)
 		if err != nil {
@@ -792,8 +761,6 @@ func TestDryRunFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
-			"--withdrawal-address", validWithdrawal,
 			"--dry-run",
 		}
 		cfg, _, called, err := runApp(t, args)
@@ -821,7 +788,6 @@ func TestVerboseFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		cfg, _, called, err := runApp(t, args)
 		if err != nil {
@@ -841,7 +807,6 @@ func TestVerboseFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 			"--verbose",
 		}
 		cfg, _, called, err := runApp(t, args)
@@ -869,7 +834,6 @@ func TestJSONLogsFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		cfg, _, called, err := runApp(t, args)
 		if err != nil {
@@ -889,7 +853,6 @@ func TestJSONLogsFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 			"--json-logs",
 		}
 		cfg, _, called, err := runApp(t, args)
@@ -917,7 +880,6 @@ func TestParallelFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		cfg, _, called, err := runApp(t, args)
 		if err != nil {
@@ -937,8 +899,6 @@ func TestParallelFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
-			"--withdrawal-address", validWithdrawal,
 			"--parallel", "4",
 		}
 		cfg, _, called, err := runApp(t, args)
@@ -959,7 +919,6 @@ func TestParallelFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 			"--parallel", "0",
 		}
 		_, _, called, err := runApp(t, args)
@@ -984,7 +943,6 @@ func TestParallelFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 			"--parallel", "-1",
 		}
 		_, _, called, err := runApp(t, args)
@@ -1011,7 +969,6 @@ func TestParallelFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 			"--parallel", "99999",
 		}
 		_, _, called, err := runApp(t, args)
@@ -1036,7 +993,6 @@ func TestParallelFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 			"--parallel", "0",
 		}
 		_, _, _, err := runApp(t, args)
@@ -1060,7 +1016,6 @@ func TestVerifyWithDepositCLIFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		cfg, _, called, err := runApp(t, args)
 		if err != nil {
@@ -1080,7 +1035,6 @@ func TestVerifyWithDepositCLIFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 			"--verify-with-deposit-cli",
 		}
 		cfg, _, called, err := runApp(t, args)
@@ -1108,7 +1062,6 @@ func TestDepositCLIPathFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		cfg, _, called, err := runApp(t, args)
 		if err != nil {
@@ -1128,8 +1081,6 @@ func TestDepositCLIPathFlag(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
-			"--withdrawal-address", validWithdrawal,
 			"--deposit-cli-path", "/usr/local/bin/deposit",
 		}
 		cfg, _, called, err := runApp(t, args)
@@ -1147,6 +1098,8 @@ func TestDepositCLIPathFlag(t *testing.T) {
 
 // TestKeystoreDirValidation verifies that --keystore-dir must point to an existing,
 // readable directory, matching AC3 of Issue #25.
+// TestKeystoreDirValidation verifies that --keystore-dir must point to an existing,
+// readable directory, matching AC3 of Issue #25.
 func TestKeystoreDirValidation(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1157,7 +1110,6 @@ func TestKeystoreDirValidation(t *testing.T) {
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		_, _, _, err := runApp(t, args)
 		if err == nil {
@@ -1171,13 +1123,12 @@ func TestKeystoreDirValidation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateTemp: %v", err)
 		}
-		_ = f.Close() // ignore: close error on temp file used only for path in test setup
+		f.Close()
 		args := []string{
 			"--keystore-dir", f.Name(),
 			"--pubkeys", "0x" + validPubkey,
 			"--network", "hoodi",
 			"--output-dir", dir,
-			"--withdrawal-address", validWithdrawal,
 		}
 		_, _, _, err = runApp(t, args)
 		if err == nil {

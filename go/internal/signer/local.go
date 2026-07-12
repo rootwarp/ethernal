@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/rootwarp/eth-utils/go/internal/cli"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
@@ -26,8 +24,7 @@ const localSignerName = "local"
 // (Phase 3.3+). The key MUST come from a secure source (environment variable;
 // see NewLocalSignerFromEnv). It MUST NEVER appear in argv or shell history.
 type LocalSigner struct {
-	mu     sync.Mutex // guards key and closed together (M1.1-3 / GO-021 / arch §9.3); write path under mu establishes "key non-nil iff !closed" invariant (ctor: non-nil + !closed; Close: zero then nil key then closed)
-	key    []byte     // 32-byte secp256k1 scalar; zeroized on Close; niled under mu on transition to closed
+	key    []byte // 32-byte secp256k1 scalar; zeroized on Close
 	closed atomic.Bool
 }
 
@@ -47,57 +44,29 @@ func NewLocalSignerFromHex(hexKey string) (*LocalSigner, error) {
 	}
 	// Validate as secp256k1 scalar (rejects zero, values >= curve order, etc.).
 	if _, err := gethcrypto.ToECDSA(b); err != nil {
-		for i := range b {
-			b[i] = 0
-		}
 		return nil, fmt.Errorf("invalid secp256k1 private key: %w", ErrInvalidKey)
 	}
 	keyCopy := make([]byte, 32)
 	copy(keyCopy, b)
-	for i := range b {
-		b[i] = 0
-	}
 	return &LocalSigner{key: keyCopy}, nil
 }
 
 // NewLocalSignerFromEnv reads a hex-encoded private key from the named
-// environment variable and constructs a LocalSigner. The env var is unset
-// via os.Unsetenv(envVar) right before every return (defense-in-depth per
-// M1.1-5 / architecture §8.4 / FR-P1-B4 GO-017 secp side; callers need not
-// remember). Rejection paths also unset so an attacker cannot read post-hoc.
+// environment variable and constructs a LocalSigner. The variable is NOT
+// cleared by this constructor — callers should unsetenv it after construction.
 //
 // Only the variable NAME appears in errors; the value is never included.
-// On bad values the returned error chains the specific diagnostic from
-// NewLocalSignerFromHex (e.g. "expected 32-byte..." or "not valid hex") via %w;
-// errors.Is(err, ErrInvalidKey) and redaction of the *name* (for long envVar)
-// continue to hold. Missing/empty uses bare-sentinel wrapper intentionally
-// (AC specifies the BadValue wrapped path).
 func NewLocalSignerFromEnv(envVar string) (*LocalSigner, error) {
 	value := os.Getenv(envVar)
-	nameForErr := envVar
-	if len(envVar) > 32 {
-		nameForErr = cli.Redact(envVar, 4)
-	}
 	if value == "" {
-		_ = os.Unsetenv(envVar)
-		// Missing/empty intentionally bare ErrInvalidKey (AC names BadValue_WrappedSentinel for the specific case; see godoc).
-		return nil, fmt.Errorf("environment variable %q is not set or empty: %w", nameForErr, ErrInvalidKey)
+		return nil, fmt.Errorf("environment variable %q is not set or empty: %w", envVar, ErrInvalidKey)
 	}
 	s, err := NewLocalSignerFromHex(value)
 	if err != nil {
-		_ = os.Unsetenv(envVar)
-		// Bad value: wrap the specific FromHex diagnostic (M1.5-3/FR-P1-F3/GO-022) so "carries" for Is/As; still redacts value (M0.8-2), Is(ErrInvalidKey) holds.
-		return nil, fmt.Errorf("environment variable %q: %w", nameForErr, err)
+		return nil, fmt.Errorf("environment variable %q: %w", envVar, ErrInvalidKey)
 	}
-	_ = os.Unsetenv(envVar)
 	return s, nil
 }
-
-// testSignDecodeBuffer holds the header to the per-Sign decode buffer `b`
-// (after zeroing) for instrumentation in TestSign_ZeroizesIntermediates
-// (M1.1-5 AC; "instrumented in test build" per plan). Same-package access
-// from local_internal_test.go only.
-var testSignDecodeBuffer []byte
 
 // Sign produces a signed EIP-1559 transaction for the given unsigned tx.
 // ctx is honored for cancellation; local signing is fast but the check
@@ -129,28 +98,7 @@ func (s *LocalSigner) Sign(ctx context.Context, unsigned internaltx.UnsignedTx) 
 
 	ethSigner := types.LatestSignerForChainID(p.chainID)
 
-	// Guarded copy of key under mu; signing work (SignTx etc) off-lock per M1.1-3 / arch §9.3.
-	// Per-Sign zeroize of decode buffer `b` + intermediates (M1.1-5).
-	s.mu.Lock()
-	if s.closed.Load() {
-		s.mu.Unlock()
-		return nil, ErrSignerClosed
-	}
-	b := make([]byte, 32)
-	copy(b, s.key)
-	s.mu.Unlock()
-	testSignDecodeBuffer = b
-	defer func() {
-		for i := range b {
-			b[i] = 0
-		}
-	}()
-
-	// FR-P1-B4 (GO-017 secp side): *ecdsa.PrivateKey.D (*big.Int) words cannot
-	// be wiped via stdlib API (no Destroy/zeroize on big.Int limbs). We zero
-	// the input decode buffer `b` (and Sign-local values) after use/on errs
-	// via defer (honest framing per architecture §8.4 + M1.1-5 impl notes).
-	priv, err := gethcrypto.ToECDSA(b)
+	priv, err := gethcrypto.ToECDSA(s.key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse signing key: %w", ErrInvalidKey)
 	}
@@ -210,17 +158,12 @@ func (s *LocalSigner) RequiresUserInteraction() bool   { return false }
 // Close zeroizes the in-memory key bytes. Subsequent Sign calls return
 // ErrSignerClosed. Idempotent.
 func (s *LocalSigner) Close() error {
-	s.mu.Lock()
-	if s.closed.Load() {
-		s.mu.Unlock()
+	if s.closed.Swap(true) {
 		return nil
 	}
 	for i := range s.key {
 		s.key[i] = 0
 	}
-	s.key = nil
-	s.closed.Store(true)
-	s.mu.Unlock()
 	return nil
 }
 

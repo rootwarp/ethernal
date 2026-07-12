@@ -38,7 +38,6 @@ import (
 
 	ucli "github.com/urfave/cli/v3"
 
-	"github.com/rootwarp/eth-utils/go/internal/atomicio"
 	"github.com/rootwarp/eth-utils/go/internal/bls"
 	icli "github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/deposit"
@@ -129,7 +128,7 @@ func TestMainnetGoldenDeposit(t *testing.T) {
 	req := deposit.Request{
 		Network:               network.Mainnet,
 		Pubkeys:               pubkeys,
-		WithdrawalCredentials: deriveWC01(withdrawalAddressFromKeys(t)),
+		WithdrawalCredentials: goldenWithdrawalCredentials,
 		AmountGwei:            goldenAmountGwei,
 		DepositCLIVersion:     goldenCLIVersion,
 	}
@@ -228,7 +227,6 @@ func TestMainnetBanner(t *testing.T) {
 		"--i-understand-this-is-mainnet",
 		"--keystore-dir", mainnetTestdataDir + "/keystores",
 		"--pubkeys", pubkeyHex,
-		"--withdrawal-address", withdrawalAddressFromKeys(t),
 		"--output-dir", t.TempDir(),
 	}
 
@@ -310,7 +308,7 @@ func refreshMainnetGoldenFixtures(t *testing.T) error {
 	req := deposit.Request{
 		Network:               network.Mainnet,
 		Pubkeys:               [][48]byte{pub},
-		WithdrawalCredentials: deriveWC01(withdrawalAddressFromKeys(t)),
+		WithdrawalCredentials: goldenWithdrawalCredentials,
 		AmountGwei:            goldenAmountGwei,
 		DepositCLIVersion:     goldenCLIVersion,
 	}
@@ -342,12 +340,6 @@ func refreshMainnetGoldenFixtures(t *testing.T) error {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 		t.Logf("wrote %s (%d bytes)", path, len(data))
-	}
-
-	// Write one artifact using atomicio naming (M0.3) so fixture dir contains
-	// deposit_data-<RFC3339Nano>-<sha256[:4]>.json (M0.10-1 AC).
-	if _, _, err := atomicio.WriteFileWithSuffix(mainnetTestdataDir, "deposit_data", "json", depositBuf.Bytes(), 0o600, time.Now()); err != nil {
-		return fmt.Errorf("atomicio scheme demo write: %w", err)
 	}
 
 	return nil

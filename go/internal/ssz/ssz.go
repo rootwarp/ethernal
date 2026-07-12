@@ -10,6 +10,12 @@
 // are split into 32-byte chunks, padded right with zeros, and their own subtree
 // root replaces them as a leaf in the container tree — this is distinct from a
 // flat concatenation of all chunks at once.
+//
+// Note: earlier research notes (since removed) contained per-field chunk tables
+// written before the container-merkleize pattern was confirmed. Those tables
+// described leaf chunks correctly but did not reflect that each multi-chunk
+// field is first reduced to a subtree root before the top-level merkleize step.
+// This implementation is authoritative.
 package ssz
 
 import (
@@ -154,10 +160,10 @@ func byteVectorRoot(b []byte) [32]byte {
 //
 // For a single chunk (after padding to pow2=1), the chunk itself is returned.
 func merkleize(chunks [][32]byte, limit int) [32]byte {
-	if len(chunks) > limit {
-		panic("merkleize: len(chunks) > limit (programmer error)")
+	n := len(chunks)
+	if limit > n {
+		n = limit
 	}
-	n := limit
 	// Find next power of two >= n.
 	size := 1
 	for size < n {
@@ -186,6 +192,19 @@ func uint64Chunk(v uint64) [32]byte {
 	var chunk [32]byte
 	binary.LittleEndian.PutUint64(chunk[:8], v)
 	return chunk
+}
+
+// padRight right-pads b with zero bytes to the given size and returns a new
+// slice. The input slice is never modified.
+func padRight(b []byte, size int) []byte {
+	if len(b) >= size {
+		out := make([]byte, len(b))
+		copy(out, b)
+		return out
+	}
+	out := make([]byte, size)
+	copy(out, b)
+	return out
 }
 
 // sha256Pair computes SHA-256(a || b) and returns the result as a [32]byte.

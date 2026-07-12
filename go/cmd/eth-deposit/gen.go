@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -15,7 +17,12 @@ import (
 	ucli "github.com/urfave/cli/v3"
 	"golang.org/x/term"
 
+	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/cli"
+	"github.com/rootwarp/eth-utils/go/internal/deposit"
+	"github.com/rootwarp/eth-utils/go/internal/keystore"
+	"github.com/rootwarp/eth-utils/go/internal/network"
+	"github.com/rootwarp/eth-utils/go/internal/output"
 )
 
 // CLIVersion mirrors the staking-deposit-cli release used to derive the golden

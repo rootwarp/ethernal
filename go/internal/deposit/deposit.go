@@ -41,7 +41,7 @@ type Request struct {
 	// uniformly to every entry in this request.
 	WithdrawalCredentials [32]byte
 
-	// AmountGwei is the deposit amount in Gwei (default: MinDepositAmountGwei).
+	// AmountGwei is the deposit amount in Gwei (default: 32_000_000_000).
 	AmountGwei uint64
 
 	// DepositCLIVersion is the version string written into the output JSON,
@@ -70,18 +70,18 @@ type Entry struct {
 type Generator struct {
 	signer   bls.Signer
 	verifier bls.Verifier
-	domain   [32]byte       // precomputed: ComputeDomain(DomainDeposit(), forkVersion, ZeroGenesisValidatorsRoot())
+	domain   [32]byte       // precomputed: ComputeDomain(DomainDeposit, forkVersion, ZeroGVR)
 	params   network.Params // stored for ForkVersion and NetworkName in entries
 }
 
 // NewGenerator constructs a Generator that signs with s, verifies with v, and
 // uses the network parameters in params. The deposit domain is computed once
-// here using network.DomainDeposit() and network.ZeroGenesisValidatorsRoot().
+// here using network.DomainDeposit and network.ZeroGenesisValidatorsRoot.
 func NewGenerator(s bls.Signer, v bls.Verifier, params network.Params) *Generator {
 	domain := ssz.ComputeDomain(
-		network.DomainDeposit(),
+		network.DomainDeposit,
 		params.GenesisForkVersion,
-		network.ZeroGenesisValidatorsRoot(),
+		network.ZeroGenesisValidatorsRoot,
 	)
 	return &Generator{
 		signer:   s,
@@ -108,13 +108,13 @@ func (g *Generator) Generate(ctx context.Context, req Request) ([]Entry, error) 
 	for i, pk := range req.Pubkeys {
 		// Step 0: honour context cancellation before each unit of work.
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("generate deposit: %w", err)
+			return nil, err
 		}
 
 		// Step 1: assert that the signer's pubkey matches the requested pubkey.
 		signerPub, err := g.signer.PublicKey()
 		if err != nil {
-			return nil, fmt.Errorf("generate deposit: %w", err)
+			return nil, err
 		}
 		if signerPub != pk {
 			return nil, fmt.Errorf("%w: pubkey[%d]=0x%x", ErrPubkeyMismatch, i, pk[:])
@@ -134,13 +134,13 @@ func (g *Generator) Generate(ctx context.Context, req Request) ([]Entry, error) 
 		// Step 5: sign.
 		sig, err := g.signer.Sign(signingRoot)
 		if err != nil {
-			return nil, fmt.Errorf("generate deposit: %w", err)
+			return nil, err
 		}
 
 		// Step 6: self-verify.
 		ok, err := g.verifier.Verify(pk, signingRoot, sig)
 		if err != nil {
-			return nil, fmt.Errorf("generate deposit: %w", err)
+			return nil, err
 		}
 		if !ok {
 			return nil, fmt.Errorf("%w: pubkey[%d]=0x%x", ErrSelfVerifyFailed, i, pk[:])

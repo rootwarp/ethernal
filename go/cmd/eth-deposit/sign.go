@@ -7,15 +7,19 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 
 	ucli "github.com/urfave/cli/v3"
 
-	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
 const defaultPrivKeyEnvVar = "ETH_DEPOSIT_TX_PRIVATE_KEY"
+
+// posixEnvVarName matches valid POSIX env var names: uppercase letters, digits,
+// underscore; must start with letter or underscore.
+var posixEnvVarName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // SignConfig holds parsed, validated inputs for the sign subcommand.
 type SignConfig struct {
@@ -27,61 +31,33 @@ type SignConfig struct {
 	OutputFile string
 	// PrivateKeyEnvVar is the env var name holding the hex private key (local signer only).
 	PrivateKeyEnvVar string
-	// AllowNonDepositRecipient when true causes parseUnsignedTx to skip the
-	// deposit-contract address cross-check for the ChainID (the 42-char
-	// IsHexAddress check is never skipped). Default false (strict).
-	AllowNonDepositRecipient bool
-
-	// ConfirmNetwork is the --confirm-network value (for symmetry / pre-val).
-	// (Sign has no broadcast so no 3-way compare; mainnet gate on run/send/build.)
-	ConfirmNetwork string
-
-	// IAcceptLocalSignerOnMainnet is the --i-accept-local-signer-on-mainnet flag (M1.6-2 local-signer gate).
-	// Enforced in signAction (after unsigned read, using its ChainID for net) when Signer=="local".
-	IAcceptLocalSignerOnMainnet bool
 }
 
 // LoadSignConfig parses and validates sign subcommand flags.
 func LoadSignConfig(c *ucli.Command) (*SignConfig, error) {
 	signerType := c.String("signer")
-	if signerType == "" {
-		return nil, ucli.Exit("--signer: required flag not set", 2)
-	}
-	// Common signer+env validation (post-req) extracted to shared helper (M2.2-4).
-	envVar, err := validateSignerEnv(c, signerType)
-	if err != nil {
-		return nil, err
+	if signerType != "local" && signerType != "ledger" {
+		return nil, ucli.Exit(fmt.Sprintf("--signer: unsupported value %q: must be \"local\" or \"ledger\"", signerType), 2)
 	}
 
-	// Pre-validate required --input (pre-existing; kept for symmetry with signer block + other Loads).
 	inputFile := c.String("input")
 	if inputFile == "" {
 		return nil, ucli.Exit("--input: required flag not set", 2)
 	}
 
-	// Consolidated pre-val for the two mainnet gates (M1.6-3): syntax check for --confirm-network
-	// (if set) + capture for --i-accept-local-signer-on-mainnet. Early (right after requireds,
-	// before env regex / other processing) per exact M1.5-1 pre-val pattern. Require for
-	// local+mainnet stays in signAction (net derived from unsigned tx per M1.6-3 note); ledger exempt.
-	// Consistent error msgs with the other three loaders.
-	confirmNet := c.String("confirm-network")
-	if confirmNet != "" {
-		if _, err := network.ParseFlag(confirmNet); err != nil {
-			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
-		}
+	envVar := c.String("private-key-env")
+	if !posixEnvVarName.MatchString(envVar) {
+		return nil, ucli.Exit(fmt.Sprintf(
+			"--private-key-env: %q is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?",
+			envVar,
+		), 2)
 	}
-	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-
-	allowNonDeposit := c.Bool("allow-non-deposit-recipient")
 
 	return &SignConfig{
-		Signer:                      signerType,
-		InputFile:                   inputFile,
-		OutputFile:                  c.String("output"),
-		PrivateKeyEnvVar:            envVar,
-		AllowNonDepositRecipient:    allowNonDeposit,
-		ConfirmNetwork:              confirmNet,
-		IAcceptLocalSignerOnMainnet: acceptLocal,
+		Signer:           signerType,
+		InputFile:        inputFile,
+		OutputFile:       c.String("output"),
+		PrivateKeyEnvVar: envVar,
 	}, nil
 }
 
@@ -123,8 +99,9 @@ Exit codes:
 		UsageText: `eth-deposit sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]`,
 		Flags: []ucli.Flag{
 			&ucli.StringFlag{
-				Name:  "signer",
-				Usage: "Signing method: \"local\" (env-var private key) or \"ledger\" (hardware wallet)",
+				Name:     "signer",
+				Usage:    "Signing method: \"local\" (env-var private key) or \"ledger\" (hardware wallet)",
+				Required: true,
 			},
 			&ucli.StringFlag{
 				Name:    "input",
@@ -137,21 +114,9 @@ Exit codes:
 				Usage:   "Output file for the signed transaction (default: stdout)",
 			},
 			&ucli.StringFlag{
-				Name:  "confirm-network",
-				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match the network name; --yes does not bypass)",
-			},
-			&ucli.BoolFlag{
-				Name:  "i-accept-local-signer-on-mainnet",
-				Usage: "Required when --signer local and --network mainnet: acknowledges risk of using local (hot, env-var) private key for mainnet deposit (irreversible 32 ETH lock; Ledger recommended)",
-			},
-			&ucli.StringFlag{
 				Name:  "private-key-env",
 				Usage: fmt.Sprintf("Environment variable name holding the hex private key (local signer only; default: %s)", defaultPrivKeyEnvVar),
 				Value: defaultPrivKeyEnvVar,
-			},
-			&ucli.BoolFlag{
-				Name:  "allow-non-deposit-recipient",
-				Usage: "Allow signing when the 'to' address is not the deposit contract for ChainID (the strict 42-char hex check still applies; advanced, use with caution)",
 			},
 		},
 		Action: func(ctx context.Context, c *ucli.Command) error {
@@ -184,24 +149,6 @@ func signAction(ctx context.Context, c *ucli.Command, cfg *SignConfig) error {
 		return ucli.Exit(fmt.Sprintf("invalid input JSON: %v", err), 2)
 	}
 
-	// M1.6-2: local-signer mainnet gate check here (sign has no --network; derive from unsigned.ChainID).
-	// Enforce before sign summary / RequiresUserInteraction / actual s.Sign (before "proceeding").
-	// Ledger mainnet does not require the flag.
-	if cfg.Signer == "local" {
-		if p, lookupErr := network.LookupByChainID(unsigned.ChainID); lookupErr == nil && p.Name == network.Mainnet {
-			if !cfg.IAcceptLocalSignerOnMainnet {
-				return ucli.Exit("--i-accept-local-signer-on-mainnet: required when --signer local and --network mainnet", 2)
-			}
-			if c.App.ErrWriter != nil {
-				_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: --signer local combined with --network mainnet\n")
-				_, _ = fmt.Fprintf(c.App.ErrWriter, "The local signer reads your private key from an environment variable.\n")
-				_, _ = fmt.Fprintf(c.App.ErrWriter, "This key is visible to other processes, shell history, and core dumps.\n")
-				_, _ = fmt.Fprintf(c.App.ErrWriter, "A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.\n")
-				_, _ = fmt.Fprintf(c.App.ErrWriter, "If you accept the risk, the flag was already supplied; proceeding.\n")
-			}
-		}
-	}
-
 	// 3. Sign.
 	signed, err := signUnsignedTx(ctx, cfg, c.Root().ErrWriter, unsigned)
 	if err != nil {
@@ -232,9 +179,6 @@ func signAction(ctx context.Context, c *ucli.Command, cfg *SignConfig) error {
 // errWriter is used for interactive device prompts (may be nil for tests that suppress output).
 // It is extracted so runAction can call it without serializing to disk between build and sign.
 func signUnsignedTx(ctx context.Context, cfg *SignConfig, errWriter io.Writer, unsigned internaltx.UnsignedTx) (*signer.SignedTx, error) {
-	if cfg == nil {
-		return nil, ErrInvalidInput
-	}
 	// 1. Construct signer.
 	var s signer.Signer
 	var err error
@@ -249,35 +193,15 @@ func signUnsignedTx(ctx context.Context, cfg *SignConfig, errWriter io.Writer, u
 		if err != nil {
 			return nil, fmt.Errorf("ledger signer: %w", err)
 		}
-	default:
-		return nil, fmt.Errorf("signer: unsupported value %q: must be \"local\" or \"ledger\": %w", cfg.Signer, ErrInvalidInput)
 	}
 	defer func() { _ = s.Close() }()
 
-	// Carry the --allow-non-deposit-recipient decision (from cfg) into the
-	// UnsignedTx so that parseUnsignedTx (called inside s.Sign) can see it.
-	// The field is never persisted in JSON (json:"-").
-	if cfg != nil && cfg.AllowNonDepositRecipient {
-		unsigned.AllowNonDepositRecipient = true
-	}
-
-	// 2. Print 4-line signing summary to stderr before s.Sign (M0.6-3).
-	// Operator sees chainID/to/value/nonce (from unsigned; validated inside Sign).
-	// Appears on stderr before each on-device confirm for ledger (and the
-	// "Waiting..." / "Please confirm..." prompts). Uses errWriter for test capture.
-	if errWriter != nil {
-		_, _ = fmt.Fprintf(errWriter, "chainID: %d\n", unsigned.ChainID)
-		_, _ = fmt.Fprintf(errWriter, "to: %s\n", unsigned.To)
-		_, _ = fmt.Fprintf(errWriter, "value: %s\n", unsigned.Value)
-		_, _ = fmt.Fprintf(errWriter, "nonce: %d\n", unsigned.Nonce)
-	}
-
-	// 3. Prompt if device interaction is needed.
+	// 2. Prompt if device interaction is needed.
 	if s.RequiresUserInteraction() && errWriter != nil {
-		_, _ = fmt.Fprintf(errWriter, "Waiting for confirmation on Ledger device...\n") // ignore: best-effort prompt to errWriter
+		fmt.Fprintf(errWriter, "Waiting for confirmation on Ledger device...\n")
 	}
 
-	// 4. Sign.
+	// 3. Sign.
 	signed, err := s.Sign(ctx, unsigned)
 	if err != nil {
 		return nil, fmt.Errorf("sign (%s): %w", cfg.Signer, err)

@@ -25,6 +25,7 @@ type ledgerWallet interface {
 	SignTx(account accounts.Account, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 }
 
-// newLedgerHub is set by init() in ledger_cgo.go (CGO builds).
-// Tests may overwrite it before calling NewLedgerSigner.
+// newLedgerHub is set by init() in ledger_cgo.go (CGO builds) or
+// ledger_nocgo.go (non-CGO builds). Tests may overwrite it before calling
+// NewLedgerSigner.
 var newLedgerHub func() (ledgerHub, error)

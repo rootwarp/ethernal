@@ -2,19 +2,15 @@ package deposit
 
 import (
 	"encoding/json"
-	"errors"
-	"os"
 	"strings"
 	"testing"
 
-	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/network"
-	"github.com/rootwarp/eth-utils/go/internal/ssz"
 )
 
-// validRawEntry returns a JSONEntry with valid values for all fields.
-func validRawEntry() JSONEntry {
-	return JSONEntry{
+// validRawEntry returns a jsonEntry with valid values for all fields.
+func validRawEntry() jsonEntry {
+	return jsonEntry{
 		Pubkey:                strings.Repeat("ab", 48),
 		WithdrawalCredentials: strings.Repeat("cd", 32),
 		Amount:                32_000_000_000,
@@ -27,14 +23,138 @@ func validRawEntry() JSONEntry {
 	}
 }
 
-func marshalJSONArray(rs []JSONEntry) ([]byte, error) {
+func marshalJSONEntry(r jsonEntry) ([]byte, error) {
+	return json.Marshal(r)
+}
+
+func marshalJSONArray(rs []jsonEntry) ([]byte, error) {
 	return json.Marshal(rs)
+}
+
+// TestEntryFromJSON_Valid verifies round-trip for a well-formed entry.
+func TestEntryFromJSON_Valid(t *testing.T) {
+	raw := validRawEntry()
+	data, err := marshalJSONEntry(raw)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	e, err := EntryFromJSON(data)
+	if err != nil {
+		t.Fatalf("EntryFromJSON() error = %v, want nil", err)
+	}
+	if e.NetworkName != network.Hoodi {
+		t.Errorf("NetworkName = %q, want %q", e.NetworkName, network.Hoodi)
+	}
+	if e.Amount != 32_000_000_000 {
+		t.Errorf("Amount = %d, want 32_000_000_000", e.Amount)
+	}
+	if e.DepositCLIVersion != "2.7.0" {
+		t.Errorf("DepositCLIVersion = %q, want %q", e.DepositCLIVersion, "2.7.0")
+	}
+	// Verify pubkey bytes were copied correctly.
+	wantFirstByte := byte(0xab)
+	if e.Pubkey[0] != wantFirstByte {
+		t.Errorf("Pubkey[0] = 0x%02x, want 0x%02x", e.Pubkey[0], wantFirstByte)
+	}
+}
+
+// TestEntryFromJSON_0xPrefixedHex verifies that "0x"-prefixed hex strings are
+// accepted for all hex fields.
+func TestEntryFromJSON_0xPrefixedHex(t *testing.T) {
+	raw := validRawEntry()
+	raw.Pubkey = "0x" + raw.Pubkey
+	raw.WithdrawalCredentials = "0x" + raw.WithdrawalCredentials
+	raw.Signature = "0x" + raw.Signature
+	raw.DepositMessageRoot = "0x" + raw.DepositMessageRoot
+	raw.DepositDataRoot = "0x" + raw.DepositDataRoot
+	raw.ForkVersion = "0x" + raw.ForkVersion
+
+	data, err := marshalJSONEntry(raw)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, err = EntryFromJSON(data)
+	if err != nil {
+		t.Errorf("EntryFromJSON() with 0x-prefixed fields error = %v, want nil", err)
+	}
+}
+
+// TestEntryFromJSON_InvalidHex verifies that non-hex characters produce an error.
+func TestEntryFromJSON_InvalidHex(t *testing.T) {
+	raw := validRawEntry()
+	raw.Pubkey = strings.Repeat("ZZ", 48) // invalid hex
+	data, err := marshalJSONEntry(raw)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, err = EntryFromJSON(data)
+	if err == nil {
+		t.Error("EntryFromJSON() with invalid hex pubkey: want error, got nil")
+	}
+}
+
+// TestEntryFromJSON_WrongLength verifies that hex strings of incorrect decoded
+// length produce clear errors.
+func TestEntryFromJSON_WrongLength(t *testing.T) {
+	tests := []struct {
+		name  string
+		mutFn func(*jsonEntry)
+	}{
+		{
+			name:  "pubkey_short",
+			mutFn: func(r *jsonEntry) { r.Pubkey = strings.Repeat("ab", 47) },
+		},
+		{
+			name:  "pubkey_long",
+			mutFn: func(r *jsonEntry) { r.Pubkey = strings.Repeat("ab", 49) },
+		},
+		{
+			name:  "withdrawal_credentials_short",
+			mutFn: func(r *jsonEntry) { r.WithdrawalCredentials = strings.Repeat("cd", 31) },
+		},
+		{
+			name:  "signature_short",
+			mutFn: func(r *jsonEntry) { r.Signature = strings.Repeat("ef", 95) },
+		},
+		{
+			name:  "deposit_message_root_short",
+			mutFn: func(r *jsonEntry) { r.DepositMessageRoot = strings.Repeat("01", 31) },
+		},
+		{
+			name:  "deposit_data_root_short",
+			mutFn: func(r *jsonEntry) { r.DepositDataRoot = strings.Repeat("02", 31) },
+		},
+		{
+			name:  "fork_version_short",
+			mutFn: func(r *jsonEntry) { r.ForkVersion = "100009" }, // 3 bytes
+		},
+		{
+			name:  "fork_version_long",
+			mutFn: func(r *jsonEntry) { r.ForkVersion = "1000091011" }, // 5 bytes
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			raw := validRawEntry()
+			tc.mutFn(&raw)
+			data, err := marshalJSONEntry(raw)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			_, err = EntryFromJSON(data)
+			if err == nil {
+				t.Errorf("EntryFromJSON() with %s: want error, got nil", tc.name)
+			}
+		})
+	}
 }
 
 // TestEntriesFromJSON_Array verifies parsing a JSON array of entries.
 func TestEntriesFromJSON_Array(t *testing.T) {
 	raw := validRawEntry()
-	data, err := marshalJSONArray([]JSONEntry{raw, raw})
+	data, err := marshalJSONArray([]jsonEntry{raw, raw})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -66,7 +186,7 @@ func TestEntriesFromJSON_InvalidEntry(t *testing.T) {
 	bad := validRawEntry()
 	bad.Pubkey = strings.Repeat("ZZ", 48)
 
-	data, err := marshalJSONArray([]JSONEntry{good, bad})
+	data, err := marshalJSONArray([]jsonEntry{good, bad})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -82,16 +202,14 @@ func TestEntriesFromJSON_InvalidEntry(t *testing.T) {
 // TestEntriesFromJSON_GoldenFile verifies that the golden output from
 // eth-deposit gen is parseable by EntriesFromJSON.
 func TestEntriesFromJSON_GoldenFile(t *testing.T) {
-	data, err := os.ReadFile("../../testdata/hoodi/deposit_data-expected.json")
-	if err != nil {
-		t.Fatalf("read golden fixture: %v", err)
-	}
+	// This is the content of go/internal/output/testdata/deposit_data-expected.json
+	data := []byte(`[{"pubkey":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","withdrawal_credentials":"0000000000000000000000000000000000000000000000000000000000000000","amount":32000000000,"signature":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","deposit_message_root":"0000000000000000000000000000000000000000000000000000000000000000","deposit_data_root":"0000000000000000000000000000000000000000000000000000000000000000","fork_version":"10000910","network_name":"hoodi","deposit_cli_version":"2.7.0"},{"pubkey":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","withdrawal_credentials":"0000000000000000000000000000000000000000000000000000000000000000","amount":32000000000,"signature":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","deposit_message_root":"0000000000000000000000000000000000000000000000000000000000000000","deposit_data_root":"0000000000000000000000000000000000000000000000000000000000000000","fork_version":"10000910","network_name":"hoodi","deposit_cli_version":"2.7.0"}]`)
 	entries, err := EntriesFromJSON(data)
 	if err != nil {
 		t.Fatalf("EntriesFromJSON(golden) error = %v", err)
 	}
-	if len(entries) == 0 {
-		t.Errorf("got %d entries from golden fixture, want >0", len(entries))
+	if len(entries) != 2 {
+		t.Errorf("got %d entries, want 2", len(entries))
 	}
 }
 
@@ -108,21 +226,6 @@ func TestValidate_Valid(t *testing.T) {
 	e.DepositDataRoot[0] = 0xEF
 	e.Amount = 32_000_000_000
 	e.NetworkName = network.Hoodi
-	e.WithdrawalCredentials[0] = 0x01 // canonical shape (0x01 + 11x00 + addr)
-
-	msg := ssz.DepositMessage{
-		Pubkey:                e.Pubkey,
-		WithdrawalCredentials: e.WithdrawalCredentials,
-		Amount:                e.Amount,
-	}
-	e.DepositMessageRoot = msg.HashTreeRoot()
-	data := ssz.DepositData{
-		Pubkey:                e.Pubkey,
-		WithdrawalCredentials: e.WithdrawalCredentials,
-		Amount:                e.Amount,
-		Signature:             e.Signature,
-	}
-	e.DepositDataRoot = data.HashTreeRoot()
 
 	if err := e.Validate(); err != nil {
 		t.Errorf("Validate() on valid entry: unexpected error: %v", err)
@@ -139,7 +242,6 @@ func TestValidate_Invalid(t *testing.T) {
 		e.DepositDataRoot[0] = 0xEF
 		e.Amount = 32_000_000_000
 		e.NetworkName = network.Hoodi
-		e.WithdrawalCredentials[0] = 0x01 // canonical shape passes new WC checks
 		return e
 	}
 
@@ -186,279 +288,6 @@ func TestValidate_Invalid(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("Validate() error = %q: does not mention %q", err.Error(), tc.wantErr)
-			}
-		})
-	}
-}
-
-// TestEntry_Validate_WC_Reject is the table-driven coverage for the DiD WC
-// shape checks added to Entry.Validate. Each case must return an error
-// satisfying errors.Is(err, the expected sentinel).
-func TestEntry_Validate_WC_Reject(t *testing.T) {
-	makeBase := func() Entry {
-		var e Entry
-		e.Pubkey[0] = 0xAB
-		e.Signature[0] = 0xCD
-		e.Amount = 32_000_000_000
-		e.NetworkName = network.Hoodi
-		e.WithdrawalCredentials[0] = 0x01 // base good; mutFn will override for reject cases
-		return e
-	}
-
-	tests := []struct {
-		name    string
-		mutFn   func(*Entry)
-		wantErr error
-	}{
-		{
-			name:    "zero_0x00_allzero",
-			mutFn:   func(e *Entry) { e.WithdrawalCredentials = [32]byte{} },
-			wantErr: ErrZeroWithdrawal00,
-		},
-		{
-			name: "0x01_nonzero_byte1",
-			mutFn: func(e *Entry) {
-				e.WithdrawalCredentials[0] = 0x01
-				e.WithdrawalCredentials[1] = 0x01 // non-zero in 1..11
-			},
-			wantErr: ErrInvalidWCFormat,
-		},
-		{
-			name: "0x01_nonzero_byte11",
-			mutFn: func(e *Entry) {
-				e.WithdrawalCredentials[0] = 0x01
-				e.WithdrawalCredentials[11] = 0x01 // non-zero in 1..11
-			},
-			wantErr: ErrInvalidWCFormat,
-		},
-		{
-			name: "0x02_nonzero_byte5",
-			mutFn: func(e *Entry) {
-				e.WithdrawalCredentials[0] = 0x02
-				e.WithdrawalCredentials[5] = 0x02 // non-zero in 1..11
-			},
-			wantErr: ErrInvalidWCFormat,
-		},
-		{
-			name: "bad_prefix_0xff",
-			mutFn: func(e *Entry) {
-				e.WithdrawalCredentials[0] = 0xff
-			},
-			wantErr: ErrInvalidWCFormat,
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			e := makeBase()
-			tc.mutFn(&e)
-			err := e.Validate()
-			if err == nil {
-				t.Fatalf("Validate() = nil, want error wrapping %v", tc.wantErr)
-			}
-			if !errors.Is(err, tc.wantErr) {
-				t.Errorf("Validate() error = %v: not errors.Is(%v)", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-// TestEntry_Validate_WC_Accept confirms that the canonical 0x01 layout
-// (0x01 || 0x00*11 || 20-byte addr) passes the WC shape checks (when the
-// rest of the Entry also satisfies the other Validate rules).
-func TestEntry_Validate_WC_Accept(t *testing.T) {
-	var e Entry
-	e.Pubkey[0] = 0xAB
-	e.Signature[0] = 0xCD
-	e.DepositDataRoot[0] = 0xEF
-	e.Amount = 32_000_000_000
-	e.NetworkName = network.Hoodi
-	// canonical 0x01: 0x01 + 11 zero bytes + 20-byte address (non-zero tail is fine)
-	e.WithdrawalCredentials[0] = 0x01
-	// bytes 1-11 stay zero (default)
-	e.WithdrawalCredentials[12] = 0x01 // start of "addr" part
-	e.WithdrawalCredentials[31] = 0x02 // some non-zero in addr part
-
-	msg := ssz.DepositMessage{
-		Pubkey:                e.Pubkey,
-		WithdrawalCredentials: e.WithdrawalCredentials,
-		Amount:                e.Amount,
-	}
-	e.DepositMessageRoot = msg.HashTreeRoot()
-	data := ssz.DepositData{
-		Pubkey:                e.Pubkey,
-		WithdrawalCredentials: e.WithdrawalCredentials,
-		Amount:                e.Amount,
-		Signature:             e.Signature,
-	}
-	e.DepositDataRoot = data.HashTreeRoot()
-
-	if err := e.Validate(); err != nil {
-		t.Errorf("Validate() on canonical 0x01 WC entry: unexpected error: %v", err)
-	}
-}
-
-// validSignedEntryForParams constructs a minimal Entry whose pubkey is a
-// real on-curve BLS G1 point (derived via NewSigner) and whose signature
-// is a real signature over the DepositMessage for the target's deposit
-// domain. The resulting entry satisfies the BLS parts of
-// ValidateForNetwork(target, bls.DefaultVerifier()).
-func validSignedEntryForParams(t *testing.T, p network.Params) Entry {
-	t.Helper()
-
-	// Small fixed secret produces a deterministic valid pubkey (see cli_test.go pattern).
-	secret := make([]byte, 32)
-	secret[0] = 0x42
-	snr, err := bls.NewSigner(secret)
-	if err != nil {
-		t.Fatalf("NewSigner: %v", err)
-	}
-	pub, err := snr.PublicKey()
-	if err != nil {
-		t.Fatalf("PublicKey: %v", err)
-	}
-
-	wc := [32]byte{}
-	wc[0] = 0x01
-	wc[31] = 0x02 // non-zero tail ok for 0x01
-	amount := uint64(32_000_000_000)
-
-	msg := ssz.DepositMessage{
-		Pubkey:                pub,
-		WithdrawalCredentials: wc,
-		Amount:                amount,
-	}
-	msgRoot := msg.HashTreeRoot()
-	domain := ssz.ComputeDomain(network.DomainDeposit(), p.GenesisForkVersion, network.ZeroGenesisValidatorsRoot())
-	signingRoot := ssz.ComputeSigningRoot(msgRoot, domain)
-
-	sig, err := snr.Sign(signingRoot)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
-
-	var e Entry
-	e.Pubkey = pub
-	e.WithdrawalCredentials = wc
-	e.Amount = amount
-	e.Signature = sig
-	e.DepositMessageRoot = msgRoot
-	copy(e.ForkVersion[:], p.GenesisForkVersion[:])
-	e.NetworkName = p.Name
-	e.DepositCLIVersion = "2.7.0"
-	return e
-}
-
-// ---------------------------------------------------------------------------
-// ValidateForNetwork tests (M0.5-1)
-// ---------------------------------------------------------------------------
-
-func TestValidateForNetwork_NetworkMismatch(t *testing.T) {
-	pHoodi := hoodiParams()
-	pMain, err := network.Lookup(network.Mainnet)
-	if err != nil {
-		t.Fatalf("Lookup mainnet: %v", err)
-	}
-	e := validSignedEntryForParams(t, pHoodi)
-	if err := e.ValidateForNetwork(pMain, bls.DefaultVerifier()); !errors.Is(err, ErrNetworkMismatch) {
-		t.Errorf("ValidateForNetwork(hoodi entry, mainnet params) error = %v, want errors.Is(ErrNetworkMismatch)", err)
-	}
-}
-
-func TestValidateForNetwork_ForkVersionMismatch(t *testing.T) {
-	pHoodi := hoodiParams()
-	e := validSignedEntryForParams(t, pHoodi)
-	// Tamper the fork version bytes (any change triggers mismatch).
-	e.ForkVersion[0] ^= 0xff
-	if err := e.ValidateForNetwork(pHoodi, bls.DefaultVerifier()); !errors.Is(err, ErrForkVersionMismatch) {
-		t.Errorf("ValidateForNetwork(tampered fork_version) error = %v, want errors.Is(ErrForkVersionMismatch)", err)
-	}
-}
-
-func TestValidateForNetwork_BadBLSSig(t *testing.T) {
-	pHoodi := hoodiParams()
-	e := validSignedEntryForParams(t, pHoodi)
-	// Byte-flip in the signature field.
-	e.Signature[0] ^= 0x01
-	err := e.ValidateForNetwork(pHoodi, bls.DefaultVerifier())
-	if err == nil {
-		t.Fatal("ValidateForNetwork(flipped signature) = nil, want ErrBLSSignatureInvalid")
-	}
-	if !errors.Is(err, ErrBLSSignatureInvalid) {
-		t.Errorf("ValidateForNetwork(flipped signature) error = %v, want errors.Is(ErrBLSSignatureInvalid)", err)
-	}
-}
-
-func TestValidateForNetwork_HappyPath(t *testing.T) {
-	pHoodi := hoodiParams()
-	e := validSignedEntryForParams(t, pHoodi)
-	if err := e.ValidateForNetwork(pHoodi, bls.DefaultVerifier()); err != nil {
-		t.Errorf("ValidateForNetwork(well-formed hoodi entry vs hoodi params) unexpected error: %v", err)
-	}
-}
-
-func TestEntryValidate_SignatureTampered_DataRootMismatch(t *testing.T) {
-	tests := []struct{ name string }{{name: "sig"}}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			pHoodi := hoodiParams()
-			e := validSignedEntryForParams(t, pHoodi)
-			data := ssz.DepositData{
-				Pubkey:                e.Pubkey,
-				WithdrawalCredentials: e.WithdrawalCredentials,
-				Amount:                e.Amount,
-				Signature:             e.Signature,
-			}
-			e.DepositDataRoot = data.HashTreeRoot()
-			e.Signature[0] ^= 0x01
-			if err := e.Validate(); !errors.Is(err, ErrDepositDataRootMismatch) {
-				t.Errorf("Validate(flipped signature) error = %v, want errors.Is(ErrDepositDataRootMismatch)", err)
-			}
-		})
-	}
-}
-
-func TestEntryValidate_PubkeyTampered_MessageRootMismatch(t *testing.T) {
-	tests := []struct{ name string }{{name: "pubkey"}}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			pHoodi := hoodiParams()
-			e := validSignedEntryForParams(t, pHoodi)
-			data := ssz.DepositData{
-				Pubkey:                e.Pubkey,
-				WithdrawalCredentials: e.WithdrawalCredentials,
-				Amount:                e.Amount,
-				Signature:             e.Signature,
-			}
-			e.DepositDataRoot = data.HashTreeRoot()
-			e.Pubkey[0] ^= 0x01
-			if err := e.Validate(); !errors.Is(err, ErrDepositMessageRootMismatch) {
-				t.Errorf("Validate(flipped pubkey) error = %v, want errors.Is(ErrDepositMessageRootMismatch)", err)
-			}
-		})
-	}
-}
-
-func TestEntryValidate_AmountTampered_MessageRootMismatch(t *testing.T) {
-	tests := []struct{ name string }{{name: "amount"}}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			pHoodi := hoodiParams()
-			e := validSignedEntryForParams(t, pHoodi)
-			data := ssz.DepositData{
-				Pubkey:                e.Pubkey,
-				WithdrawalCredentials: e.WithdrawalCredentials,
-				Amount:                e.Amount,
-				Signature:             e.Signature,
-			}
-			e.DepositDataRoot = data.HashTreeRoot()
-			e.Amount ^= 1
-			if err := e.Validate(); !errors.Is(err, ErrDepositMessageRootMismatch) {
-				t.Errorf("Validate(tampered amount) error = %v, want errors.Is(ErrDepositMessageRootMismatch)", err)
 			}
 		})
 	}

@@ -11,8 +11,8 @@
 #   ETH_DEPOSIT_TX_PRIVATE_KEY — Hex-encoded secp256k1 private key (0x-prefixed) for signing
 #
 # Optional env vars:
-#   DEPOSIT_DATA_FILE  — Path to deposit_data JSON (default: cmd/eth-deposit-tx/testdata/deposit-fixture.json
-#                        ; use the actual deposit_data source here)
+#   DEPOSIT_DATA_FILE  — Path to deposit_data JSON (default: testdata/phase3/holesky/unsigned_tx.json
+#                        is the signed fixture; use the actual deposit_data source here)
 #   NETWORK            — Network name (default: holesky)
 #   RECEIPT_TIMEOUT    — Max seconds to wait for receipt (default: 120)
 #
@@ -160,4 +160,4 @@ echo ""
 echo "=== E2E testnet run complete ==="
 echo ""
 echo "NEXT STEP: Fill in the validation report template:"
-echo "  docs/USER-GUIDE.md"
+echo "  docs/deposit-tx/validation/phase-4-e2e-template.md"

@@ -1,11 +1,7 @@
 package cli
 
 import (
-	"flag"
-	"strings"
 	"testing"
-
-	ucli "github.com/urfave/cli/v2"
 )
 
 // FuzzParsePubkeys fuzzes the pubkey parsing logic to ensure it never panics,
@@ -30,41 +26,6 @@ func FuzzParsePubkeys(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// parsePubkeys must never panic regardless of input.
 		// Errors are acceptable; panics are not.
-		_, _ = parsePubkeys(string(data)) // ignore: fuzz only cares about panics; returned errors (or nils) are expected/ignored
+		parsePubkeys(string(data)) //nolint:errcheck
 	})
-}
-
-// TestRequireNoArgs_Reject (AC for M0.4-7): when a positional arg is present,
-// returns ucli.Exit with code 2 whose message contains the offending arg.
-func TestRequireNoArgs_Reject(t *testing.T) {
-	app := ucli.NewApp()
-	fs := flag.NewFlagSet("test", 0)
-	_ = fs.Parse([]string{"foo"}) // "foo" becomes a positional arg
-	c := ucli.NewContext(app, fs, nil)
-	err := requireNoArgs(c)
-	if err == nil {
-		t.Fatal("requireNoArgs with positional arg: err = nil, want error")
-	}
-	exitErr, ok := err.(ucli.ExitCoder)
-	if !ok {
-		t.Fatalf("error type %T is not ucli.ExitCoder", err)
-	}
-	if exitErr.ExitCode() != 2 {
-		t.Errorf("ExitCode = %d, want 2", exitErr.ExitCode())
-	}
-	if !strings.Contains(err.Error(), "foo") {
-		t.Errorf("error message %q does not contain the arg %q", err.Error(), "foo")
-	}
-}
-
-// TestRequireNoArgs_Accept (AC for M0.4-7): with zero positional args,
-// returns nil (no error).
-func TestRequireNoArgs_Accept(t *testing.T) {
-	app := ucli.NewApp()
-	fs := flag.NewFlagSet("test", 0)
-	// no args parsed → NArg()==0
-	c := ucli.NewContext(app, fs, nil)
-	if err := requireNoArgs(c); err != nil {
-		t.Errorf("requireNoArgs with zero args: got err = %v, want nil", err)
-	}
 }

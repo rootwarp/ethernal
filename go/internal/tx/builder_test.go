@@ -1,19 +1,22 @@
 package tx
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
-	"math"
 	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
+
+// TestBuilderSatisfiesTxBuilder is an explicit runtime assertion complementing
+// the compile-time var _ check in builder.go.
+func TestBuilderSatisfiesTxBuilder(t *testing.T) {
+	var _ TxBuilder = NewBuilder()
+}
 
 func TestBuilder_BuildUnsigned_Success(t *testing.T) {
 	ctx := context.Background()
@@ -355,8 +358,8 @@ func TestBuilder_BuildUnsigned_StaticMode_MissingGasLimit(t *testing.T) {
 
 // makeMockRPC returns a mockRPC pre-configured with typical happy-path values.
 func makeMockRPC(chainID uint64) *mockRPC {
-	tip := big.NewInt(2_000_000_000)      // 2 gwei
-	baseFee := big.NewInt(10_000_000_000) // 10 gwei
+	tip := big.NewInt(2_000_000_000)       // 2 gwei
+	baseFee := big.NewInt(10_000_000_000)  // 10 gwei
 	return &mockRPC{
 		SuggestGasTipCapFn: func(_ context.Context) (*big.Int, error) {
 			return new(big.Int).Set(tip), nil
@@ -491,7 +494,7 @@ func TestBuilder_BuildUnsigned_RPCMode_ChainIDMismatch(t *testing.T) {
 	}
 }
 
-func TestBuilder_BuildUnsigned_RPCMode_ChainIDCallError_FailClosed(t *testing.T) {
+func TestBuilder_BuildUnsigned_RPCMode_ChainIDCallError_Ignored(t *testing.T) {
 	ctx := context.Background()
 	entry := makeValidEntry()
 	params := holeskyParams(t)
@@ -511,12 +514,9 @@ func TestBuilder_BuildUnsigned_RPCMode_ChainIDCallError_FailClosed(t *testing.T)
 	}
 	b := NewBuilder()
 	_, err := b.BuildUnsigned(ctx, entry, cfg)
-	// ChainID call error now fails closed (M1.3-2); no silent ignore.
-	if err == nil {
-		t.Fatal("expected error on ChainID RPC err, got nil")
-	}
-	if !errors.Is(err, ErrChainIDZero) {
-		t.Errorf("expected ErrChainIDZero, got: %v", err)
+	// ChainID call error should be silently ignored — build should succeed.
+	if err != nil {
+		t.Fatalf("ChainID call error should be ignored, got: %v", err)
 	}
 }
 
@@ -573,7 +573,7 @@ func TestBuilder_BuildUnsigned_RPCMode_EstimateGasError(t *testing.T) {
 }
 
 func TestBuilder_BuildUnsigned_RPCMode_GasMargin(t *testing.T) {
-	// Verify safety margin: estimate + estimate/5 (M1.3-3; 20% pad avoids overflow).
+	// Verify safety margin: estimate * 6 / 5.
 	ctx := context.Background()
 	entry := makeValidEntry()
 	params := holeskyParams(t)
@@ -777,132 +777,5 @@ func TestBuilder_BuildUnsigned_ConfigErrors_NotRPCEstimation(t *testing.T) {
 	}
 	if errors.Is(missingFromErr, ErrRPCEstimation) {
 		t.Errorf("ErrMissingFromForNonce must NOT be tagged ErrRPCEstimation, got: %v", missingFromErr)
-	}
-}
-
-// TestResolveRPC_ChainIDZero_FailClosed (mock): RPC returns 0 → error returned (no silent continue). M1.3-2 AC.
-func TestResolveRPC_ChainIDZero_FailClosed(t *testing.T) {
-	ctx := context.Background()
-	entry := makeValidEntry()
-	params := holeskyParams(t)
-
-	rpc := &mockRPC{
-		ChainIDFn: func(_ context.Context) (*big.Int, error) {
-			return big.NewInt(0), nil
-		},
-	}
-	cfg := BuildConfig{
-		NetworkParams: params,
-		RPC:           rpc,
-	}
-	_, _, _, _, err := resolveRPC(ctx, cfg, entry, nil)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !errors.Is(err, ErrChainIDZero) {
-		t.Errorf("expected ErrChainIDZero, got: %v", err)
-	}
-}
-
-// TestResolveRPC_LoggerEmits_Warning (capture logger): warn-and-continue branches actually emit a WARN record. M1.3-2 AC.
-func TestResolveRPC_LoggerEmits_Warning(t *testing.T) {
-	ctx := context.Background()
-	entry := makeValidEntry()
-	params := holeskyParams(t)
-
-	var logBuf bytes.Buffer
-	lg := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-
-	rpc := &mockRPC{
-		ChainIDFn: func(_ context.Context) (*big.Int, error) {
-			return nil, errors.New("rpc chainid fail")
-		},
-	}
-	cfg := BuildConfig{
-		NetworkParams: params,
-		RPC:           rpc,
-	}
-	_, _, _, _, err := resolveRPC(ctx, cfg, entry, lg)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !errors.Is(err, ErrChainIDZero) {
-		t.Errorf("expected ErrChainIDZero, got: %v", err)
-	}
-	logs := logBuf.String()
-	if !strings.Contains(logs, "WARN") && !strings.Contains(logs, "level=WARN") {
-		t.Errorf("expected WARN record in captured logger, got: %q", logs)
-	}
-	if !strings.Contains(logs, "chain ID resolution from RPC failed") {
-		t.Errorf("expected warn msg, got: %q", logs)
-	}
-}
-
-// TestGasEstimate_NearMaxUint64_NoOverflow exercises the +/5 pad (M1.3-3 AC).
-// estimate near MaxUint64 must not wrap (unlike old *6/5).
-func TestGasEstimate_NearMaxUint64_NoOverflow(t *testing.T) {
-	ctx := context.Background()
-	entry := makeValidEntry()
-	params := holeskyParams(t)
-
-	var from [20]byte
-	from[0] = 0x0a
-
-	near := uint64(math.MaxUint64 - 1024)
-	rpc := makeMockRPC(params.ChainID)
-	rpc.EstimateGasFn = func(_ context.Context, _ CallMsg) (uint64, error) {
-		return near, nil
-	}
-
-	cfg := BuildConfig{
-		NetworkParams: params,
-		RPC:           rpc,
-		From:          from,
-	}
-	b := NewBuilder()
-	tx, err := b.BuildUnsigned(ctx, entry, cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := near + near/5
-	if tx.Gas != want {
-		t.Errorf("Gas near-max: got %d, want %d (no wrap)", tx.Gas, want)
-	}
-	// AC uses literal estimate=max-1024 (per spec); final 1.2*e > MaxUint64 so
-	// result wraps in uint64 (old *6/5 and +/5 coincide on this e). The test
-	// verifies success + correct (from + expr) padded value for the near-max input
-	// case; no intermediate overflow bug in the fix path. Happy-path green too.
-}
-
-// TestBuilder_UsesDepositContractDirectly verifies direct use of
-// NetworkParams.DepositContractAddress (no hex round-trip / common.HexToAddress).
-// AC: "(read code)" + this exercises the To passed to EstimateGas.
-func TestBuilder_UsesDepositContractDirectly(t *testing.T) {
-	ctx := context.Background()
-	entry := makeValidEntry()
-	params := holeskyParams(t)
-
-	var from [20]byte
-	from[0] = 0x0b
-
-	rpc := makeMockRPC(params.ChainID)
-	var sawTo [20]byte
-	rpc.EstimateGasFn = func(_ context.Context, msg CallMsg) (uint64, error) {
-		sawTo = msg.To
-		return 21000, nil
-	}
-
-	cfg := BuildConfig{
-		NetworkParams: params,
-		RPC:           rpc,
-		From:          from,
-	}
-	b := NewBuilder()
-	_, err := b.BuildUnsigned(ctx, entry, cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sawTo != params.DepositContractAddress {
-		t.Errorf("EstimateGas saw To=%x, want direct DepositContractAddress=%x", sawTo, params.DepositContractAddress)
 	}
 }

@@ -12,17 +12,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	ucli "github.com/urfave/cli/v3"
-
-	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/rootwarp/eth-utils/go/internal/bls"
 	"github.com/rootwarp/eth-utils/go/internal/cli"
@@ -61,8 +56,6 @@ func (f *fakeSigner) PublicKey() ([48]byte, error) {
 	return f.pubkey, f.err
 }
 
-func (f *fakeSigner) Zeroize() {}
-
 // fakeVerifier implements bls.Verifier for tests.
 type fakeVerifier struct {
 	ok  bool
@@ -91,7 +84,7 @@ type fakeScanner struct {
 	err   error
 }
 
-func (f *fakeScanner) scan(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
+func (f *fakeScanner) scan(_ string) (keystore.DirectoryIndex, error) {
 	return f.index, f.err
 }
 
@@ -127,17 +120,17 @@ func makeTestDeps(summaryBuf *bytes.Buffer, writerOverride output.Writer) genDep
 			Secret:    make([]byte, 32), // 32 zero bytes (valid length)
 			PubkeyHex: pkHex,
 		}},
-		NewSigner: func(_ []byte) (bls.Signer, error) {
+		newSigner: func(_ []byte) (bls.Signer, error) {
 			return fakeSign, nil
 		},
-		Verifier:    &fakeVerifier{ok: true},
-		Writer:      w,
-		SummaryOut:  summaryBuf,
-		ProgressOut: io.Discard,
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		// VerifyDepositCLI defaults to nil; tests that need it set it explicitly.
+		verifier:    &fakeVerifier{ok: true},
+		writer:      w,
+		summaryOut:  summaryBuf,
+		progressOut: io.Discard,
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// verifyDepositCLI defaults to nil; tests that need it set it explicitly.
 		// When cfg.VerifyWithDepositCLI=false (the default in makeCfg()), it is never called.
-		VerifyDepositCLI: nil,
+		verifyDepositCLI: nil,
 	}
 }
 
@@ -146,11 +139,10 @@ func makeCfg() cli.Config {
 	var pk [48]byte
 	pk[0] = 0xAB
 	return cli.Config{
-		KeystoreDir:       "/fake/keystores",
-		Pubkeys:           [][48]byte{pk},
-		Network:           network.Hoodi,
-		OutputDir:         "/tmp",
-		WithdrawalAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+		KeystoreDir: "/fake/keystores",
+		Pubkeys:     [][48]byte{pk},
+		Network:     network.Hoodi,
+		OutputDir:   "/tmp",
 	}
 }
 
@@ -198,14 +190,14 @@ func TestRunGenWithDeps_Success_PrintsSummary(t *testing.T) {
 func TestRunGenWithDeps_BLSInitError_ExitCode3(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
-	d.InitBLS = func() error { return errors.New("herumi init failure") }
+	d.initBLS = func() error { return errors.New("herumi init failure") }
 
 	err := runGenWithDeps(context.Background(), makeCfg(), d)
 	if err == nil {
 		t.Fatal("runGenWithDeps() returned nil error, want bls init error")
 	}
-	if !errors.Is(err, cli.ErrBLSInit) {
-		t.Errorf("error = %v, want wrapped cli.ErrBLSInit", err)
+	if !errors.Is(err, errBLSInit) {
+		t.Errorf("error = %v, want wrapped errBLSInit", err)
 	}
 	if code := ExitCodeFor(err); code != 3 {
 		t.Errorf("ExitCodeFor(bls init error) = %d, want 3", code)
@@ -215,7 +207,7 @@ func TestRunGenWithDeps_BLSInitError_ExitCode3(t *testing.T) {
 func TestRunGenWithDeps_KeystoreLoadError_ExitCode2(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
-	d.Loader = &fakeLoader{err: fmt.Errorf("%w: /fake/ks.json", keystore.ErrKeystoreMissing)}
+	d.loader = &fakeLoader{err: fmt.Errorf("%w: /fake/ks.json", keystore.ErrKeystoreMissing)}
 
 	err := runGenWithDeps(context.Background(), makeCfg(), d)
 	if err == nil {
@@ -232,7 +224,7 @@ func TestRunGenWithDeps_KeystoreLoadError_ExitCode2(t *testing.T) {
 func TestRunGenWithDeps_WrongPassphrase_ExitCode3(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
-	d.Loader = &fakeLoader{err: fmt.Errorf("%w: bad checksum", keystore.ErrWrongPassphrase)}
+	d.loader = &fakeLoader{err: fmt.Errorf("%w: bad checksum", keystore.ErrWrongPassphrase)}
 
 	err := runGenWithDeps(context.Background(), makeCfg(), d)
 	if err == nil {
@@ -255,7 +247,7 @@ func TestRunGenWithDeps_PubkeyMismatch_ExitCode2(t *testing.T) {
 	wrongPk[0] = 0xBB
 	wrongPkHex := fmt.Sprintf("%x", wrongPk[:])
 
-	d.Scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
+	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
 		return keystore.DirectoryIndex{
 			wrongPkHex: "/fake/wrong-keystore.json",
 		}, nil
@@ -298,7 +290,7 @@ func TestRunGenWithDeps_ContextCanceled_ExitCode4(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 
-	d.Loader = &fakeLoader{err: context.Canceled}
+	d.loader = &fakeLoader{err: context.Canceled}
 
 	err := runGenWithDeps(ctx, makeCfg(), d)
 	if err == nil {
@@ -345,8 +337,6 @@ func TestExitCodeFor_GenErrorCodes(t *testing.T) {
 		{"ErrKeystoreMissing wrapped", fmt.Errorf("wrap: %w", keystore.ErrKeystoreMissing), 2},
 		{"ErrKeystoreMalformed", keystore.ErrKeystoreMalformed, 2},
 		{"ErrKeystoreVersion", keystore.ErrKeystoreVersion, 2},
-		{"ErrKeystoreCipherText", keystore.ErrKeystoreCipherText, 2},
-		{"ErrKeystoreCipherText wrapped", fmt.Errorf("wrap: %w", keystore.ErrKeystoreCipherText), 2},
 		{"ErrEnvVarEmpty", keystore.ErrEnvVarEmpty, 2},
 		{"ErrEnvVarEmpty wrapped", fmt.Errorf("passphrase source: %w", keystore.ErrEnvVarEmpty), 2},
 		{"ErrKeystoreNotFound", keystore.ErrKeystoreNotFound, 2},
@@ -356,20 +346,18 @@ func TestExitCodeFor_GenErrorCodes(t *testing.T) {
 		{"ExitCoder code 2", exitCoder2, 2},
 
 		// --- exit code 2: deposit CLI not found ---
-		{"cli.ErrDepositCLINotFound", cli.ErrDepositCLINotFound, 2},
-		{"cli.ErrDepositCLINotFound wrapped", fmt.Errorf("wrap: %w", cli.ErrDepositCLINotFound), 2},
+		{"ErrDepositCLINotFound", ErrDepositCLINotFound, 2},
+		{"ErrDepositCLINotFound wrapped", fmt.Errorf("wrap: %w", ErrDepositCLINotFound), 2},
 
 		// --- exit code 3: deposit CLI failed ---
-		{"cli.ErrDepositCLIFailed", cli.ErrDepositCLIFailed, 3},
-		{"cli.ErrDepositCLIFailed wrapped", fmt.Errorf("wrap: %w", cli.ErrDepositCLIFailed), 3},
+		{"ErrDepositCLIFailed", ErrDepositCLIFailed, 3},
+		{"ErrDepositCLIFailed wrapped", fmt.Errorf("wrap: %w", ErrDepositCLIFailed), 3},
 
 		// --- exit code 3 ---
 		{"ErrWrongPassphrase", keystore.ErrWrongPassphrase, 3},
 		{"ErrSelfVerifyFailed", deposit.ErrSelfVerifyFailed, 3},
 		{"ErrSelfVerifyFailed wrapped", fmt.Errorf("wrap: %w", deposit.ErrSelfVerifyFailed), 3},
-		{"cli.ErrBLSInit", blsInitErr, 3},
-		{"bls.ErrSecretZero", bls.ErrSecretZero, 3},
-		{"bls.ErrSecretZero wrapped", fmt.Errorf("wrap: %w", bls.ErrSecretZero), 3},
+		{"errBLSInit", blsInitErr, 3},
 
 		// --- exit code 4 ---
 		{"context.Canceled", context.Canceled, 4},
@@ -434,76 +422,25 @@ func TestPrintGenSummary_ContainsRequiredParts(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCLIVersion(t *testing.T) {
-	if cli.CLIVersion != "2.7.0" {
-		t.Errorf("cli.CLIVersion = %q, want %q", cli.CLIVersion, "2.7.0")
+	if CLIVersion != "2.7.0" {
+		t.Errorf("CLIVersion = %q, want %q", CLIVersion, "2.7.0")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// TestDeriveWC01_FromAddress — table test for exact 0x01 || 0x00*11 || addr[20] layout (M0.4-2 AC)
+// TestDefaultWithdrawalCreds — first byte is BLS type prefix, rest is zero
 // ---------------------------------------------------------------------------
 
-func TestDeriveWC01_FromAddress(t *testing.T) {
-	// Sample address from EIP-55 and M0.4-1 tests.
-	const sampleAddr = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
-	sampleAddrLower := strings.ToLower(sampleAddr)
-	sampleAddrBytes := common.HexToAddress(sampleAddr)
-
-	// Build expected for sample: 0x01 + 11 zero bytes + 20 addr bytes.
-	var wantSample [32]byte
-	wantSample[0] = 0x01
-	copy(wantSample[12:], sampleAddrBytes[:])
-
-	// All-zero address case (still produces 0x01 + zeros + zeros).
-	var wantZero [32]byte
-	wantZero[0] = 0x01
-
-	tests := []struct {
-		name string
-		addr string
-		want [32]byte
-	}{
-		{
-			name: "EIP55 checksummed sample",
-			addr: sampleAddr,
-			want: wantSample,
-		},
-		{
-			name: "all lower sample",
-			addr: sampleAddrLower,
-			want: wantSample,
-		},
-		{
-			name: "zero address",
-			addr: "0x0000000000000000000000000000000000000000",
-			want: wantZero,
-		},
-		{
-			name: "all upper",
-			addr: strings.ToUpper(sampleAddr),
-			want: wantSample,
-		},
+func TestDefaultWithdrawalCreds(t *testing.T) {
+	wc := defaultWithdrawalCreds()
+	if wc[0] != 0x00 {
+		t.Errorf("defaultWithdrawalCreds()[0] = 0x%02x, want 0x00 (BLS withdrawal type)", wc[0])
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := cli.DeriveWithdrawalCredential01(tc.addr)
-			if got != tc.want {
-				t.Errorf("cli.DeriveWithdrawalCredential01(%q) = %x, want %x", tc.addr, got[:], tc.want[:])
-			}
-			// Explicit layout checks per AC.
-			if got[0] != 0x01 {
-				t.Errorf("prefix byte = 0x%02x, want 0x01", got[0])
-			}
-			for i := 1; i < 12; i++ {
-				if got[i] != 0 {
-					t.Errorf("padding byte[%d] = 0x%02x, want 0x00", i, got[i])
-				}
-			}
-			if !bytes.Equal(got[12:], tc.want[12:]) {
-				t.Errorf("addr suffix mismatch: got %x, want %x", got[12:], tc.want[12:])
-			}
-		})
+	// All remaining bytes must be zero.
+	for i := 1; i < len(wc); i++ {
+		if wc[i] != 0 {
+			t.Errorf("defaultWithdrawalCreds()[%d] = 0x%02x, want 0x00", i, wc[i])
+		}
 	}
 }
 
@@ -513,7 +450,7 @@ func TestDeriveWC01_FromAddress(t *testing.T) {
 
 func TestPickPassphraseSource_EnvSource(t *testing.T) {
 	cfg := cli.Config{PassphraseEnv: "MY_PASSPHRASE_VAR"}
-	src := cli.PickPassphraseSource(cfg)
+	src := pickPassphraseSource(cfg)
 	if src == nil {
 		t.Fatal("pickPassphraseSource returned nil")
 	}
@@ -529,7 +466,7 @@ func TestPickPassphraseSource_EnvSource(t *testing.T) {
 func TestPickPassphraseSource_EnvSourceWithValue(t *testing.T) {
 	cfg := cli.Config{PassphraseEnv: "MY_PASSPHRASE_VAR"}
 	t.Setenv("MY_PASSPHRASE_VAR", "secret123")
-	src := cli.PickPassphraseSource(cfg)
+	src := pickPassphraseSource(cfg)
 	pw, err := src.Read()
 	if err != nil {
 		t.Fatalf("env source with set var: Read() = %v, want nil", err)
@@ -542,7 +479,7 @@ func TestPickPassphraseSource_EnvSourceWithValue(t *testing.T) {
 func TestPickPassphraseSource_TermSource(t *testing.T) {
 	// Empty PassphraseEnv → should return a term prompt source (non-nil).
 	cfg := cli.Config{PassphraseEnv: ""}
-	src := cli.PickPassphraseSource(cfg)
+	src := pickPassphraseSource(cfg)
 	if src == nil {
 		t.Fatal("pickPassphraseSource returned nil for empty PassphraseEnv")
 	}
@@ -632,7 +569,7 @@ func TestGenDryRun_NoOutputDir_RealPipelineEmitsJSON(t *testing.T) {
 func TestRunGenWithDeps_ScannerError_ExitCode1(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
-	d.Scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
+	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
 		return nil, errors.New("cannot read directory: permission denied")
 	}
 
@@ -651,9 +588,9 @@ func TestRunGenWithDeps_PubkeyNotInIndex_ExitCode2(t *testing.T) {
 	d := makeTestDeps(&summaryBuf, nil)
 
 	// Override scanner to return an empty index — pubkey won't be found.
-	// (deduped one inline literal by reusing existing fakeScanner type)
-	fs := &fakeScanner{index: keystore.DirectoryIndex{}}
-	d.Scanner = fs.scan
+	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
+		return keystore.DirectoryIndex{}, nil
+	}
 
 	err := runGenWithDeps(context.Background(), makeCfg(), d)
 	if err == nil {
@@ -672,7 +609,7 @@ func TestRunGenWithDeps_ErrorMessageContainsPubkeyAndDir(t *testing.T) {
 	d := makeTestDeps(&summaryBuf, nil)
 
 	// Empty index so the lookup fails.
-	d.Scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
+	d.scanner = func(_ string) (keystore.DirectoryIndex, error) {
 		return keystore.DirectoryIndex{}, nil
 	}
 
@@ -709,7 +646,7 @@ func TestPrintGenSummary_DryRunEmptyPath(t *testing.T) {
 
 func TestPickWriter_FSWriterWhenDryRunFalse(t *testing.T) {
 	cfg := cli.Config{DryRun: false}
-	w := cli.PickWriter(cfg, io.Discard)
+	w := pickWriter(cfg, io.Discard)
 	if w == nil {
 		t.Fatal("pickWriter returned nil")
 	}
@@ -726,7 +663,7 @@ func TestPickWriter_FSWriterWhenDryRunFalse(t *testing.T) {
 func TestPickWriter_DryRunWriterWhenDryRunTrue(t *testing.T) {
 	var stdoutBuf bytes.Buffer
 	cfg := cli.Config{DryRun: true}
-	w := cli.PickWriter(cfg, &stdoutBuf)
+	w := pickWriter(cfg, &stdoutBuf)
 	if w == nil {
 		t.Fatal("pickWriter returned nil")
 	}
@@ -777,18 +714,18 @@ func TestRunGenWithDeps_NoSecretInLogs(t *testing.T) {
 		scanner: fs.scan,
 		loader: &fakeLoader{key: keystore.Key{
 			// Pass a copy so key.Zeroize() doesn't clobber sentinelOrig.
-			Secret:    append([]byte(nil), sentinelOrig...),
+			Secret:    sentinelOrig,
 			PubkeyHex: pkHex,
 		}},
-		NewSigner: func(_ []byte) (bls.Signer, error) {
+		newSigner: func(_ []byte) (bls.Signer, error) {
 			return fakeSign, nil
 		},
-		Verifier:    &fakeVerifier{ok: true},
-		Writer:      &fakeWriter{path: "/out/deposit_data-1.json", sha256hex: "cafebabe"},
-		SummaryOut:  &summaryBuf,
-		ProgressOut: io.Discard,
+		verifier:    &fakeVerifier{ok: true},
+		writer:      &fakeWriter{path: "/out/deposit_data-1.json", sha256hex: "cafebabe"},
+		summaryOut:  &summaryBuf,
+		progressOut: io.Discard,
 		// Verbose text logger so all Debug lines are emitted to logBuf.
-		Logger: slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		logger: slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 
 	cfg := cli.Config{
@@ -904,7 +841,7 @@ func TestRunGenWithDeps_DryRun_StdoutContainsJSON(t *testing.T) {
 	var stdoutBuf bytes.Buffer
 	var summaryBuf bytes.Buffer
 
-	// Build cli.Deps with a DryRunWriter pointing to stdoutBuf.
+	// Build deps with a DryRunWriter pointing to stdoutBuf.
 	d := makeTestDeps(&summaryBuf, output.NewDryRunWriter(&stdoutBuf))
 	cfg := makeCfg()
 	cfg.DryRun = true
@@ -993,7 +930,7 @@ func TestRunGenWithDeps_DryRun_VerifyFailureAbortsWithSameExitCode(t *testing.T)
 
 	d := makeTestDeps(&summaryBuf, output.NewDryRunWriter(&stdoutBuf))
 	// Force the verifier to fail so self-verification aborts the pipeline.
-	d.Verifier = &fakeVerifier{ok: false, err: nil}
+	d.verifier = &fakeVerifier{ok: false, err: nil}
 	cfg := makeCfg()
 	cfg.DryRun = true
 
@@ -1036,7 +973,7 @@ func makeMultiPubkeyDeps(summaryBuf *bytes.Buffer, pks [][48]byte) genDeps {
 	loaderFunc := func(_ context.Context, path string, _ keystore.PassphraseSource) (keystore.Key, error) {
 		// Parse the index from the path "/fake/<i>.json".
 		var idx int
-		_, _ = fmt.Sscanf(path, "/fake/%d.json", &idx) // ignore: synthetic test path always matches format (n=1, err=nil)
+		fmt.Sscanf(path, "/fake/%d.json", &idx)
 		pk := pks[idx]
 		secret := make([]byte, 32)
 		secret[0] = pk[0] // encode which key this is
@@ -1120,7 +1057,7 @@ func TestRunGenWithDeps_Parallel(t *testing.T) {
 		}
 
 		d := makeMultiPubkeyDeps(&summaryBuf, pks)
-		d.Writer = writerFunc
+		d.writer = writerFunc
 
 		cfg := baseCfg
 		cfg.Parallel = p
@@ -1177,7 +1114,7 @@ func TestRunGenWithDeps_ParallelWorkerError(t *testing.T) {
 			return keystore.Key{}, loaderErr
 		}
 		var idx int
-		_, _ = fmt.Sscanf(path, "/fake/%d.json", &idx) // ignore: synthetic test path always matches format (n=1, err=nil)
+		fmt.Sscanf(path, "/fake/%d.json", &idx)
 		pk := pks[idx]
 		secret := make([]byte, 32)
 		secret[0] = pk[0]
@@ -1189,15 +1126,14 @@ func TestRunGenWithDeps_ParallelWorkerError(t *testing.T) {
 
 	var summaryBuf bytes.Buffer
 	d := makeMultiPubkeyDeps(&summaryBuf, pks)
-	d.Loader = &failLoader
+	d.loader = &failLoader
 
 	cfg := cli.Config{
-		KeystoreDir:       "/fake/keystores",
-		Pubkeys:           pks,
-		Network:           network.Hoodi,
-		OutputDir:         "/tmp",
-		Parallel:          2,
-		WithdrawalAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+		KeystoreDir: "/fake/keystores",
+		Pubkeys:     pks,
+		Network:     network.Hoodi,
+		OutputDir:   "/tmp",
+		Parallel:    2,
 	}
 
 	err := runGenWithDeps(context.Background(), cfg, d)
@@ -1255,7 +1191,7 @@ func TestVerifyDepositCLI_FlagNotSet_NeverCalled(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
 	// Inject a stub that panics if called — guards against accidental invocation.
-	d.VerifyDepositCLI = func(_ context.Context, _, _ string) error {
+	d.verifyDepositCLI = func(_ context.Context, _, _ string) error {
 		panic("verifyDepositCLI must not be called when VerifyWithDepositCLI=false")
 	}
 
@@ -1275,7 +1211,7 @@ func TestVerifyDepositCLI_FlagSet_StubReturnsNil(t *testing.T) {
 	d := makeTestDeps(&summaryBuf, nil)
 
 	called := false
-	d.VerifyDepositCLI = func(_ context.Context, _, _ string) error {
+	d.verifyDepositCLI = func(_ context.Context, _, _ string) error {
 		called = true
 		return nil
 	}
@@ -1297,14 +1233,14 @@ func TestVerifyDepositCLI_FlagSet_StubReturnsNil(t *testing.T) {
 }
 
 // TestVerifyDepositCLI_FlagSet_StubReturnsNotFound verifies that when
-// VerifyWithDepositCLI is true and the stub returns cli.ErrDepositCLINotFound,
+// VerifyWithDepositCLI is true and the stub returns ErrDepositCLINotFound,
 // the pipeline returns exit code 2.
 func TestVerifyDepositCLI_FlagSet_StubReturnsNotFound(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
 
-	d.VerifyDepositCLI = func(_ context.Context, _, _ string) error {
-		return fmt.Errorf("%w: %q not found in PATH", cli.ErrDepositCLINotFound, "deposit")
+	d.verifyDepositCLI = func(_ context.Context, _, _ string) error {
+		return fmt.Errorf("%w: %q not found in PATH", ErrDepositCLINotFound, "deposit")
 	}
 
 	cfg := makeCfg()
@@ -1315,8 +1251,8 @@ func TestVerifyDepositCLI_FlagSet_StubReturnsNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("runGenWithDeps() returned nil, want ErrDepositCLINotFound")
 	}
-	if !errors.Is(err, cli.ErrDepositCLINotFound) {
-		t.Errorf("error = %v, want wrapped cli.ErrDepositCLINotFound", err)
+	if !errors.Is(err, ErrDepositCLINotFound) {
+		t.Errorf("error = %v, want wrapped ErrDepositCLINotFound", err)
 	}
 	if code := ExitCodeFor(err); code != 2 {
 		t.Errorf("ExitCodeFor(ErrDepositCLINotFound) = %d, want 2", code)
@@ -1324,14 +1260,14 @@ func TestVerifyDepositCLI_FlagSet_StubReturnsNotFound(t *testing.T) {
 }
 
 // TestVerifyDepositCLI_FlagSet_StubReturnsFailed verifies that when
-// VerifyWithDepositCLI is true and the stub returns cli.ErrDepositCLIFailed,
+// VerifyWithDepositCLI is true and the stub returns ErrDepositCLIFailed,
 // the pipeline returns exit code 3.
 func TestVerifyDepositCLI_FlagSet_StubReturnsFailed(t *testing.T) {
 	var summaryBuf bytes.Buffer
 	d := makeTestDeps(&summaryBuf, nil)
 
-	d.VerifyDepositCLI = func(_ context.Context, _, _ string) error {
-		return fmt.Errorf("%w: deposit exited with code 1: invalid data", cli.ErrDepositCLIFailed)
+	d.verifyDepositCLI = func(_ context.Context, _, _ string) error {
+		return fmt.Errorf("%w: deposit exited with code 1: invalid data", ErrDepositCLIFailed)
 	}
 
 	cfg := makeCfg()
@@ -1342,8 +1278,8 @@ func TestVerifyDepositCLI_FlagSet_StubReturnsFailed(t *testing.T) {
 	if err == nil {
 		t.Fatal("runGenWithDeps() returned nil, want ErrDepositCLIFailed")
 	}
-	if !errors.Is(err, cli.ErrDepositCLIFailed) {
-		t.Errorf("error = %v, want wrapped cli.ErrDepositCLIFailed", err)
+	if !errors.Is(err, ErrDepositCLIFailed) {
+		t.Errorf("error = %v, want wrapped ErrDepositCLIFailed", err)
 	}
 	if code := ExitCodeFor(err); code != 3 {
 		t.Errorf("ExitCodeFor(ErrDepositCLIFailed) = %d, want 3", code)
@@ -1358,7 +1294,7 @@ func TestVerifyDepositCLI_DryRun_NeverCalled(t *testing.T) {
 	var summaryBuf bytes.Buffer
 
 	d := makeTestDeps(&summaryBuf, output.NewDryRunWriter(&stdoutBuf))
-	d.VerifyDepositCLI = func(_ context.Context, _, _ string) error {
+	d.verifyDepositCLI = func(_ context.Context, _, _ string) error {
 		panic("verifyDepositCLI must not be called in dry-run mode")
 	}
 
@@ -1397,7 +1333,7 @@ func makeNPubkeyDeps(n int, progressOut io.Writer, logBuf *bytes.Buffer) (genDep
 
 	loaderFn := func(_ context.Context, path string, _ keystore.PassphraseSource) (keystore.Key, error) {
 		var i int
-		_, _ = fmt.Sscanf(path, "/fake/%d.json", &i) // ignore: synthetic test path always matches format (n=1, err=nil)
+		fmt.Sscanf(path, "/fake/%d.json", &i)
 		pk := pks[i]
 		secret := make([]byte, 32)
 		secret[0] = pk[0]
@@ -1610,199 +1546,10 @@ func TestNoSlogImportInSigningPackages(t *testing.T) {
 						path, lineNum, line)
 				}
 			}
-			_ = f.Close() // ignore: close err on testdata file after scan (non-critical for lint check)
+			f.Close() //nolint:errcheck
 			if err := sc.Err(); err != nil {
 				t.Fatalf("scan %q: %v", path, err)
 			}
 		}
 	}
-}
-
-// Test_WithdrawalAddress_Missing_Exit2 rejects missing flag with exit code 2.
-// Exercises the real CLI path (Action returns ucli.Exit(2) since no Required on
-// this flag; inside len/IsHex guard catches empty) so cast to ExitCoder succeeds
-// (addresses review HIGH on errRequiredFlags type + reliable exit 2 per AC).
-func Test_WithdrawalAddress_Missing_Exit2(t *testing.T) {
-	ksDir := t.TempDir()
-	outDir := t.TempDir()
-
-	// Real invocation: supply the other 4 Required flags, omit only --withdrawal-address.
-	// Withdrawal check (before pubkeys parse) will fire, return ucli.Exit code 2 (ExitCoder).
-	app := cli.NewApp(func(context.Context, cli.Config) error { return nil })
-	app.Writer = io.Discard
-	app.ErrWriter = io.Discard
-	app.ExitErrHandler = func(_ *ucli.Context, _ error) {}
-	args := []string{
-		"eth-deposit-gen",
-		"--keystore-dir", ksDir,
-		"--pubkeys", "0x" + strings.Repeat("a", 96), // dummy; withdrawal guard fires first
-		"--network", "hoodi",
-		"--output-dir", outDir,
-		// deliberately no --withdrawal-address
-	}
-	err := app.Run(args)
-	if err == nil {
-		t.Fatal("run without --withdrawal-address: error = nil, want error")
-	}
-	exitErr, ok := err.(ucli.ExitCoder)
-	if !ok {
-		t.Fatalf("error type %T is not ucli.ExitCoder (review HIGH on errRequiredFlags cast)", err)
-	}
-	if exitErr.ExitCode() != 2 {
-		t.Errorf("ExitCode = %d, want 2", exitErr.ExitCode())
-	}
-	if !strings.Contains(err.Error(), "withdrawal-address") {
-		t.Errorf("error message %q does not contain withdrawal-address", err.Error())
-	}
-
-	// Also verify exitCodeFor mapping (for the real err and sim of urfave shape for other flags).
-	if got := cli.ExitCodeFor(err); got != 2 {
-		t.Errorf("cli.ExitCodeFor(real missing) = %d, want 2", got)
-	}
-	sim := fmt.Errorf("Required flag \"withdrawal-address\" not set")
-	if got := cli.ExitCodeFor(sim); got != 2 {
-		t.Errorf("cli.ExitCodeFor(sim) = %d, want 2", got)
-	}
-}
-
-// TestRunWithDeps_EndToEnd_HappyPath_Derived01WC exercises the full runWithDeps
-// + real deposit.NewGenerator path using existing testdata single keystore +
-// the --withdrawal-address (via cfg) + derivation. Produces deposit_data JSON
-// (via DryRun) whose withdrawal_credentials starts "01" + 22 zero hex + addr.
-// Exercises the full runWithDeps + real deposit.NewGenerator path using existing
-// testdata single keystore + the --withdrawal-address (via cfg) + derivation.
-func TestRunWithDeps_EndToEnd_HappyPath_Derived01WC(t *testing.T) {
-	// Use existing testdata for single-keystore e2e happy path (M0.4-2 AC).
-	ksDir := t.TempDir()
-	src := "../../testdata/hoodi/keystores/keystore.json"
-	dst := filepath.Join(ksDir, "keystore.json")
-	ksBytes, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatalf("read existing testdata keystore: %v", err)
-	}
-	if err := os.WriteFile(dst, ksBytes, 0o600); err != nil {
-		t.Fatalf("write temp keystore: %v", err)
-	}
-
-	pw := "hoodi-golden-test-passphrase"
-	t.Setenv("E2E_TEST_PW", pw)
-
-	// The pubkey inside the hoodi testdata keystore (from pubkeys.txt).
-	pubkeyHex := "8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9"
-	var pk [48]byte
-	pkBytes, _ := hex.DecodeString(pubkeyHex)
-	copy(pk[:], pkBytes)
-
-	addr := "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
-
-	var stdoutBuf bytes.Buffer
-	var summaryBuf bytes.Buffer
-	d := cli.ProductionDeps()
-	d.Writer = output.NewDryRunWriter(&stdoutBuf)
-	d.SummaryOut = &summaryBuf
-	d.ProgressOut = io.Discard
-	d.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	// verifyDepositCLI remains the real one (but not exercised in dry-run).
-
-	cfg := cli.Config{
-		KeystoreDir:       ksDir,
-		Pubkeys:           [][48]byte{pk},
-		Network:           network.Hoodi,
-		OutputDir:         t.TempDir(),
-		PassphraseEnv:     "E2E_TEST_PW",
-		WithdrawalAddress: addr,
-		DryRun:            true,
-	}
-
-	if err := cli.RunWithDeps(context.Background(), cfg, d); err != nil {
-		t.Fatalf("cli.RunWithDeps(e2e happy 01wc): %v", err)
-	}
-
-	// When unskipped, this would verify the produced JSON (the AC target).
-	// The field value is hex without 0x prefix (see toJSONEntry).
-	type j struct {
-		WithdrawalCredentials string `json:"withdrawal_credentials"`
-	}
-	var entries []j
-	if err := json.Unmarshal(stdoutBuf.Bytes(), &entries); err != nil {
-		t.Fatalf("unmarshal produced JSON: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	wc := entries[0].WithdrawalCredentials
-	wantStart := "01" + strings.Repeat("00", 11) + strings.ToLower(strings.TrimPrefix(addr, "0x"))
-	if !strings.HasPrefix(wc, wantStart) {
-		t.Errorf("withdrawal_credentials starts %q, want prefix %q (0x01 + 22 zeros + addr)", wc, wantStart)
-	}
-}
-
-// testErrSigner is a local test helper (minimal; placed here for smallest addition
-// to cover the deposit %w site in TestErrors_Is_PreservesCause without touching
-// deposit_test.go fakes or other files).
-type testErrSigner struct {
-	err error
-}
-
-func (s testErrSigner) PublicKey() ([48]byte, error)    { return [48]byte{}, s.err }
-func (s testErrSigner) Sign([32]byte) ([96]byte, error) { return [96]byte{}, s.err }
-func (s testErrSigner) Zeroize()                        {}
-
-// TestErrors_Is_PreservesCause (M1.5-8 AC) table/subtest style for >=3 wrapped
-// REVIEW sites (scandir bare ReadDir, deposit bare returns in Generate, main
-// bare scanner return in runWithDeps). Asserts errors.Is on cause (got/want).
-// Covers keystore.ScanDir, deposit.NewGenerator+Generate, and runWithDeps
-// scanner wrap. Uses patterns from existing Is tests (e.g. ScannerError,
-// Generate_PublicKeyError, TestRunWithDeps_*).
-func TestErrors_Is_PreservesCause(t *testing.T) {
-	t.Run("keystore_scandir", func(t *testing.T) {
-		_, err := keystore.ScanDir("/nonexistent/dir/for/m15-8-audit", nil)
-		if err == nil {
-			t.Fatal("ScanDir(bad) error = nil, want wrapped cause")
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("ScanDir err = %v, want errors.Is(..., os.ErrNotExist) (cause preserved via %%w)", err)
-		}
-	})
-
-	t.Run("deposit_generate", func(t *testing.T) {
-		want := fmt.Errorf("synthetic pubkey err for is-preserves test")
-		s := testErrSigner{err: want}
-		v := &fakeVerifier{ok: true}
-		p, lookupErr := network.Lookup(network.Hoodi)
-		if lookupErr != nil {
-			t.Fatalf("network.Lookup(hoodi): %v", lookupErr)
-		}
-		gen := deposit.NewGenerator(s, v, p)
-		req := deposit.Request{
-			Network:               network.Hoodi,
-			Pubkeys:               [][48]byte{{0x01}},
-			WithdrawalCredentials: [32]byte{},
-			AmountGwei:            network.MinDepositAmountGwei,
-			DepositCLIVersion:     "2.7.0",
-		}
-		_, err := gen.Generate(context.Background(), req)
-		if err == nil {
-			t.Fatal("Generate error = nil, want wrapped cause")
-		}
-		if !errors.Is(err, want) {
-			t.Errorf("Generate err = %v, want errors.Is(..., cause) (preserved via %%w)", err)
-		}
-	})
-
-	t.Run("main_runWithDeps_scanner_wrap", func(t *testing.T) {
-		var summaryBuf bytes.Buffer
-		d := makeTestDeps(&summaryBuf, nil)
-		want := errors.New("synthetic scanner err for is-preserves test")
-		d.Scanner = func(_ string, _ *slog.Logger) (keystore.DirectoryIndex, error) {
-			return nil, want
-		}
-		err := cli.RunWithDeps(context.Background(), makeCfg(), d)
-		if err == nil {
-			t.Fatal("cli.RunWithDeps(scanner) error = nil, want wrapped")
-		}
-		if !errors.Is(err, want) {
-			t.Errorf("runWithDeps err = %v, want errors.Is(..., scanner cause) (preserved via %%w at main site)", err)
-		}
-	})
 }

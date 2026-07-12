@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	ucli "github.com/urfave/cli/v3"
 
@@ -31,7 +30,7 @@ import (
 // Wrap low-level errors with WrapInputErr so ExitCodeFor maps them correctly.
 var ErrInvalidInput = errors.New("invalid input")
 
-// ErrUserAborted is the sentinel for SIGINT/SIGTERM / context cancellation (exit code 4).
+// ErrUserAborted is the sentinel for SIGINT / context cancellation (exit code 4).
 var ErrUserAborted = errors.New("user aborted")
 
 // ExitCodeFor maps err to an exit code per the eth-deposit convention.
@@ -83,12 +82,11 @@ func ExitCodeFor(err error) int {
 	// Exit code 3: signer / crypto errors (tx).
 	if errors.Is(err, signer.ErrSignerClosed) ||
 		errors.Is(err, signer.ErrNoDevice) ||
-		errors.Is(err, signer.ErrDeviceUnavailable) ||
 		errors.Is(err, signer.ErrAppNotOpen) ||
 		errors.Is(err, signer.ErrInvalidKey) ||
 		errors.Is(err, signer.ErrInvalidChainID) ||
 		errors.Is(err, signer.ErrChainIDMismatch) ||
-		errors.Is(err, signer.ErrSenderMismatch) {
+		errors.Is(err, signer.ErrLedgerNotSupported) {
 		return 3
 	}
 	// Exit code 3: crypto / signer errors and external verification failures (gen).
@@ -102,10 +100,7 @@ func ExitCodeFor(err error) int {
 	if errors.Is(err, internaltx.ErrRPCDial) ||
 		errors.Is(err, internaltx.ErrRPCEstimation) ||
 		errors.Is(err, internaltx.ErrBroadcastFailed) ||
-		errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) ||
-		errors.Is(err, internaltx.ErrReceiptReverted) ||
-		errors.Is(err, internaltx.ErrReceiptTimeout) ||
-		errors.Is(err, internaltx.ErrNoBaseFee) {
+		errors.Is(err, internaltx.ErrBroadcastChainIDMismatch) {
 		return 5
 	}
 	// Fallback.

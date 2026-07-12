@@ -4,13 +4,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
-	"regexp"
 	"strconv"
 	"strings"
 
 	ucli "github.com/urfave/cli/v3"
 
-	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
@@ -61,17 +59,6 @@ type Config struct {
 
 	// Nonce is an optional explicit nonce override. Nil means fetch from RPC or require manual flag.
 	Nonce *uint64
-
-	// ConfirmNetwork is the value of --confirm-network (explicit mainnet ack gate).
-	// Required for --network mainnet; if set must match the target network name
-	// (and decoded-RLP / RPC-derived name where applicable). Pre-validated here
-	// per M1.5-1 pattern. --yes does not bypass.
-	ConfirmNetwork string
-
-	// IAcceptLocalSignerOnMainnet is the --i-accept-local-signer-on-mainnet flag (M1.6-2).
-	// Required (enforced in run/sign Loads/actions) only for --signer local + mainnet.
-	// Captured on build/run for symmetry + M1.6-3 pre-val note; on send/sign too.
-	IAcceptLocalSignerOnMainnet bool
 }
 
 // LoadBuildConfig resolves flag > env > defaults into a typed Config.
@@ -88,24 +75,6 @@ func LoadBuildConfig(c *ucli.Command) (*Config, error) {
 	if err != nil {
 		return nil, ucli.Exit(fmt.Sprintf("--network: %v", err), 2)
 	}
-
-	// Pre-validate --confirm-network (M1.6-1 / M1.5-1 pattern): mainnet requires it;
-	// if set must be a supported network name. (Value match vs RLP/RPC happens
-	// later in actions.) Consolidated pre-val for both mainnet gates here and in
-	// the other three Load*Config per M1.6-3 (early ucli.Exit(2) before setup; reuse
-	// M1.5-1 required-flag pre-val pattern exactly; consistent msgs; no dupe lists).
-	confirmNet := c.String("confirm-network")
-	if net == network.Mainnet && confirmNet == "" {
-		return nil, ucli.Exit("--confirm-network: required for mainnet (must equal network name)", 2)
-	}
-	if confirmNet != "" {
-		if _, err := network.ParseFlag(confirmNet); err != nil {
-			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
-		}
-	}
-
-	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-	// M1.6-2/M1.6-3 pre-val capture (for "all four" hygiene per reviewer high + M1.6-3 note + M1.6-1 apply sign hygiene pattern). Require for local+mainnet is in LoadRun (where signer known) + action checks (sign); ledger exempt. Store below. Early before gas/etc per M1.5-1.
 
 	// 2. Gas limit — string flag so env-var override works alongside flag.
 	// Unset means 0 here; the offline branch in buildUnsignedTx restores the
@@ -159,18 +128,16 @@ func LoadBuildConfig(c *ucli.Command) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Network:                     net,
-		NetworkParams:               params,
-		InputFile:                   c.String("input-file"),
-		OutputFile:                  c.String("output"),
-		Index:                       c.Int("index"),
-		RPCURL:                      c.String("rpc-url"),
-		GasLimit:                    gasLimit,
-		MaxFeePerGas:                maxFee,
-		MaxPriorityFeePerGas:        maxPrioFee,
-		Nonce:                       nonce,
-		ConfirmNetwork:              confirmNet,
-		IAcceptLocalSignerOnMainnet: acceptLocal,
+		Network:              net,
+		NetworkParams:        params,
+		InputFile:            c.String("input-file"),
+		OutputFile:           c.String("output"),
+		Index:                c.Int("index"),
+		RPCURL:               c.String("rpc-url"),
+		GasLimit:             gasLimit,
+		MaxFeePerGas:         maxFee,
+		MaxPriorityFeePerGas: maxPrioFee,
+		Nonce:                nonce,
 	}
 
 	// 6. Sender address — optional, strict 20-byte hex. common.HexToAddress is
@@ -185,33 +152,4 @@ func LoadBuildConfig(c *ucli.Command) (*Config, error) {
 	}
 
 	return cfg, nil
-}
-
-// posixEnvVarName matches valid POSIX env var names: uppercase letters, digits,
-// underscore; must start with letter or underscore. (Moved here from sign.go
-// for M2.2-4 centralization of the signer/env-var validation shared by
-// Load*Config funcs.)
-var posixEnvVarName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
-
-// validateSignerEnv performs the common post-required --signer value check
-// ("local" or "ledger") plus the full --private-key-env POSIX-name validation
-// with redaction and "treat as compromised" warning. Consumed by both
-// LoadSignConfig and LoadRunConfig (M2.2-4 / FR-P2-A15 signer/env-var dedup).
-// Preserves M0.8-2 redaction discipline exactly (cli.Redact + ErrWriter
-// warning + identical error text). Caller must have already enforced
-// non-empty --signer (to preserve per-caller required-error wording).
-func validateSignerEnv(c *ucli.Context, signerType string) (envVar string, err error) {
-	if signerType != "local" && signerType != "ledger" {
-		return "", ucli.Exit(fmt.Sprintf("--signer: unsupported value %q: must be \"local\" or \"ledger\"", signerType), 2)
-	}
-
-	envVar = c.String("private-key-env")
-	if !posixEnvVarName.MatchString(envVar) {
-		_, _ = fmt.Fprintf(c.App.ErrWriter, "WARNING: the rejected value should be treated as compromised\n")
-		return "", ucli.Exit(fmt.Sprintf(
-			"--private-key-env: %q is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?",
-			cli.Redact(envVar, 4),
-		), 2)
-	}
-	return envVar, nil
 }

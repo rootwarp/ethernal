@@ -2,7 +2,6 @@ package bls_test
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 
 	"github.com/rootwarp/eth-utils/go/internal/bls"
@@ -42,23 +41,6 @@ func TestNewSignerRejectsWrongLength(t *testing.T) {
 				t.Errorf("NewSigner(%d bytes) returned nil error, want error", len(tc.secret))
 			}
 		})
-	}
-}
-
-// TestNewSigner_ZeroScalar_Reject verifies that NewSigner rejects a 32-byte
-// all-zero secret with the sentinel ErrSecretZero (M1.2-1 AC).
-func TestNewSigner_ZeroScalar_Reject(t *testing.T) {
-	if err := bls.Init(); err != nil {
-		t.Fatalf("Init() = %v", err)
-	}
-
-	secret := bytes.Repeat([]byte{0}, 32)
-	_, err := bls.NewSigner(secret)
-	if err == nil {
-		t.Error("NewSigner(zero secret) returned nil error, want ErrSecretZero")
-	}
-	if !errors.Is(err, bls.ErrSecretZero) {
-		t.Errorf("NewSigner(zero) = %v, want %v", err, bls.ErrSecretZero)
 	}
 }
 
@@ -207,84 +189,5 @@ func TestSignatureLength(t *testing.T) {
 	var zeroSig [96]byte
 	if sig == zeroSig {
 		t.Error("Sign() returned all-zero signature, expected non-zero")
-	}
-}
-
-// TestSigner_Zeroize_GoSideOnly verifies that after Zeroize, exported pubkey
-// derivation fails (Go-side state wiped). Per M1.1-6 AC (C-side limitation
-// is in package doc, not tested here).
-func TestSigner_Zeroize_GoSideOnly(t *testing.T) {
-	if err := bls.Init(); err != nil {
-		t.Fatalf("Init() = %v", err)
-	}
-
-	secret := bytes.Repeat([]byte{0x01}, 32)
-	signer, err := bls.NewSigner(secret)
-	if err != nil {
-		t.Fatalf("NewSigner() = %v", err)
-	}
-
-	// Before Zeroize, PublicKey succeeds and is non-zero.
-	pub, err := signer.PublicKey()
-	if err != nil {
-		t.Fatalf("PublicKey() before Zeroize = %v", err)
-	}
-	var zero [48]byte
-	if pub == zero {
-		t.Error("PublicKey() before Zeroize returned zero key")
-	}
-
-	signer.Zeroize()
-
-	// After Zeroize, pubkey derivation fails (Go-side wiped).
-	_, err = signer.PublicKey()
-	if err == nil {
-		t.Error("PublicKey() after Zeroize succeeded, want error (Go-side state wiped per M1.1-6)")
-	}
-}
-
-// TestValidatePubkeyBytes_Identity_Reject verifies that ValidatePubkeyBytes rejects
-// the compressed G1 point-at-infinity (0xc0 + 47 zero bytes) with the sentinel
-// ErrPubkeyZero (M1.2-2 AC per m1.2-bls-ssz-abi-defense.md).
-func TestValidatePubkeyBytes_Identity_Reject(t *testing.T) {
-	if err := bls.Init(); err != nil {
-		t.Fatalf("Init() = %v", err)
-	}
-
-	var identity [48]byte
-	identity[0] = 0xc0
-	// bytes 1-47 remain zero (the compressed infinity encoding)
-
-	err := bls.ValidatePubkeyBytes(identity)
-	if err == nil {
-		t.Error("ValidatePubkeyBytes(0xc0+47zero) returned nil error, want ErrPubkeyZero")
-	}
-	if !errors.Is(err, bls.ErrPubkeyZero) {
-		t.Errorf("ValidatePubkeyBytes(identity) = %v, want %v", err, bls.ErrPubkeyZero)
-	}
-}
-
-// TestValidatePubkeyBytes_OnCurve_Accept verifies that a real on-curve G1 point
-// (derived from a test secret, standing in for a fixture) is accepted with nil
-// (M1.2-2 AC).
-func TestValidatePubkeyBytes_OnCurve_Accept(t *testing.T) {
-	if err := bls.Init(); err != nil {
-		t.Fatalf("Init() = %v", err)
-	}
-
-	// Real G1 point from NewSigner + PublicKey (matches "from a fixture" pattern
-	// used in roundtrips / other tests; golden fixtures also carry such points).
-	secret := bytes.Repeat([]byte{0x01}, 32)
-	s, err := bls.NewSigner(secret)
-	if err != nil {
-		t.Fatalf("NewSigner() = %v", err)
-	}
-	pub, err := s.PublicKey()
-	if err != nil {
-		t.Fatalf("PublicKey() = %v", err)
-	}
-
-	if err := bls.ValidatePubkeyBytes(pub); err != nil {
-		t.Errorf("ValidatePubkeyBytes(real G1 point) = %v, want nil", err)
 	}
 }

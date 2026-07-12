@@ -22,13 +22,11 @@ transaction:
 7. [Step 4 — Broadcast (optional) (`eth-deposit send`)](#step-4--broadcast-optional-eth-deposit-send)
 8. [Convenience: `eth-deposit run` (build + sign in one shot)](#convenience-eth-deposit-run-build--sign-in-one-shot)
 9. [Air-gapped workflow](#air-gapped-workflow)
-10. [Mainnet ceremony](#mainnet-ceremony)
-11. [Networks](#networks)
-12. [Exit codes](#exit-codes)
-13. [Security](#security)
-14. [Recipes](#recipes)
-15. [Troubleshooting](#troubleshooting)
-16. [Maintainer](#maintainer)
+10. [Networks](#networks)
+11. [Exit codes](#exit-codes)
+12. [Security](#security)
+13. [Recipes](#recipes)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -157,7 +155,6 @@ eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-di
 | `--json-logs` | Emit logs as JSON objects | `false` |
 | `--verify-with-deposit-cli` | Cross-check output with `staking-deposit-cli >= 2.7.0` | `false` |
 | `--deposit-cli-path PATH` | Path to `deposit` binary for verification | `deposit` (PATH) |
-| `--withdrawal-prefix 0x01|0x02` | 0x01 (standard) or 0x02 (EIP-7251 compounding) for --withdrawal-address | `0x01` |
 
 ### Example — Hoodi single validator
 
@@ -169,10 +166,8 @@ export KEYSTORE_PASS=my-keystore-passphrase
   --keystore-dir ./keystores/ \
   --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
   --output-dir ./out \
-  --passphrase-env KEYSTORE_PASS \
-  --withdrawal-prefix 0x01
+  --passphrase-env KEYSTORE_PASS
 ```
-(For EIP-7251 0x02 compounding use `--withdrawal-prefix 0x02 --withdrawal-address ...`; amount range 32-2048 ETH honored in Validate paths per M2.4-1.)
 
 ### Example — multiple validators, parallel signing
 
@@ -215,19 +210,18 @@ Without the flag, `--network mainnet` exits with code 2.
 ```json
 [
   {
-    "pubkey": "8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9",
-    "withdrawal_credentials": "0100000000000000000000005aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+    "pubkey": "8420...",
+    "withdrawal_credentials": "01000...",
     "amount": 32000000000,
-    "signature": "a9e7b4e88886658acb53d72eb454ee8f108a1380db95155b1d871145944669a10bd073ee38d71489775a7a78364918810f1e1cb8888c1d6dade3fa2670bdd558e325d1f4626da66127321d160c07ef5866a7828d9978d8a2723d01476d4e5717",
-    "deposit_message_root": "3e320f9b0a2c6e33536764bc0f7c332e5241ad96d9b8c9a3ea3de15512a964c7",
-    "deposit_data_root": "cd59791bcc14902cae86760c9e87842517d511b8a6a935887f2d319c976b46a8",
+    "signature": "...",
+    "deposit_message_root": "...",
+    "deposit_data_root": "...",
     "fork_version": "10000910",
     "network_name": "hoodi",
     "deposit_cli_version": "2.7.0"
   }
 ]
 ```
-(The concrete bytes above are from the regenerated `testdata/hoodi/deposit_data-expected.json` post-M0.10 refresh; real runs produce `deposit_data-<RFC3339Nano>-<sha256[:4]>.json`.)
 
 ---
 
@@ -263,7 +257,7 @@ Air-gapped build (all values explicit):
 ```bash
 ./bin/eth-deposit build \
   --network hoodi \
-  --input-file ./out/deposit_data-2026-06-07T06:11:44.170453Z-4f7dc6a8.json \
+  --input-file ./out/deposit_data-1716000000.json \
   --gas-limit 300000 \
   --max-fee-per-gas 30000000000 \
   --max-priority-fee-per-gas 2000000000 \
@@ -534,74 +528,6 @@ The two-phase design supports air-gapping the signing machine entirely:
    ```
 
 Neither artifact contains the private key. The Ledger never exports the key. Note that a merged `eth-deposit` binary on the air-gapped machine also carries the `gen`/`build`/`send` code paths it isn't using there — see `CHANGELOG.md` for that tradeoff.
-
----
-
-## Mainnet ceremony
-
-**v1.0 mainnet safeguard (M1.6).** Requires `--confirm-network=mainnet` (build/run: must equal --network; send derives from declared/RLP+RPC post-validateSignedAgainstRLP+guard (send.go:215-257,259-282; no --network flag on send; pre-val only syntax in LoadSend per comment 262-263); `--yes` does not bypass) plus (for local signer) `--i-accept-local-signer-on-mainnet`. Pre-validated in Load*Config (M1.6-3; build/run). Generator side still needs `--i-understand-this-is-mainnet`.
-
-(MIGRATION.md v0.2 → v1.0 section planned; M1.8-2 was CHANGELOG only.)
-
-Worked example (uses M1.6 flag set; minimal run+send to demo gate+RLP; build confirm pre-val symmetric per config.go:99-101; use `go run ./cmd/eth-deposit-tx` or rebuild for --help match; tree bin/ may be pre-M1.6):
-
-```bash
-# Step 1 (gen)
-export KEYSTORE_PASS=...
-./bin/eth-deposit-gen --network mainnet --i-understand-this-is-mainnet \
-  --keystore-dir ./keystores/ --pubkeys 0x... --output-dir ./out \
-  --passphrase-env KEYSTORE_PASS
-unset KEYSTORE_PASS
-
-export ETH_DEPOSIT_TX_PRIVATE_KEY=0x...
-
-# Step 2 (run: exercises confirm pre-val + local-mainnet gate + warning)
-./bin/eth-deposit-tx run \
-  --network mainnet \
-  --confirm-network mainnet \
-  --i-accept-local-signer-on-mainnet \
-  --signer local \
-  --input-file ./out/deposit_data-*.json \
-  --nonce 0 \
-  --output ./out/signed_tx.json
-
-unset ETH_DEPOSIT_TX_PRIVATE_KEY
-
-# Step 3 (send: prompt rendered from decoded RLP values + confirm gate)
-./bin/eth-deposit-tx send \
-  --input ./out/signed_tx.json \
-  --rpc-url https://your-mainnet-rpc \
-  --confirm-network mainnet \
-  --wait-for-receipt
-```
-
-Local gate warning (printed by run/sign for local+mainnet):
-
-```
-WARNING: --signer local combined with --network mainnet
-The local signer reads your private key from an environment variable.
-This key is visible to other processes, shell history, and core dumps.
-A mainnet deposit irreversibly locks 32 ETH. Ledger is the documented mainnet-safe path.
-If you accept the risk, the flag was already supplied; proceeding.
-```
-
-Send confirmation prompt (values + labels from decoded RLP after validateSignedAgainstRLP + guard):
-
-```
-> You are about to BROADCAST a 32 ETH deposit transaction.
->   Network:        mainnet (chain ID 1)
->   From:           0x...
->   To (deposit):   0x00000000219ab540356cBB839Cbe05303d7705Fa (decoded from RLP)
->   Value:          32.000000 ETH (decoded from RLP)
->   Nonce:          0 (decoded from RLP)
->   MaxFeePerGas:   20.000000 Gwei (decoded from RLP)
->   Tx hash:        0x... (decoded from RLP)
->
-> Type the network name to confirm:
-mainnet
-```
-
-(Ledger mainnet: use `--signer ledger`, omit `--i-accept-local-signer-on-mainnet`.)
 
 ---
 

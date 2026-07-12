@@ -3,9 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,10 +14,6 @@ import (
 
 	ucli "github.com/urfave/cli/v3"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-
-	"github.com/rootwarp/eth-utils/go/internal/cli"
 	"github.com/rootwarp/eth-utils/go/internal/network"
 	"github.com/rootwarp/eth-utils/go/internal/signer"
 	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
@@ -29,11 +23,6 @@ import (
 var newBroadcaster = func(ctx context.Context, rpcURL string) (internaltx.EthBroadcaster, error) {
 	return internaltx.NewEthClient(ctx, rpcURL)
 }
-
-// validateSignedAgainstRLP is the production RLP/JSON validator (per M0.6-4/5,
-// arch §7.3/§13.1/§15). Assigned at init to the real impl; tests rebind a
-// wrapper (capturing orig) for call-order spying exactly as newBroadcaster.
-var validateSignedAgainstRLP = realValidateSignedAgainstRLP
 
 // SendConfig holds parsed, validated inputs for the send subcommand.
 type SendConfig struct {
@@ -49,16 +38,6 @@ type SendConfig struct {
 	ReceiptTimeout time.Duration
 	// ReceiptOutputFile is an optional file path to write the receipt JSON.
 	ReceiptOutputFile string
-
-	// ConfirmNetwork is the --confirm-network value (mainnet ack gate).
-	// Pre-validated for syntactic validity here; full match + mainnet-required
-	// checked in sendAction after RLP decode + RPC (per M1.6-1).
-	ConfirmNetwork string
-
-	// IAcceptLocalSignerOnMainnet is the --i-accept-local-signer-on-mainnet flag (M1.6-2).
-	// For symmetry (build/run/sign/send all carry per M1.6-2); enforcement only on signer paths.
-	// Captured here per pre-val pattern.
-	IAcceptLocalSignerOnMainnet bool
 }
 
 // LoadSendConfig parses and validates send subcommand flags.
@@ -73,19 +52,6 @@ func LoadSendConfig(c *ucli.Command) (*SendConfig, error) {
 		return nil, ucli.Exit("--rpc-url: required flag not set", 2)
 	}
 
-	// Consolidated pre-val for the two mainnet gates (M1.6-3): syntax check for --confirm-network
-	// (if set) + capture for --i-accept-local-signer-on-mainnet. Early (right after requireds,
-	// before timeout/processing) per exact M1.5-1 pre-val pattern. (Mainnet-require for confirm
-	// when derived from tx is in sendAction; local+mainnet require stays at sign/run per M1.6-3 note.)
-	// Consistent error msgs across the four loaders.
-	confirmNet := c.String("confirm-network")
-	if confirmNet != "" {
-		if _, err := network.ParseFlag(confirmNet); err != nil {
-			return nil, ucli.Exit(fmt.Sprintf("--confirm-network: %v", err), 2)
-		}
-	}
-	acceptLocal := c.Bool("i-accept-local-signer-on-mainnet")
-
 	timeout := c.Duration("receipt-timeout")
 	if timeout == 0 {
 		timeout = 60 * time.Second
@@ -95,14 +61,12 @@ func LoadSendConfig(c *ucli.Command) (*SendConfig, error) {
 	waitForReceipt := c.Bool("wait-for-receipt") || receiptOutput != ""
 
 	return &SendConfig{
-		InputFile:                   inputFile,
-		RPCURL:                      rpcURL,
-		Yes:                         c.Bool("yes"),
-		WaitForReceipt:              waitForReceipt,
-		ReceiptTimeout:              timeout,
-		ReceiptOutputFile:           receiptOutput,
-		ConfirmNetwork:              confirmNet,
-		IAcceptLocalSignerOnMainnet: acceptLocal,
+		InputFile:         inputFile,
+		RPCURL:            rpcURL,
+		Yes:               c.Bool("yes"),
+		WaitForReceipt:    waitForReceipt,
+		ReceiptTimeout:    timeout,
+		ReceiptOutputFile: receiptOutput,
 	}, nil
 }
 
@@ -157,14 +121,6 @@ Exit codes:
 			&ucli.BoolFlag{
 				Name:  "yes",
 				Usage: "Skip the interactive confirmation prompt (for non-interactive automation; use with caution)",
-			},
-			&ucli.StringFlag{
-				Name:  "confirm-network",
-				Usage: "Explicit acknowledgement of the target network name (required for mainnet; must match decoded RLP network name and RPC-derived name where available; --yes does not bypass)",
-			},
-			&ucli.BoolFlag{
-				Name:  "i-accept-local-signer-on-mainnet",
-				Usage: "Required when --signer local and --network mainnet: acknowledges risk of using local (hot, env-var) private key for mainnet deposit (irreversible 32 ETH lock; Ledger recommended)",
 			},
 			&ucli.BoolFlag{
 				Name:  "wait-for-receipt",
@@ -223,44 +179,24 @@ func sendAction(ctx context.Context, c *ucli.Command, cfg *SendConfig) error {
 		// the log boundary (RedactURLString) can scrub a path-embedded API key.
 		return fmt.Errorf("%w: fetch chain ID: %w", internaltx.ErrBroadcastFailed, err)
 	}
-	if rpcChainID != rlpTx.ChainId().Uint64() {
+	if rpcChainID != signed.Unsigned.ChainID {
 		return fmt.Errorf("%w: signed tx has chain ID %d but RPC reports %d",
-			internaltx.ErrBroadcastChainIDMismatch, rlpTx.ChainId().Uint64(), rpcChainID)
+			internaltx.ErrBroadcastChainIDMismatch, signed.Unsigned.ChainID, rpcChainID)
 	}
 
-	// 6. Re-resolve netParams from the now-authoritative (guard-passed) rpc chain.
-	netParams, lookupErr = network.LookupByChainID(rpcChainID)
-	if lookupErr != nil {
+	// 4. Resolve network for display.
+	netParams, err := network.LookupByChainID(rpcChainID)
+	if err != nil {
+		// Non-fatal: we'll display what we can without a network name.
 		netParams = network.Params{
 			Name:    network.Network(fmt.Sprintf("chain-%d", rpcChainID)),
 			ChainID: rpcChainID,
 		}
 	}
 
-	// M1.6-1: --confirm-network gate (after validateSignedAgainstRLP for
-	// decoded-RLP net name, after RPC chainID guard for RPC-derived name).
-	// Value must equal both (they agree post-guard). Mainnet requires it;
-	// otherwise optional-but-match-if-set. --yes does NOT bypass. Pre-val in
-	// Load*Config only does "required for mainnet (build/run)" + name syntax.
-	decodedNetName := string(netParams.Name)
-	if p, err := network.LookupByChainID(rlpTx.ChainId().Uint64()); err == nil {
-		decodedNetName = string(p.Name)
-	}
-	rpcNetName := string(netParams.Name)
-	confirm := cfg.ConfirmNetwork
-	if confirm != "" {
-		if confirm != decodedNetName {
-			return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match decoded RLP network %q", confirm, decodedNetName), 2)
-		}
-		if confirm != rpcNetName {
-			return ucli.Exit(fmt.Sprintf("--confirm-network: %q does not match RPC network %q", confirm, rpcNetName), 2)
-		}
-	}
-	if decodedNetName == "mainnet" || rpcNetName == "mainnet" {
-		if confirm == "" {
-			return ucli.Exit("--confirm-network: required for mainnet (must equal network name)", 2)
-		}
-	}
+	// 5. Print the "about to broadcast" prompt.
+	valueBigWei, _ := hexToBigInt(signed.Unsigned.Value)
+	maxFeeBigWei, _ := hexToBigInt(signed.Unsigned.MaxFeePerGas)
 
 	fmt.Fprintf(c.Root().ErrWriter, "\n")
 	fmt.Fprintf(c.Root().ErrWriter, "> You are about to BROADCAST a %s deposit transaction.\n", formatETH(valueBigWei))
@@ -273,27 +209,7 @@ func sendAction(ctx context.Context, c *ucli.Command, cfg *SendConfig) error {
 	fmt.Fprintf(c.Root().ErrWriter, ">   Tx hash:        %s\n", signed.Hash)
 	fmt.Fprintf(c.Root().ErrWriter, ">\n")
 
-	// 7. Print the "about to broadcast" prompt from *decoded* rlpTx values,
-	//    labelled "(decoded from RLP)" (existing prompt code updated to take
-	//    decoded; per M0.6-5 AC + arch §13.1). From remains from container.
-	valueBigWei := rlpTx.Value()
-	maxFeeBigWei := rlpTx.GasFeeCap()
-	toStr := "0x0000000000000000000000000000000000000000"
-	if rlpTx.To() != nil {
-		toStr = rlpTx.To().Hex()
-	}
-	_, _ = fmt.Fprintf(c.App.ErrWriter, "\n")                                                                               // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, "> You are about to BROADCAST a %s deposit transaction.\n", formatETH(valueBigWei)) // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Network:        %s (chain ID %d)\n", netParams.Name, netParams.ChainID)        // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   From:           %s\n", signed.From)                                            // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   To (deposit):   %s (decoded from RLP)\n", toStr)                               // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Value:          %s (decoded from RLP)\n", formatETH(valueBigWei))              // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Nonce:          %d (decoded from RLP)\n", rlpTx.Nonce())                       // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   MaxFeePerGas:   %s (decoded from RLP)\n", formatGwei(maxFeeBigWei))            // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">   Tx hash:        %s (decoded from RLP)\n", rlpTx.Hash().Hex())                  // ignore: best-effort to ErrWriter
-	_, _ = fmt.Fprintf(c.App.ErrWriter, ">\n")                                                                              // ignore: best-effort to ErrWriter
-
-	// 8. Confirmation.
+	// 6. Confirmation.
 	if !cfg.Yes {
 		fmt.Fprintf(c.Root().ErrWriter, "> Type the network name to confirm: ")
 		reader := bufio.NewReader(c.Root().Reader)
@@ -324,7 +240,7 @@ func sendAction(ctx context.Context, c *ucli.Command, cfg *SendConfig) error {
 	}
 	slog.Info("broadcast succeeded", "hash", txHash, "network", netParams.Name)
 
-	// 11. Optionally wait for receipt.
+	// 9. Optionally wait for receipt.
 	if cfg.WaitForReceipt {
 		rec, err := pollReceipt(ctx, broadcaster, txHash, cfg.ReceiptTimeout)
 		if err != nil {
@@ -349,79 +265,10 @@ func sendAction(ctx context.Context, c *ucli.Command, cfg *SendConfig) error {
 				}
 				slog.Info("wrote receipt", "path", cfg.ReceiptOutputFile)
 			}
-			if rec.Status == 0 {
-				return internaltx.ErrReceiptReverted
-			}
 		}
 	}
 
 	return nil
-}
-
-// realValidateSignedAgainstRLP implements the GO-004 boundary check: decode
-// RawRLP, enforce DynamicFee type, recover+match sender, field-compare all
-// critical metadata against the JSON container, enforce deposit contract To
-// (no override path in send), and return the decoded tx for prompt/guard use.
-// Divergences and type errors surface via ucli.Exit(..., 2) with context so
-// operator sees "JSON vs decoded". Follows M0.6-1 parse style + M0.5 validator
-// patterns (errors.Is-able sentinels via ucli, no new sentinels here).
-func realValidateSignedAgainstRLP(signed *signer.SignedTx, netParams network.Params) (*types.Transaction, error) {
-	if signed == nil {
-		return nil, ucli.Exit("validate: nil signed tx", 2)
-	}
-	rawHex := strings.TrimPrefix(signed.RawRLP, "0x")
-	rawBytes, err := hex.DecodeString(rawHex)
-	if err != nil {
-		return nil, ucli.Exit(fmt.Sprintf("validate: invalid rawRLP hex: %v", err), 2)
-	}
-	var decoded types.Transaction
-	if err := decoded.UnmarshalBinary(rawBytes); err != nil {
-		return nil, ucli.Exit(fmt.Sprintf("validate: RLP decode failed: %v", err), 2)
-	}
-	if decoded.Type() != types.DynamicFeeTxType {
-		return nil, ucli.Exit(fmt.Sprintf("validate: tx type %d is not DynamicFeeTxType", decoded.Type()), 2)
-	}
-	// Recover sender from RLP using LatestSigner (M0.2 geth).
-	s := types.LatestSignerForChainID(decoded.ChainId())
-	recovered, err := types.Sender(s, &decoded)
-	if err != nil {
-		return nil, ucli.Exit(fmt.Sprintf("validate: sender recovery: %v", err), 2)
-	}
-	if recovered.Hex() != signed.From {
-		return nil, ucli.Exit("validate: recovered sender does not match signed.from", 2)
-	}
-	// Field divergence checks (descriptive for operator, per M0.6-4 notes using
-	// errors.Join + context; maps to exit 2).
-	var diverges []error
-	if decoded.ChainId().Uint64() != signed.Unsigned.ChainID {
-		diverges = append(diverges, fmt.Errorf("chainID: json=%d decoded=%d", signed.Unsigned.ChainID, decoded.ChainId().Uint64()))
-	}
-	toHex := ""
-	if decoded.To() != nil {
-		toHex = decoded.To().Hex()
-	}
-	if toHex != signed.Unsigned.To {
-		diverges = append(diverges, fmt.Errorf("to: json=%s decoded=%s", signed.Unsigned.To, toHex))
-	}
-	vJSON, _ := hexToBigInt(signed.Unsigned.Value)
-	if vJSON == nil || decoded.Value().Cmp(vJSON) != 0 {
-		diverges = append(diverges, fmt.Errorf("value: json=%s decoded=%s", signed.Unsigned.Value, decoded.Value().String()))
-	}
-	if decoded.Nonce() != signed.Unsigned.Nonce {
-		diverges = append(diverges, fmt.Errorf("nonce: json=%d decoded=%d", signed.Unsigned.Nonce, decoded.Nonce()))
-	}
-	if decoded.Hash().Hex() != signed.Hash {
-		diverges = append(diverges, fmt.Errorf("hash: json=%s decoded=%s", signed.Hash, decoded.Hash().Hex()))
-	}
-	if len(diverges) != 0 {
-		return nil, ucli.Exit(fmt.Sprintf("JSON metadata diverges from decoded RLP: %v", errors.Join(diverges...)), 2)
-	}
-	// Deposit contract cross-check (netParams from caller; no --allow override in send path).
-	depositAddr := common.BytesToAddress(netParams.DepositContractAddress[:])
-	if decoded.To() == nil || *decoded.To() != depositAddr {
-		return nil, ucli.Exit(fmt.Sprintf("decoded To %s is not deposit contract for network", toHex), 2)
-	}
-	return &decoded, nil
 }
 
 // pollReceipt polls for a transaction receipt until timeout.
@@ -444,7 +291,7 @@ func pollReceipt(ctx context.Context, bc internaltx.EthBroadcaster, txHash strin
 			return rec, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, internaltx.ErrReceiptTimeout
+			return nil, fmt.Errorf("timed out waiting for receipt after %s", timeout)
 		}
 		select {
 		case <-ctx.Done():

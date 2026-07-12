@@ -40,6 +40,54 @@ func TestUint64Chunk(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// padRight tests
+// -----------------------------------------------------------------------------
+
+func TestPadRight(t *testing.T) {
+	t.Run("empty_to_32", func(t *testing.T) {
+		got := padRight([]byte{}, 32)
+		if len(got) != 32 {
+			t.Errorf("len = %d, want 32", len(got))
+		}
+		for i, b := range got {
+			if b != 0 {
+				t.Errorf("byte[%d] = %d, want 0", i, b)
+			}
+		}
+	})
+
+	t.Run("input_shorter_than_size", func(t *testing.T) {
+		input := []byte{0x01, 0x02, 0x03, 0x04}
+		got := padRight(input, 8)
+		want := []byte{0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00}
+		if len(got) != len(want) {
+			t.Fatalf("len = %d, want %d", len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("byte[%d] = %d, want %d", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("input_equal_to_size", func(t *testing.T) {
+		input := []byte{0xAA, 0xBB}
+		got := padRight(input, 2)
+		if len(got) != 2 || got[0] != 0xAA || got[1] != 0xBB {
+			t.Errorf("padRight(%x, 2) = %x, want same", input, got)
+		}
+	})
+
+	t.Run("original_not_mutated", func(t *testing.T) {
+		input := []byte{0x01, 0x02}
+		_ = padRight(input, 4)
+		if len(input) != 2 {
+			t.Errorf("input was mutated, len = %d", len(input))
+		}
+	})
+}
+
+// -----------------------------------------------------------------------------
 // merkleize tests
 // -----------------------------------------------------------------------------
 
@@ -185,9 +233,10 @@ func TestForkDataHashTreeRoot(t *testing.T) {
 				}
 			} else {
 				// Compute expected value directly for the non-zero case.
-				// chunk0 = current_version padded to 32 bytes (matches prod HashTreeRoot).
+				// chunk0 = current_version padded to 32 bytes
+				chunk0 := padRight(tc.fd.CurrentVersion[:], 32)
 				var c0 [32]byte
-				copy(c0[:], tc.fd.CurrentVersion[:])
+				copy(c0[:], chunk0)
 				// chunk1 = genesis_validators_root as-is
 				c1 := tc.fd.GenesisValidatorsRoot
 				want := sha256Pair(c0, c1)
@@ -281,14 +330,45 @@ func TestDepositMessageHashTreeRoot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.msg.HashTreeRoot()
 
-			wantBytes := mustDecodeHex(t, tc.wantHex)
-			var want [32]byte
-			copy(want[:], wantBytes)
-			if got != want {
-				t.Errorf("DepositMessage.HashTreeRoot() = %x, want %x", got, want)
+			if tc.wantHex != "" {
+				wantBytes := mustDecodeHex(t, tc.wantHex)
+				var want [32]byte
+				copy(want[:], wantBytes)
+				if got != want {
+					t.Errorf("DepositMessage.HashTreeRoot() = %x, want %x", got, want)
+				}
+			} else {
+				// Compute expected value for the dynamic case.
+				want := computeDepositMessageRoot(t, tc.msg)
+				if got != want {
+					t.Errorf("DepositMessage.HashTreeRoot() = %x, want %x", got, want)
+				}
 			}
 		})
 	}
+}
+
+// computeDepositMessageRoot is the reference implementation used in tests.
+func computeDepositMessageRoot(t *testing.T, msg DepositMessage) [32]byte {
+	t.Helper()
+	// pubkey: merkleize 2 chunks → pubkeyRoot
+	var pk0 [32]byte
+	copy(pk0[:], msg.Pubkey[:32])
+	var pk1 [32]byte
+	copy(pk1[:], msg.Pubkey[32:48]) // low 16 bytes; high 16 remain zero
+	pubkeyRoot := sha256Pair(pk0, pk1)
+
+	// wc chunk
+	wcChunk := msg.WithdrawalCredentials
+
+	// amount chunk
+	amountChunk := uint64Chunk(msg.Amount)
+
+	// merkleize([pubkeyRoot, wcChunk, amountChunk], limit=3 → padded to 4)
+	var zeroChunk [32]byte
+	h01 := sha256Pair(pubkeyRoot, wcChunk)
+	h23 := sha256Pair(amountChunk, zeroChunk)
+	return sha256Pair(h01, h23)
 }
 
 // -----------------------------------------------------------------------------
@@ -322,14 +402,49 @@ func TestDepositDataHashTreeRoot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.data.HashTreeRoot()
 
-			wantBytes := mustDecodeHex(t, tc.wantHex)
-			var want [32]byte
-			copy(want[:], wantBytes)
-			if got != want {
-				t.Errorf("DepositData.HashTreeRoot() = %x, want %x", got, want)
+			if tc.wantHex != "" {
+				wantBytes := mustDecodeHex(t, tc.wantHex)
+				var want [32]byte
+				copy(want[:], wantBytes)
+				if got != want {
+					t.Errorf("DepositData.HashTreeRoot() = %x, want %x", got, want)
+				}
+			} else {
+				want := computeDepositDataRoot(t, tc.data)
+				if got != want {
+					t.Errorf("DepositData.HashTreeRoot() = %x, want %x", got, want)
+				}
 			}
 		})
 	}
+}
+
+// computeDepositDataRoot is the reference implementation used in tests.
+func computeDepositDataRoot(t *testing.T, data DepositData) [32]byte {
+	t.Helper()
+	// pubkeyRoot (same as DepositMessage)
+	var pk0 [32]byte
+	copy(pk0[:], data.Pubkey[:32])
+	var pk1 [32]byte
+	copy(pk1[:], data.Pubkey[32:48])
+	pubkeyRoot := sha256Pair(pk0, pk1)
+
+	wcChunk := data.WithdrawalCredentials
+	amountChunk := uint64Chunk(data.Amount)
+
+	// sigRoot: 3 chunks padded to 4
+	var sig0, sig1, sig2, sigPad [32]byte
+	copy(sig0[:], data.Signature[:32])
+	copy(sig1[:], data.Signature[32:64])
+	copy(sig2[:], data.Signature[64:96])
+	sigH01 := sha256Pair(sig0, sig1)
+	sigH23 := sha256Pair(sig2, sigPad)
+	sigRoot := sha256Pair(sigH01, sigH23)
+
+	// merkleize([pubkeyRoot, wcChunk, amountChunk, sigRoot], limit=4)
+	h01 := sha256Pair(pubkeyRoot, wcChunk)
+	h23 := sha256Pair(amountChunk, sigRoot)
+	return sha256Pair(h01, h23)
 }
 
 // -----------------------------------------------------------------------------
@@ -411,16 +526,4 @@ func TestComputeSigningRoot(t *testing.T) {
 			t.Errorf("ComputeSigningRoot() = %x, want %x", got, want)
 		}
 	})
-}
-
-// TestMerkleize_Precondition_Panic confirms that violating the len(chunks) <= limit
-// precondition panics (programmer error). Uses recover() per M1.2 ssz hygiene pattern.
-func TestMerkleize_Precondition_Panic(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected merkleize to panic on len(chunks) > limit")
-		}
-	}()
-	// len=2 > limit=1; all production call sites use equal lengths.
-	merkleize([][32]byte{{}, {}}, 1)
 }

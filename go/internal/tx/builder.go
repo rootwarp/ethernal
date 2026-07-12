@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math/big"
 
 	"github.com/rootwarp/eth-utils/go/internal/deposit"
@@ -14,17 +13,18 @@ import (
 // ErrNilContext is returned when BuildUnsigned is called with a nil context.
 var ErrNilContext = errors.New("context must not be nil")
 
-// ErrInvalidAmount is returned when the deposit entry amount is not exactly 32 ETH (MinDepositAmountGwei Gwei).
+// ErrInvalidAmount is returned when the deposit entry amount is not exactly 32 ETH (32_000_000_000 Gwei).
 // Only the 32 ETH first-deposit case is supported in Phase 2.
-var ErrInvalidAmount = errors.New("deposit amount must be exactly MinDepositAmountGwei Gwei (32 ETH)")
+var ErrInvalidAmount = errors.New("deposit amount must be exactly 32_000_000_000 Gwei (32 ETH)")
 
 // value32ETH is 32 ETH expressed in wei (32 * 10^18 = 0x1bc16d674ec800000).
 var value32ETH = new(big.Int).Mul(big.NewInt(32), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
 
-// Builder constructs unsigned EIP-1559 deposit transactions (concrete, no interface indirection).
-type Builder struct {
-	logger *slog.Logger
-}
+// Builder is the concrete implementation of TxBuilder.
+type Builder struct{}
+
+// compile-time assertion that *Builder satisfies TxBuilder.
+var _ TxBuilder = (*Builder)(nil)
 
 // NewBuilder creates a new Builder.
 func NewBuilder() *Builder {
@@ -50,7 +50,7 @@ func (b *Builder) BuildUnsigned(ctx context.Context, entry deposit.Entry, cfg Bu
 	}
 
 	// Resolve or validate gas/fee/nonce fields.
-	gasLimit, maxFee, tip, nonce, err := resolveFields(ctx, cfg, entry, b.logger)
+	gasLimit, maxFee, tip, nonce, err := resolveFields(ctx, cfg, entry)
 	if err != nil {
 		return nil, err
 	}
@@ -74,11 +74,11 @@ func (b *Builder) BuildUnsigned(ctx context.Context, entry deposit.Entry, cfg Bu
 // When cfg.RPC is nil it validates that all fields are statically provided.
 // When cfg.RPC is non-nil it fetches any missing values and optionally verifies
 // that the RPC's chain ID matches the configured network.
-func resolveFields(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logger *slog.Logger) (gasLimit uint64, maxFee, tip *big.Int, nonce uint64, err error) {
+func resolveFields(ctx context.Context, cfg BuildConfig, entry deposit.Entry) (gasLimit uint64, maxFee, tip *big.Int, nonce uint64, err error) {
 	if cfg.RPC == nil {
 		return resolveStatic(cfg)
 	}
-	return resolveRPC(ctx, cfg, entry, logger)
+	return resolveRPC(ctx, cfg, entry)
 }
 
 func resolveStatic(cfg BuildConfig) (uint64, *big.Int, *big.Int, uint64, error) {
@@ -88,26 +88,18 @@ func resolveStatic(cfg BuildConfig) (uint64, *big.Int, *big.Int, uint64, error) 
 	return cfg.GasLimit, cfg.MaxFeePerGas, cfg.MaxPriorityFeePerGas, *cfg.Nonce, nil
 }
 
-func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logger *slog.Logger) (gasLimit uint64, maxFee, tip *big.Int, nonce uint64, err error) {
-	// Optional: verify chain ID matches. Fail closed on RPC error or chainID 0 (M1.3-2).
-	rpcChainID, chainErr := cfg.RPC.ChainID(ctx)
-	if chainErr != nil {
-		if logger != nil {
-			logger.Warn("chain ID resolution from RPC failed; failing closed", "err", chainErr)
+func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry) (gasLimit uint64, maxFee, tip *big.Int, nonce uint64, err error) {
+	// Optional: verify chain ID matches.
+	if rpcChainID, chainErr := cfg.RPC.ChainID(ctx); chainErr == nil {
+		if rpcChainID != nil && rpcChainID.Sign() != 0 {
+			configured := new(big.Int).SetUint64(uint64(cfg.NetworkParams.ChainID))
+			if rpcChainID.Cmp(configured) != 0 {
+				return 0, nil, nil, 0, fmt.Errorf("%w: RPC=%s configured=%s",
+					ErrChainIDMismatch, rpcChainID, configured)
+			}
 		}
-		return 0, nil, nil, 0, ErrChainIDZero
 	}
-	if rpcChainID != nil && rpcChainID.Sign() == 0 {
-		if logger != nil {
-			logger.Warn("RPC returned chain ID zero; failing closed", "chainID", "0")
-		}
-		return 0, nil, nil, 0, ErrChainIDZero
-	}
-	configured := new(big.Int).SetUint64(uint64(cfg.NetworkParams.ChainID))
-	if rpcChainID.Cmp(configured) != 0 {
-		return 0, nil, nil, 0, fmt.Errorf("%w: RPC=%s configured=%s",
-			ErrChainIDMismatch, rpcChainID, configured)
-	}
+	// ChainID call errors are silently ignored (warn-and-continue semantics).
 
 	// Resolve priority fee (tip).
 	tip = cfg.MaxPriorityFeePerGas
@@ -145,10 +137,19 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 	// Resolve gas limit.
 	gasLimit = cfg.GasLimit
 	if gasLimit == 0 {
+		var toAddr [20]byte
+		contractHex := cfg.NetworkParams.DepositContractAddressHex()
+		if len(contractHex) >= 42 {
+			b, hErr := hex.DecodeString(contractHex[2:])
+			if hErr == nil && len(b) == 20 {
+				copy(toAddr[:], b)
+			}
+		}
+
 		calldata := PackDeposit(entry.Pubkey, entry.WithdrawalCredentials, entry.Signature, entry.DepositDataRoot)
 		msg := CallMsg{
 			From:  cfg.From,
-			To:    cfg.NetworkParams.DepositContractAddress,
+			To:    toAddr,
 			Value: value32ETH,
 			Data:  calldata,
 		}
@@ -156,15 +157,8 @@ func resolveRPC(ctx context.Context, cfg BuildConfig, entry deposit.Entry, logge
 		if eErr != nil {
 			return 0, nil, nil, 0, fmt.Errorf("%w: EstimateGas: %w", ErrRPCEstimation, eErr)
 		}
-		// Sanity-check ceiling (per architecture §6.8 / M1.3-3 impl notes): document
-		// guard against absurd RPC estimate for a deposit call. (Smallest change;
-		// no new error path or cap enforcement beyond the doc.)
-		const maxGasCap uint64 = 30_000_000
-		if estimate > maxGasCap {
-			// ceiling hit; proceed with pad (surfaces in tx or later failure)
-		}
-		// 20% safety margin: estimate + estimate/5 (avoids uint64 overflow near MaxUint64)
-		gasLimit = estimate + estimate/5
+		// 20% safety margin: estimate * 6 / 5
+		gasLimit = estimate * 6 / 5
 	}
 
 	return gasLimit, maxFee, tip, nonce, nil

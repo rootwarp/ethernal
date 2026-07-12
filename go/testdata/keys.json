@@ -1,6 +1,0 @@
-{
-  "withdrawal_address": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
-  "eth1_sender_private_key": "0x0000000000000000000000000000000000000000000000000000000000000001",
-  "bls_secret_hex": "6abbccddeeff11223344556677889900102030405060708090a0b0c0d0e0f001",
-  "_NOTE": "TEST-ONLY deterministic material (BLS secret + secp256k1 sender key + withdrawal address) for golden fixture regeneration (M0.10-1) and e2e tests per architecture §11.4. The BLS secret matches the hard-coded goldenSecret in test/e2e/hoodi_test.go so that pubkey/keystore stay stable across refreshes. MUST NEVER be used for real deposits on any live network (hoodi, mainnet, or otherwise)."
-}

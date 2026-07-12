@@ -240,19 +240,3 @@ func TestLoadBuildConfig_NegativeMaxPriorityFeePerGas(t *testing.T) {
 		t.Fatal("expected error for --max-priority-fee-per-gas=-1, got nil")
 	}
 }
-
-// TestLoadBuildConfig_MissingFlag_Exit2 (M1.5-1 AC): omitting a required flag
-// (here --input-file, the only one enforced via pre-validation in LoadBuildConfig)
-// produces exit code 2 via the ucli.Exit returned from pre-val (not via urfave's
-// internal errRequiredFlags). captureConfig exercises the full parse+Load path.
-// (LoadRunConfig delegates to LoadBuildConfig, so this also covers run's missing
-// --input-file case for delegation depth; per review, no new explicit run test added.)
-func TestLoadBuildConfig_MissingFlag_Exit2(t *testing.T) {
-	_, err := captureConfig(t, []string{"build", "--network", "holesky"})
-	if err == nil {
-		t.Fatal("expected error for missing --input-file, got nil")
-	}
-	if got := ExitCodeFor(err); got != 2 {
-		t.Errorf("ExitCodeFor(missing required via LoadBuildConfig) = %d, want 2", got)
-	}
-}

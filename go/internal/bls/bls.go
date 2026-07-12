@@ -2,11 +2,6 @@
 // github.com/herumi/bls-eth-go-binary. It owns the one-time process-global
 // initialisation of the herumi library and exposes the Signer and Verifier
 // interfaces used by the deposit pipeline.
-//
-// Zeroize on Signer (M1.1-6) wipes only the Go-side struct: s.sk = herumi.SecretKey{}.
-// Per ADR-006: no process exit leaves secret material in **Go-managed** memory
-// but herumi's C-side `mcl` scalar persists until process exit. Honest framing
-// per PRD §3.2 metric 12 and architecture §15 / §6.2 (see research/03 §4).
 package bls
 
 import (
@@ -14,17 +9,13 @@ import (
 	"fmt"
 	"sync"
 
-	herumi "github.com/herumi/bls-eth-go-binary/bls"
+	bls "github.com/herumi/bls-eth-go-binary/bls"
 )
 
 var (
 	initOnce sync.Once
 	initErr  error
 )
-
-// ErrSecretZero is returned by NewSigner when the 32-byte secret is the
-// all-zero scalar (after successful Deserialize). Per M1.2-1 / architecture §15 / GO-036.
-var ErrSecretZero = errors.New("bls: secret key is zero")
 
 // Init initialises the herumi BLS library for the BLS12-381 curve.
 // The explicit SetETHmode(EthModeDraft07) call is redundant with what herumi's
@@ -33,11 +24,11 @@ var ErrSecretZero = errors.New("bls: secret key is zero")
 // returns the result of the first call.
 func Init() error {
 	initOnce.Do(func() {
-		if err := herumi.Init(herumi.BLS12_381); err != nil {
+		if err := bls.Init(bls.BLS12_381); err != nil {
 			initErr = fmt.Errorf("bls: herumi Init: %w", err)
 			return
 		}
-		if err := herumi.SetETHmode(herumi.EthModeDraft07); err != nil {
+		if err := bls.SetETHmode(bls.EthModeDraft07); err != nil {
 			initErr = fmt.Errorf("bls: herumi SetETHmode: %w", err)
 		}
 	})
@@ -50,7 +41,6 @@ func Init() error {
 type Signer interface {
 	Sign(signingRoot [32]byte) (sig [96]byte, err error)
 	PublicKey() (pub [48]byte, err error)
-	Zeroize() // M1.1-6: Go-side only wipe per architecture §15 / §6.2
 }
 
 // Verifier can verify a BLS signature against a public key and signing root.
@@ -61,7 +51,7 @@ type Verifier interface {
 
 // signer is the unexported concrete implementation of Signer.
 type signer struct {
-	sk herumi.SecretKey
+	sk bls.SecretKey
 }
 
 // NewSigner constructs a Signer from a 32-byte BLS secret.
@@ -75,8 +65,7 @@ type signer struct {
 // loads it into herumi, and immediately zeroizes the local copy — but it
 // never modifies the caller's slice.
 //
-// Returns an error if len(secret) != 32, the secret is the zero scalar
-// (ErrSecretZero, per architecture §15 / M1.2-1), or herumi rejects the key material.
+// Returns an error if len(secret) != 32 or herumi rejects the key material.
 func NewSigner(secret []byte) (Signer, error) {
 	if err := Init(); err != nil {
 		return nil, fmt.Errorf("bls: not initialized: %w", err)
@@ -97,23 +86,17 @@ func NewSigner(secret []byte) (Signer, error) {
 
 	s := &signer{}
 	if err := s.sk.Deserialize(localCopy); err != nil {
-		return nil, fmt.Errorf("bls: deserialize failed")
-	}
-	if s.sk.IsZero() {
-		return nil, ErrSecretZero
+		return nil, fmt.Errorf("bls: Deserialize: %w", err)
 	}
 	return s, nil
 }
 
-// Sign hashes signingRoot via the ETH BLS ciphersuite and returns the 96-byte
+// Sign hashes msg via the ETH BLS ciphersuite and returns the 96-byte
 // compressed G2 signature.
 func (s *signer) Sign(signingRoot [32]byte) ([96]byte, error) {
-	if s.sk.IsZero() {
-		return [96]byte{}, errors.New("bls: signer zeroized (Go-side only)")
-	}
 	herSig := s.sk.SignByte(signingRoot[:])
 	if herSig == nil {
-		return [96]byte{}, errors.New("bls: signbyte returned nil")
+		return [96]byte{}, errors.New("bls: SignByte returned nil")
 	}
 	raw := herSig.Serialize()
 	if len(raw) != 96 {
@@ -126,12 +109,9 @@ func (s *signer) Sign(signingRoot [32]byte) ([96]byte, error) {
 
 // PublicKey returns the compressed 48-byte G1 public key for this signer.
 func (s *signer) PublicKey() ([48]byte, error) {
-	if s.sk.IsZero() {
-		return [48]byte{}, errors.New("bls: signer zeroized (Go-side only)")
-	}
 	pk := s.sk.GetPublicKey()
 	if pk == nil {
-		return [48]byte{}, errors.New("bls: getpublickey returned nil")
+		return [48]byte{}, errors.New("bls: GetPublicKey returned nil")
 	}
 	raw := pk.Serialize()
 	if len(raw) != 48 {
@@ -140,13 +120,6 @@ func (s *signer) PublicKey() ([48]byte, error) {
 	var out [48]byte
 	copy(out[:], raw)
 	return out, nil
-}
-
-// Zeroize wipes the Go-side herumi.SecretKey struct (per M1.1-6 / architecture §15).
-// The C-side mcl scalar inside herumi persists until process exit (ADR-006;
-// documented honestly per PRD §3.2 metric 12; see research/03 §4).
-func (s *signer) Zeroize() {
-	s.sk = herumi.SecretKey{}
 }
 
 // verifier is the unexported concrete implementation of Verifier.
@@ -165,12 +138,12 @@ func (v *verifier) Verify(pub [48]byte, signingRoot [32]byte, sig [96]byte) (boo
 	if err := Init(); err != nil {
 		return false, fmt.Errorf("bls: not initialized: %w", err)
 	}
-	var hPub herumi.PublicKey
+	var hPub bls.PublicKey
 	if err := hPub.Deserialize(pub[:]); err != nil {
 		return false, fmt.Errorf("bls: deserialize pubkey: %w", err)
 	}
 
-	var hSig herumi.Sign
+	var hSig bls.Sign
 	if err := hSig.Deserialize(sig[:]); err != nil {
 		return false, fmt.Errorf("bls: deserialize signature: %w", err)
 	}
@@ -178,29 +151,15 @@ func (v *verifier) Verify(pub [48]byte, signingRoot [32]byte, sig [96]byte) (boo
 	return hSig.VerifyByte(&hPub, signingRoot[:]), nil
 }
 
-// ErrPubkeyInvalid is returned by ValidatePubkeyBytes when the 48-byte
-// compressed point is not a valid BLS12-381 G1 point (off-curve, bad encoding,
-// etc.). Mirrors architecture §6.6 / §15; used by both deposit and tx layers
-// (M0 enables the check; M1.2-2 also rejects identity via ErrPubkeyZero).
-var ErrPubkeyInvalid = errors.New("bls: pubkey is not a valid G1 point")
-
-// ErrPubkeyZero is returned by ValidatePubkeyBytes when the 48-byte compressed
-// pubkey is the point-at-infinity (the IETF KeyValidate identity rejection).
-// Per M1.2-2 / architecture §15 / GO-037.
-var ErrPubkeyZero = errors.New("bls: pubkey is point at infinity (KeyValidate rejected)")
-
 // ValidatePubkeyBytes checks that b is a valid compressed BLS12-381 G1 point.
 // Init must have been called (or will be called internally). Returns nil if valid.
 func ValidatePubkeyBytes(pub [48]byte) error {
 	if err := Init(); err != nil {
 		return fmt.Errorf("bls: not initialized: %w", err)
 	}
-	var hPub herumi.PublicKey
+	var hPub bls.PublicKey
 	if err := hPub.Deserialize(pub[:]); err != nil {
-		return fmt.Errorf("%w: %w", ErrPubkeyInvalid, err)
-	}
-	if hPub.IsZero() {
-		return ErrPubkeyZero
+		return fmt.Errorf("bls: invalid G1 point: %w", err)
 	}
 	return nil
 }

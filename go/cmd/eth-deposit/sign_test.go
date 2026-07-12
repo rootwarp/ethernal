@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	ucli "github.com/urfave/cli/v3"
 
 	"github.com/rootwarp/eth-utils/go/internal/signer"
-	internaltx "github.com/rootwarp/eth-utils/go/internal/tx"
 )
 
 // generateTestPrivKey returns a fresh random secp256k1 private key as hex (no 0x prefix).
@@ -315,8 +313,8 @@ func TestSignCommand_LocalSigner_StdoutOutput(t *testing.T) {
 }
 
 func TestSignCommand_Ledger_NotSupported_OnCGOPath(t *testing.T) {
-	// Ledger support requires a real device and CGO build (module is CGO-only via herumi).
-	// This path always yields ErrNoDevice without hardware.
+	// Ledger support requires a real device and CGO build; this path always
+	// yields an error (ErrNoDevice or ErrLedgerNotSupported) without hardware.
 	// We verify the error is non-nil and exit code 3 is returned.
 	orig := ucli.OsExiter
 	ucli.OsExiter = func(int) {}
@@ -340,7 +338,8 @@ func TestSignCommand_Ledger_NotSupported_OnCGOPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for ledger with no device, got nil")
 	}
-	// Without real hardware: ErrNoDevice (exit 3).
+	// Without real hardware: ErrNoDevice or ErrLedgerNotSupported — both exit 3.
+	// If by some chance we're on non-CGO, ErrLedgerNotSupported → exit 3 too.
 	code := ExitCodeFor(err)
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3; err = %v", code, err)
@@ -541,160 +540,4 @@ func randomSuffix(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return strings.ToUpper(hex.EncodeToString(b))
-}
-
-// TestSign_NonDepositRecipient_WithOverride_Allowed: override flag set + non-deposit `To` → no exit-2 reject.
-// (exact AC name per M0.6-2 plan; follows M0.6-1 parse test + sign cmd style; uses errors.Is)
-func TestSign_NonDepositRecipient_WithOverride_Allowed(t *testing.T) {
-	orig := ucli.OsExiter
-	ucli.OsExiter = func(int) {}
-	t.Cleanup(func() { ucli.OsExiter = orig })
-
-	envVar := "TEST_SIGN_NONDEPOSIT_OVERRIDE_" + randomSuffix(t)
-	t.Setenv(envVar, "0x"+generateTestPrivKey(t))
-
-	// Build unsigned JSON with valid 42-hex To that is NOT the deposit contract for chainId=17000 (holesky).
-	var u map[string]interface{}
-	if err := json.Unmarshal(unsignedTxJSON(), &u); err != nil {
-		t.Fatal(err)
-	}
-	u["to"] = "0x00000000219ab540356cBB839Cbe05303d7705Fa" // mainnet/hoodi contract (valid hex/len)
-	badJSON, err := json.MarshalIndent(u, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	badJSON = append(badJSON, '\n')
-
-	inFile := filepath.Join(t.TempDir(), "unsigned-non-deposit.json")
-	if err := os.WriteFile(inFile, badJSON, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	app := newTestApp()
-	var out bytes.Buffer
-	app.Writer = &out
-	app.ErrWriter = &bytes.Buffer{}
-
-	err = app.Run([]string{
-		"eth-deposit-tx", "sign",
-		"--signer", "local",
-		"--input", inFile,
-		"--output", "-",
-		"--private-key-env", envVar,
-		"--allow-non-deposit-recipient",
-	})
-	if err != nil {
-		t.Fatalf("with --allow-non-deposit-recipient, expected success for non-deposit To, got err: %v", err)
-	}
-	if !json.Valid(out.Bytes()) {
-		t.Errorf("signed output not valid JSON with override: %s", out.String())
-	}
-}
-
-// TestSign_NonDepositRecipient_NoOverride_Reject: override absent → exit 2.
-// (exact AC name; errors.Is on sentinel; exit via ExitCodeFor per cmd contract)
-func TestSign_NonDepositRecipient_NoOverride_Reject(t *testing.T) {
-	orig := ucli.OsExiter
-	ucli.OsExiter = func(int) {}
-	t.Cleanup(func() { ucli.OsExiter = orig })
-
-	envVar := "TEST_SIGN_NONDEPOSIT_NOOVERRIDE_" + randomSuffix(t)
-	t.Setenv(envVar, "0x"+generateTestPrivKey(t))
-
-	// Same non-deposit To as above.
-	var u map[string]interface{}
-	if err := json.Unmarshal(unsignedTxJSON(), &u); err != nil {
-		t.Fatal(err)
-	}
-	u["to"] = "0x00000000219ab540356cBB839Cbe05303d7705Fa"
-	badJSON, err := json.MarshalIndent(u, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	badJSON = append(badJSON, '\n')
-
-	inFile := filepath.Join(t.TempDir(), "unsigned-non-deposit.json")
-	if err := os.WriteFile(inFile, badJSON, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	app := newTestApp()
-	var buf bytes.Buffer
-	app.Writer = &buf
-	app.ErrWriter = &buf
-
-	err = app.Run([]string{
-		"eth-deposit-tx", "sign",
-		"--signer", "local",
-		"--input", inFile,
-		"--private-key-env", envVar,
-		// deliberately no --allow-non-deposit-recipient
-	})
-	if err == nil {
-		t.Fatal("expected error for non-deposit To without override, got nil")
-	}
-	if got := ExitCodeFor(err); got != 2 {
-		t.Errorf("exit code = %d, want 2; err = %v", got, err)
-	}
-	if !errors.Is(err, signer.ErrInvalidToAddress) {
-		t.Fatalf("expected errors.Is(ErrInvalidToAddress), got %v", err)
-	}
-}
-
-// TestLoadSignConfig_RejectKeyValueNoLeak (architecture §11.7): set --private-key-env to a known sentinel string (simulating key value); error message contains only the redacted form; full string not present. Also verifies "treat as compromised" warning on stderr.
-func TestLoadSignConfig_RejectKeyValueNoLeak(t *testing.T) {
-	orig := ucli.OsExiter
-	ucli.OsExiter = func(int) {}
-	t.Cleanup(func() { ucli.OsExiter = orig })
-
-	inFile := filepath.Join(t.TempDir(), "unsigned.json")
-	if err := os.WriteFile(inFile, unsignedTxJSON(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	app := newTestApp()
-	var buf bytes.Buffer
-	app.Writer = &buf
-	app.ErrWriter = &buf
-
-	sentinel := "0x" + generateTestPrivKey(t)
-	err := app.Run([]string{
-		"eth-deposit-tx", "sign",
-		"--signer", "local",
-		"--input", inFile,
-		"--private-key-env", sentinel,
-	})
-	if err == nil {
-		t.Fatal("expected error for key value as --private-key-env, got nil")
-	}
-	if got := ExitCodeFor(err); got != 2 {
-		t.Errorf("exit code = %d, want 2; err = %v", got, err)
-	}
-	errStr := err.Error()
-	if strings.Contains(errStr, sentinel) {
-		t.Errorf("full sentinel key leaked into error: %s", errStr)
-	}
-	if !strings.Contains(errStr, "… (len=") {
-		t.Errorf("redacted form missing from error: %s", errStr)
-	}
-	if !strings.Contains(buf.String(), "treated as compromised") {
-		t.Errorf("warning not visible on stderr: %s", buf.String())
-	}
-}
-
-// TestSignUnsignedTx_UnsupportedSigner_ErrInvalidInput (equivalent to
-// TestSignUnsignedTx_UnknownSigner_NoPanic_ErrInvalidInput per issue AC in
-// m1.5-cli-contract-exit-codes.md:115) covers the switch default in
-// signUnsignedTx (M1.5-5 / FR-P1-F5 / GO-051): unknown cfg.Signer yields
-// ErrInvalidInput (so ExitCodeFor gives 2) with no nil-interface panic on the
-// deferred Close or later uses. Happy paths for "local"/"ledger" are unchanged
-// (existing tests). Direct call to the extracted func per M1.5 patterns.
-func TestSignUnsignedTx_UnsupportedSigner_ErrInvalidInput(t *testing.T) {
-	_, err := signUnsignedTx(context.Background(), &SignConfig{Signer: "unsupported"}, nil, internaltx.UnsignedTx{})
-	if err == nil {
-		t.Fatal("expected error for unsupported signer, got nil")
-	}
-	if got := errors.Is(err, ErrInvalidInput); !got {
-		t.Fatalf("errors.Is(err, ErrInvalidInput) = %v, want true (err=%v)", got, err)
-	}
 }

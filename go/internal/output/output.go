@@ -8,9 +8,6 @@
 //
 // Both implementations compute and return the sha256 hex digest of the JSON
 // bytes so callers can verify integrity without re-reading the file.
-//
-// The JSON schema (field order, tags) is defined once as deposit.JSONEntry
-// (unified per M2.2-2 / FR-P2-A15); output converts to it for marshal.
 package output
 
 import (
@@ -38,11 +35,25 @@ type Writer interface {
 	Write(ctx context.Context, dir string, entries []deposit.Entry, now time.Time) (path string, sha256hex string, err error)
 }
 
-// toJSONEntry converts a deposit.Entry to a deposit.JSONEntry (the canonical
-// wire type defined once in internal/deposit), encoding all byte fields as
-// lowercase hex strings without the "0x" prefix.
-func toJSONEntry(e deposit.Entry) deposit.JSONEntry {
-	return deposit.JSONEntry{
+// jsonEntry is a private struct whose field order matches the Launchpad JSON
+// schema exactly. encoding/json marshals struct fields in declaration order,
+// which guarantees byte-for-byte compatibility with the official staking-deposit-cli.
+type jsonEntry struct {
+	Pubkey                string `json:"pubkey"`
+	WithdrawalCredentials string `json:"withdrawal_credentials"`
+	Amount                uint64 `json:"amount"`
+	Signature             string `json:"signature"`
+	DepositMessageRoot    string `json:"deposit_message_root"`
+	DepositDataRoot       string `json:"deposit_data_root"`
+	ForkVersion           string `json:"fork_version"`
+	NetworkName           string `json:"network_name"`
+	DepositCLIVersion     string `json:"deposit_cli_version"`
+}
+
+// toJSONEntry converts a deposit.Entry to a jsonEntry, encoding all byte fields
+// as lowercase hex strings without the "0x" prefix.
+func toJSONEntry(e deposit.Entry) jsonEntry {
+	return jsonEntry{
 		Pubkey:                hex.EncodeToString(e.Pubkey[:]),
 		WithdrawalCredentials: hex.EncodeToString(e.WithdrawalCredentials[:]),
 		Amount:                e.Amount,
@@ -57,10 +68,9 @@ func toJSONEntry(e deposit.Entry) deposit.JSONEntry {
 
 // marshalEntries converts a slice of deposit.Entry values to compact JSON bytes
 // formatted as a JSON array. Uses json.Marshal (no indentation) to match the
-// official staking-deposit-cli output format. Relies on the canonical
-// deposit.JSONEntry for schema (field order + tags) so bytes are stable.
+// official staking-deposit-cli output format.
 func marshalEntries(entries []deposit.Entry) ([]byte, error) {
-	je := make([]deposit.JSONEntry, len(entries))
+	je := make([]jsonEntry, len(entries))
 	for i, e := range entries {
 		je[i] = toJSONEntry(e)
 	}
@@ -126,9 +136,9 @@ func (w *fsWriter) Write(_ context.Context, dir string, entries []deposit.Entry,
 	defer func() {
 		if !committed {
 			if !fileClosed {
-				_ = f.Close() // ignore: best-effort close of tmp in failure cleanup (committed=false path); write/sync/close errors already returned upstream
+				f.Close() //nolint:errcheck
 			}
-			_ = os.Remove(tmpPath) // ignore: best-effort remove of tmp in failure cleanup (committed=false path)
+			os.Remove(tmpPath) //nolint:errcheck
 		}
 	}()
 

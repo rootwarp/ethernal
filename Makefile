@@ -34,7 +34,6 @@ fmt:
 	cd python && ruff format .
 
 ## snapshot: build local snapshot for both binaries via goreleaser (requires goreleaser + zig)
-# NOTE (M1.9-4 apply feedback): pre-existing gap (no .goreleaser.yaml in tree; see release.yml:317 comment + M0.11 plan notes on possible deletion + manual fallback). Local darwin cuts use direct go build (real); linux placeholder (Mach-O copy for presence only, as host lacks zig/docker). Real 3-platform (linux-amd64 + darwins) + full SBOMs for both tools via containerized `goreleaser release` in .github/workflows/release.yml on v* tag (AC "3 binaries attached" met by that flow, per "binaries via existing flow" + "smallest change"). SBOM paths hardcoded to goreleaser layout.
 snapshot:
 	CC_FOR_LINUX_AMD64="zig cc -target x86_64-linux-musl" \
 	CC_FOR_LINUX_ARM64="zig cc -target aarch64-linux-musl" \

@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 
+	"github.com/rootwarp/eth-utils/go/internal/deposit"
 	"github.com/rootwarp/eth-utils/go/internal/network"
 )
 
@@ -12,7 +13,7 @@ import (
 type EthRPC interface {
 	// SuggestGasTipCap returns the priority fee suggestion (eth_maxPriorityFeePerGas).
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
-	// BlockBaseFee returns the baseFeePerGas of the latest block in wei.
+	// BlockBaseFee returns the current pending block's baseFeePerGas in wei.
 	BlockBaseFee(ctx context.Context) (*big.Int, error)
 	// PendingNonceAt returns the next nonce for the given address.
 	PendingNonceAt(ctx context.Context, account [20]byte) (uint64, error)
@@ -30,6 +31,11 @@ type CallMsg struct {
 	To    [20]byte
 	Value *big.Int
 	Data  []byte
+}
+
+// TxBuilder constructs unsigned EIP-1559 deposit transactions.
+type TxBuilder interface {
+	BuildUnsigned(ctx context.Context, entry deposit.Entry, cfg BuildConfig) (*UnsignedTx, error)
 }
 
 // BuildConfig carries the parameters needed to build an unsigned transaction.

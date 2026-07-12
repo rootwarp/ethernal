@@ -28,8 +28,6 @@ func (e *envSource) Read() ([]byte, error) {
 	return []byte(val), nil
 }
 
-func (e *envSource) Zeroize() {}
-
 // termPromptSource is a PassphraseSource that reads from /dev/tty with echo
 // suppression, writing a prompt to a provided writer.
 type termPromptSource struct {
@@ -58,18 +56,16 @@ func (t *termPromptSource) Read() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: cannot open /dev/tty (%v); for non-interactive or piped use, supply the passphrase via --passphrase-env VAR", ErrNoTTY, err)
 	}
-	defer func() { _ = tty.Close() }() // ignore: best-effort tty close after read; does not affect returned passphrase or error
+	defer tty.Close()
 
-	_, _ = fmt.Fprint(t.w, "Keystore passphrase: ") // ignore: best-effort prompt write (to stderr typically)
+	fmt.Fprint(t.w, "Keystore passphrase: ")
 
 	pw, err := term.ReadPassword(int(tty.Fd()))
 	// Print a newline after the (suppressed) input.
-	_, _ = fmt.Fprintln(t.w) // ignore: best-effort newline after prompt
+	fmt.Fprintln(t.w)
 	if err != nil {
 		return nil, fmt.Errorf("read passphrase: %w", err)
 	}
 
 	return pw, nil
 }
-
-func (t *termPromptSource) Zeroize() {}
