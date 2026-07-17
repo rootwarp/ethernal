@@ -5,7 +5,7 @@
 //! the passphrase comes from so the loader can be tested without a TTY or a
 //! live environment variable.
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 
@@ -61,18 +61,18 @@ impl PassphraseSource for EnvSource {
 /// passphrase itself is read from the controlling terminal via `rpassword`, so
 /// it works even when stdin is a pipe.
 pub struct TermPromptSource {
-    writer: RefCell<Box<dyn Write>>,
+    writer: Mutex<Box<dyn Write + Send>>,
     /// Opens the controlling terminal. A field so tests can force the no-TTY
     /// error path without touching the real `/dev/tty`, which is
     /// non-deterministic under test (absent it fails; present it would block on
     /// the password read). Mirrors Go's `openTTY` field.
-    open_tty: Box<dyn Fn() -> std::io::Result<File>>,
+    open_tty: Box<dyn Fn() -> std::io::Result<File> + Send + Sync>,
 }
 
 impl TermPromptSource {
     /// Returns a source that prompts on `writer` and reads the passphrase from
     /// `/dev/tty` with echo suppressed.
-    pub fn new<W: Write + 'static>(writer: W) -> Self {
+    pub fn new<W: Write + Send + 'static>(writer: W) -> Self {
         Self::with_opener(writer, open_controlling_tty)
     }
 
@@ -80,11 +80,11 @@ impl TermPromptSource {
     /// with the real opener and by tests with a fake one.
     fn with_opener<W, F>(writer: W, open_tty: F) -> Self
     where
-        W: Write + 'static,
-        F: Fn() -> std::io::Result<File> + 'static,
+        W: Write + Send + 'static,
+        F: Fn() -> std::io::Result<File> + Send + Sync + 'static,
     {
         TermPromptSource {
-            writer: RefCell::new(Box::new(writer)),
+            writer: Mutex::new(Box::new(writer)),
             open_tty: Box::new(open_tty),
         }
     }
@@ -107,7 +107,7 @@ impl PassphraseSource for TermPromptSource {
         drop(tty);
 
         {
-            let mut writer = self.writer.borrow_mut();
+            let mut writer = self.writer.lock().expect("prompt writer lock poisoned");
             // Best-effort prompt; a write failure here should not mask a
             // successful password read, matching Go's fire-and-forget Fprint.
             let _ = write!(writer, "Keystore passphrase: ");
@@ -125,7 +125,7 @@ impl PassphraseSource for TermPromptSource {
 
         // Newline after the (suppressed) input, matching Go's Fprintln(w).
         {
-            let mut writer = self.writer.borrow_mut();
+            let mut writer = self.writer.lock().expect("prompt writer lock poisoned");
             let _ = writeln!(writer);
             let _ = writer.flush();
         }
