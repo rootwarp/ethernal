@@ -2,7 +2,7 @@
 name = "eth-deposit-keystore"
 version.workspace = true
 edition.workspace = true
-description = "EIP-2335 v4 keystore loading/decryption, directory scanning, and passphrase sources"
+description = "EIP-2335 v4 keystore encryption/decryption, directory scanning, and passphrase sources"
 
 [lib]
 name = "eth_deposit_keystore"

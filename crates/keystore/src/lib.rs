@@ -1,11 +1,14 @@
-//! EIP-2335 v4 keystore loading and decryption, directory scanning, and
-//! passphrase sources.
+//! EIP-2335 v4 keystore loading, decryption, encryption, directory scanning,
+//! and passphrase sources.
 //!
 //! Ported from `go/internal/keystore/*`. The wealdtech
 //! `go-eth2-wallet-encryptor-keystorev4` dependency is replaced with a direct
-//! EIP-2335 implementation (see [`keystore`]). Key material is exposed through
-//! [`Key`], which zeroizes its secret on [`Key::zeroize`] and on drop.
+//! EIP-2335 implementation (see [`keystore`] and [`encrypt`]). Key material is
+//! exposed through [`Key`], which zeroizes its secret on [`Key::zeroize`] and
+//! on drop.
 
+mod crypto;
+pub mod encrypt;
 mod error;
 mod keystore;
 mod passphrase;

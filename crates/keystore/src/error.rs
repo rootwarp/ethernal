@@ -101,4 +101,12 @@ pub enum KeystoreError {
     /// passphrase. Go: `fmt.Errorf("passphrase source: %w", err)`.
     #[error("passphrase source: {0}")]
     PassphraseSource(Box<KeystoreError>),
+
+    /// EIP-2335 keystore encryption failed (KDF, cipher, or serialization).
+    /// Maps to exit code 3 at the bin layer (K3-4).
+    #[error("encrypt keystore: {detail}")]
+    Encrypt {
+        /// A human-readable description of what failed.
+        detail: String,
+    },
 }

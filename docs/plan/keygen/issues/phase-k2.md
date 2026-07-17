@@ -49,21 +49,21 @@ filename), D-1 (no `uuid` crate). This is the single largest structural change (
 - `KeystoreError` gains an encrypt-failure variant (maps to exit 3 at K3-4).
 
 **Acceptance criteria**
-- [ ] `encrypt` fed the spec vector's `salt` (`d4e56740…`), `iv` (`264daa3f…`), `uuid_bytes` (→
+- [x] `encrypt` fed the spec vector's `salt` (`d4e56740…`), `iv` (`264daa3f…`), `uuid_bytes` (→
   `1d85ae20-35c5-4611-98e8-aa14a633906f`), password `𝔱𝔢𝔰𝔱𝔭𝔞𝔰𝔰𝔴𝔬𝔯𝔡🔑`, and secret
   `0x000000000019d668…8ce26f` reproduces the vector JSON **byte-for-byte** (crypto section + top-level field
   order) — F-3, C-1, C-3, G4 (research/eip-2335-keystore.md §"Spec scrypt test vector"; fixture
   `crates/keystore/testdata/eip2335-scrypt-vector.json`).
-- [ ] the encrypt-side normalization is the **same** `normalize_passphrase` as decrypt: `NFKD(𝔱𝔢𝔰𝔱…🔑)`
+- [x] the encrypt-side normalization is the **same** `normalize_passphrase` as decrypt: `NFKD(𝔱𝔢𝔰𝔱…🔑)`
   → `testpassword🔑` (UTF-8 `7465737470617373776f7264f09f9491`) — F-3, C-1.
-- [ ] a keystore produced by `encrypt` round-trips through the existing `Loader`: decrypt → recovered secret
+- [x] a keystore produced by `encrypt` round-trips through the existing `Loader`: decrypt → recovered secret
   == the input 32-byte SK — F-3, C-3 (M-K2 core criterion).
-- [ ] decrypting our output with the wrong passphrase → `KeystoreError::WrongPassphrase` — F-3.
-- [ ] `keystore_filename("m/12381/3600/7/0/0", 1_700_000_000)` == `keystore-m_12381_3600_7_0_0-1700000000.json`
+- [x] decrypting our output with the wrong passphrase → `KeystoreError::WrongPassphrase` — F-3.
+- [x] `keystore_filename("m/12381/3600/7/0/0", 1_700_000_000)` == `keystore-m_12381_3600_7_0_0-1700000000.json`
   (unix **seconds**, `/`→`_`) — C-3, F-4.
-- [ ] UUID formatted from 16 bytes has version nibble `4` and variant `10`, `8-4-4-4-12` shape; no `uuid`
+- [x] UUID formatted from 16 bytes has version nibble `4` and variant `10`, `8-4-4-4-12` shape; no `uuid`
   crate in the dep tree — D-1.
-- [ ] real output writes `description: ""` and `version: 4`; the plaintext SK is never serialized (only the
+- [x] real output writes `description: ""` and `version: 4`; the plaintext SK is never serialized (only the
   ciphertext `cipher.message`) — F-3, S-1, S-2.
 
 **Test plan**

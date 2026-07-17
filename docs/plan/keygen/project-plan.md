@@ -112,3 +112,4 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 | K1-2 | done | same commit | four EIP-2333 vectors green; path + pubkey tests green |
 | K1-3 | done | same commit | `getrandom` only new dep; `OsEntropy` only production Entropy |
 | M-K1 | **passed** | `9ef24e5` | wordlist pin `2f5eed53…` / 13116 bytes asserted; all K1 acceptance criteria checked |
+| K2-1 | done | `feat(keystore): add pure EIP-2335 v4 scrypt encrypt writer` | EIP-2335 scrypt encrypt byte-for-byte + Loader round-trip + wrong-passphrase reject |

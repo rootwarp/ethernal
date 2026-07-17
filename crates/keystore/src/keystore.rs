@@ -12,15 +12,11 @@ use std::path::Path;
 
 use ctr::cipher::{KeyIvInit, StreamCipher};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use unicode_normalization::UnicodeNormalization;
+use sha2::Sha256;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::crypto::{self, Aes128Ctr};
 use crate::error::KeystoreError;
-
-/// AES-128 in CTR mode with a 128-bit big-endian counter, matching Go's
-/// `cipher.NewCTR` (which treats the whole IV as the initial counter).
-type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 
 /// Key material returned by a [`KeyLoader`].
 ///
@@ -242,7 +238,7 @@ fn decrypt(
     let ciphertext = decode_hex(&crypto.cipher.message, path, "cipher.message")?;
 
     // 1. Normalize the passphrase per EIP-2335 (NFKD + strip control codes).
-    let normalized = normalize_passphrase(passphrase);
+    let normalized = crypto::normalize_passphrase(passphrase);
 
     // 2. Derive the key.
     let dk = derive_key(path, &crypto.kdf, &normalized)?;
@@ -261,10 +257,7 @@ fn decrypt(
         )));
     }
     let expected = decode_hex(&crypto.checksum.message, path, "checksum.message")?;
-    let mut hasher = Sha256::new();
-    hasher.update(&dk[16..32]);
-    hasher.update(&ciphertext);
-    let computed = hasher.finalize();
+    let computed = crypto::checksum_message(&dk, &ciphertext);
     if computed.as_slice() != expected.as_slice() {
         // A checksum mismatch is how a wrong passphrase manifests. The detail
         // matches the wealdtech encryptor's error text for byte parity.
@@ -292,26 +285,6 @@ fn decrypt(
     Ok(secret)
 }
 
-/// Normalizes a passphrase per EIP-2335: convert to NFKD, then strip C0
-/// (`U+0000`–`U+001F`), C1 (`U+0080`–`U+009F`), and Delete (`U+007F`) control
-/// code points. The result is zeroized on drop.
-fn normalize_passphrase(passphrase: &[u8]) -> Zeroizing<Vec<u8>> {
-    // Divergence from Go, which normalizes the raw string bytes: we interpret
-    // the passphrase as UTF-8 first. This is exact for ASCII/valid-UTF-8
-    // passphrases; a non-UTF-8 byte is replaced with U+FFFD (which would change
-    // the derived key). Passphrases used here are text.
-    let text = String::from_utf8_lossy(passphrase);
-    let normalized: String = text.nfkd().filter(|&c| !is_stripped_control(c)).collect();
-    Zeroizing::new(normalized.into_bytes())
-}
-
-/// Reports whether a code point is stripped by EIP-2335 passphrase
-/// normalization: C0, C1, or Delete control codes.
-fn is_stripped_control(c: char) -> bool {
-    let u = c as u32;
-    u <= 0x1f || (0x80..=0x9f).contains(&u) || u == 0x7f
-}
-
 /// Derives the encryption key from a KDF module and the normalized passphrase.
 /// The derived key is zeroized on drop.
 fn derive_key(
@@ -329,22 +302,18 @@ fn derive_key(
             let params: ScryptParams = serde_json::from_value(kdf.params.clone())
                 .map_err(|err| malformed(format!("kdf.params: {err}")))?;
             let salt = decode_hex(&params.salt, path, "kdf.params.salt")?;
-
-            if !params.n.is_power_of_two() {
-                return Err(malformed(format!(
-                    "kdf.params.n must be a power of two, got {}",
-                    params.n
-                )));
-            }
-            let log_n = params.n.trailing_zeros() as u8;
-
-            let scrypt_params = scrypt::Params::new(log_n, params.r, params.p, params.dklen)
-                .map_err(|err| malformed(format!("kdf: invalid scrypt params: {err}")))?;
-
-            let mut dk = Zeroizing::new(vec![0u8; params.dklen]);
-            scrypt::scrypt(password, &salt, &scrypt_params, &mut dk)
-                .map_err(|err| malformed(format!("kdf: scrypt: {err}")))?;
-            Ok(dk)
+            crypto::derive_scrypt(password, &salt, params.n, params.r, params.p, params.dklen)
+                .map_err(|err| {
+                    // Restore pre-refactor decrypt detail strings so operator
+                    // greps stay stable (`error.rs` documents Display stability).
+                    // `derive_scrypt` returns shared strings; power-of-two used
+                    // to say `kdf.params.n must be…` rather than `kdf: n must…`.
+                    if let Some(rest) = err.strip_prefix("n must be a power of two") {
+                        malformed(format!("kdf.params.n must be a power of two{rest}"))
+                    } else {
+                        malformed(format!("kdf: {err}"))
+                    }
+                })
         }
         "pbkdf2" => {
             let params: Pbkdf2Params = serde_json::from_value(kdf.params.clone())
