@@ -108,11 +108,11 @@ call site).
   `gen`'s behavior must not change (its `OutputError` stays `→ exit 1`, K3-4/R2).
 
 **Acceptance criteria**
-- [ ] `write_new_0600` writes `bytes` atomically at mode `0600` (tmp → fsync → rename) — S-3, F-4.
-- [ ] a second `write_new_0600` to an existing `final_path` returns `OutputError::AlreadyExists` (no clobber) —
+- [x] `write_new_0600` writes `bytes` atomically at mode `0600` (tmp → fsync → rename) — S-3, F-4.
+- [x] a second `write_new_0600` to an existing `final_path` returns `OutputError::AlreadyExists` (no clobber) —
   F-4, S-3.
-- [ ] a failure between create and rename leaves **no** `.tmp` artifact behind — S-5, S-3.
-- [ ] the existing `FsWriter` / deposit-data path is unchanged; `gen`'s goldens and `writer_error_exit1` still
+- [x] a failure between create and rename leaves **no** `.tmp` artifact behind — S-5, S-3.
+- [x] the existing `FsWriter` / deposit-data path is unchanged; `gen`'s goldens and `writer_error_exit1` still
   pass — regression (architecture §Exit-code mapping, R2).
 
 **Test plan**

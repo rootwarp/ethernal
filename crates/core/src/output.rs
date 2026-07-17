@@ -1,17 +1,23 @@
 //! Serializes `[Entry]` to the Launchpad JSON schema and writes
 //! deposit_data-<unix_ts>.json atomically to the output directory.
 //!
-//! Two implementations are provided:
-//!   - [`FsWriter`]: writes to disk using a tmp→rename atomic sequence.
+//! Surfaces provided:
+//!   - [`FsWriter`]: writes deposit-data JSON to disk using a tmp→rename
+//!     atomic sequence.
 //!   - [`DryRunWriter`]: writes JSON bytes to an `io::Write` (e.g. stdout)
 //!     instead of disk. Intended for --dry-run mode.
+//!   - [`write_new_0600`]: generic atomic `0600` write with overwrite
+//!     refusal, for bin-composed keystore persistence.
 //!
-//! Both implementations compute and return the sha256 hex digest of the JSON
-//! bytes so callers can verify integrity without re-reading the file.
+//! [`FsWriter`] and [`DryRunWriter`] compute and return the sha256 hex digest
+//! of the JSON bytes so callers can verify integrity without re-reading the
+//! file.
 
 use std::fs;
 use std::io::{self, Write as IoWrite};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -33,6 +39,9 @@ pub enum OutputError {
     Rename(#[source] io::Error),
     #[error("output: write dry-run output: {0}")]
     WriteDryRun(#[source] io::Error),
+    /// Target path already exists; refuse to overwrite (F-4 / S-3).
+    #[error("output: file already exists")]
+    AlreadyExists,
 }
 
 /// Serializes a slice of deposit entries to JSON and persists them.
@@ -171,6 +180,128 @@ fn open_0600(path: &Path) -> io::Result<fs::File> {
     opts.open(path)
 }
 
+/// Opens `path` exclusively (`create_new`) with permissions 0600 on Unix.
+/// Fails with [`io::ErrorKind::AlreadyExists`] if the path is already present.
+fn open_create_new_0600(path: &Path) -> io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+// -----------------------------------------------------------------------------
+// write_new_0600 — generic atomic 0600 writer, refuse-overwrite (K2-2)
+// -----------------------------------------------------------------------------
+
+/// Unlinks `path` on drop unless disarmed after a successful rename.
+/// Only constructed after this call successfully `create_new`s the tmp, so
+/// Drop never deletes a file it does not own.
+struct TmpGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TmpGuard {
+    fn new(path: PathBuf) -> Self {
+        TmpGuard { path, armed: true }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Keep the file (rename took ownership of the inode via directory entry).
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TmpGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Creates a unique exclusive tmp file (mode 0600) in the same directory as
+/// `final_path`. Only returns a [`TmpGuard`] after `create_new` succeeds, so
+/// cleanup never unlinks a path this call did not create.
+fn create_unique_tmp(final_path: &Path) -> Result<(TmpGuard, fs::File), OutputError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let parent = final_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+
+    for _ in 0..10_000 {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let name = format!(".tmp-eth-deposit-core-{}-{nanos}-{n}", std::process::id());
+        let path = parent.join(&name);
+        match open_create_new_0600(&path) {
+            Ok(f) => return Ok((TmpGuard::new(path), f)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(OutputError::OpenTmp(e)),
+        }
+    }
+    Err(OutputError::OpenTmp(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create a unique temp file",
+    )))
+}
+
+/// Atomic `0600` write with overwrite refusal: unique `create_new` tmp → write
+/// → fsync → `create_new` final reservation → rename. Errors if `final_path`
+/// already exists (F-4). Removes the owned tmp (and any empty final
+/// reservation) on failure or panic; SIGKILL cannot guarantee cleanup.
+///
+/// Unlike the private [`open_0600`] used by [`FsWriter`] (create/truncate), this
+/// uses `OpenOptions::create_new(true)` on both tmp and final so an existing
+/// file is never clobbered. Intended for keystore writes composed by the bin.
+pub fn write_new_0600(final_path: &Path, bytes: &[u8]) -> Result<(), OutputError> {
+    let (tmp, mut f) = create_unique_tmp(final_path)?;
+
+    if let Err(e) = f.write_all(bytes) {
+        return Err(OutputError::WriteTmp(e));
+    }
+    if let Err(e) = f.sync_all() {
+        return Err(OutputError::SyncTmp(e));
+    }
+    drop(f);
+
+    // Exclusive claim on final_path before rename. On Unix, rename replaces an
+    // existing file, so create_new is what enforces refuse-overwrite.
+    // Non-AlreadyExists open failures use OpenTmp (not Rename): rename never ran.
+    match open_create_new_0600(final_path) {
+        Ok(f) => drop(f),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(OutputError::AlreadyExists);
+        }
+        Err(e) => return Err(OutputError::OpenTmp(e)),
+    }
+
+    match fs::rename(tmp.path(), final_path) {
+        Ok(()) => {
+            tmp.disarm();
+            Ok(())
+        }
+        Err(e) => {
+            // Remove the empty create_new reservation we just made; tmp Drop
+            // removes the owned temp file.
+            let _ = fs::remove_file(final_path);
+            Err(OutputError::Rename(e))
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // DryRunWriter
 // -----------------------------------------------------------------------------
@@ -200,5 +331,149 @@ impl<W: IoWrite> Writer for DryRunWriter<W> {
         let data = marshal_entries(entries)?;
         self.w.write_all(&data).map_err(OutputError::WriteDryRun)?;
         Ok((String::new(), digest_hex(&data)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Unique temp directory cleaned up on drop (no tempfile dependency).
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let mut path = std::env::temp_dir();
+            path.push(format!(
+                "eth-deposit-core-write-new-{}-{nanos}-{n}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("create temp dir");
+            TempDir { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn assert_no_owned_tmp(dir: &Path) {
+        for entry in fs::read_dir(dir).expect("read_dir") {
+            let name = entry.expect("dir entry").file_name();
+            let name = name.to_string_lossy();
+            assert!(
+                !name.starts_with(".tmp-eth-deposit-core-"),
+                "owned tmp file left behind: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_new_0600_writes_contents_and_mode() {
+        let dir = TempDir::new();
+        let path = dir.path().join("keystore-test.json");
+        let bytes = b"{\"crypto\":{}}";
+
+        write_new_0600(&path, bytes).expect("first write");
+
+        assert_eq!(fs::read(&path).expect("read back"), bytes);
+        assert_no_owned_tmp(dir.path());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "written file must be mode 0600");
+        }
+    }
+
+    #[test]
+    fn write_new_0600_refuses_overwrite() {
+        let dir = TempDir::new();
+        let path = dir.path().join("keystore-exists.json");
+        let original = b"original-bytes";
+
+        write_new_0600(&path, original).expect("first write");
+        let err = write_new_0600(&path, b"clobber-attempt").expect_err("second write");
+        assert!(
+            matches!(err, OutputError::AlreadyExists),
+            "expected AlreadyExists, got {err:?}"
+        );
+
+        // Original contents must be unchanged.
+        assert_eq!(fs::read(&path).expect("read back"), original);
+        assert_no_owned_tmp(dir.path());
+    }
+
+    #[test]
+    fn write_new_0600_no_tmp_on_failure() {
+        let dir = TempDir::new();
+        // Parent path is a regular file, so create_new of a child must fail.
+        let not_a_dir = dir.path().join("not-a-dir");
+        fs::write(&not_a_dir, b"x").expect("write blocker file");
+        let target = not_a_dir.join("keystore.json");
+
+        let err = write_new_0600(&target, b"data").expect_err("write must fail");
+        assert!(
+            matches!(err, OutputError::OpenTmp(_)),
+            "expected OpenTmp, got {err:?}"
+        );
+
+        assert_no_owned_tmp(dir.path());
+        // Blocker file still present; no keystore sibling created under dir.
+        assert!(not_a_dir.is_file());
+        for entry in fs::read_dir(dir.path()).expect("read_dir") {
+            let name = entry.expect("dir entry").file_name();
+            assert_eq!(name.to_string_lossy(), "not-a-dir");
+        }
+    }
+
+    /// Failed create_new must not unlink a pre-existing foreign file that
+    /// happens to share a path pattern, and unique tmp names must not collide
+    /// with a deterministic sibling like `.<name>.tmp`.
+    #[test]
+    fn write_new_0600_does_not_delete_foreign_tmp() {
+        let dir = TempDir::new();
+        let path = dir.path().join("keystore.json");
+        let foreign = dir.path().join(".keystore.json.tmp");
+        fs::write(&foreign, b"FOREIGN_KEYSTORE_MATERIAL").expect("seed foreign tmp");
+
+        write_new_0600(&path, b"owned-bytes").expect("write");
+
+        assert_eq!(
+            fs::read(&foreign).expect("foreign still present"),
+            b"FOREIGN_KEYSTORE_MATERIAL",
+            "must not unlink a tmp this call did not create"
+        );
+        assert_eq!(fs::read(&path).expect("final"), b"owned-bytes");
+        assert_no_owned_tmp(dir.path());
+    }
+
+    /// Second write that hits AlreadyExists must clean its own tmp and leave
+    /// final contents intact (covers post-tmp-write cleanup via TmpGuard Drop).
+    #[test]
+    fn write_new_0600_already_exists_cleans_owned_tmp() {
+        let dir = TempDir::new();
+        let path = dir.path().join("ks.json");
+        write_new_0600(&path, b"v1").expect("first");
+        let _ = write_new_0600(&path, b"v2").expect_err("second");
+        assert_eq!(fs::read(&path).unwrap(), b"v1");
+        assert_no_owned_tmp(dir.path());
     }
 }
