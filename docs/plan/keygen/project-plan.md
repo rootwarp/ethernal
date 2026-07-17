@@ -117,3 +117,4 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 | K2-3 | done | `feat(keystore): add confirm-twice NewKeystorePassphrase source` | confirm-twice + ≥8 (normalized); require_min_len; Env/Term sources unchanged |
 | M-K2 | **passed** | *(K2-1..K2-3 commits)* | encrypt vector + round-trip; write_new_0600 refuse-overwrite; NewKeystorePassphrase |
 | K3-1 | done | `feat(bin): add nested key CLI surface and config validation` | key new/recover clap; TTY guard; three-form mnemonic passphrase; output-dir validation |
+| K3-2 | done | `feat(bin): implement key new ceremony and keystore pipeline` | KeyDeps; ceremony; derive→encrypt→write; FixedEntropy tests |

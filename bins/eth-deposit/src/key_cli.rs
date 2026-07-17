@@ -1,15 +1,17 @@
 //! The nested `key` CLI surface: clap schema, shared config/validation, and the
-//! `key new` non-TTY guard. Runtime derivation (ceremony, encrypt, write) is
-//! K3-2 / K3-3 — this module only parses, validates, and returns.
+//! `key new` non-TTY guard. Runtime derivation lives in [`crate::key_cmd`]
+//! (K3-2 / K3-3).
 
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
 
 use clap::{Arg, ArgMatches, Command};
+use eth_deposit_core::cancel::CancelToken;
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
+use crate::key_cmd;
 
 /// Which `key` subcommand is being run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,16 +192,15 @@ fn shared_args() -> Vec<Arg> {
     ]
 }
 
-/// `key new` entry: non-TTY guard first, then validate config. Runtime pipeline
-/// is K3-2 — after validation this returns `Ok(())` without generating secrets.
-pub fn run_new(m: &ArgMatches) -> Result<(), AppError> {
+/// `key new` entry: non-TTY guard first, validate config, then ceremony +
+/// derive → encrypt → write (K3-2).
+pub fn run_new(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
     // F-5: exit 2 before generating when stdin or stdout is not a TTY.
     require_tty_for_new()?;
 
     let mut stderr = std::io::stderr();
-    let _cfg = load_config(m, KeyMode::New, &mut stderr)?;
-    // K3-2: ceremony + derive → encrypt → write.
-    Ok(())
+    let cfg = load_config(m, KeyMode::New, &mut stderr)?;
+    key_cmd::run_key_new(&cfg, cancel)
 }
 
 /// `key recover` entry: validate config only. Runtime pipeline is K3-3.

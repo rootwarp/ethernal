@@ -100,23 +100,23 @@ integration point. Satisfies F-1, F-2, F-3, F-4, F-6, F-7, F-12, F-15, S-1, S-2,
 - `FixedEntropy` (deterministic mnemonic + salt/iv/uuid) lives in this file's `#[cfg(test)]` only (S-4).
 
 **Acceptance criteria**
-- [ ] `key new` generates a fresh 24-word mnemonic from 256-bit `OsEntropy` with a valid checksum — F-1, S-4.
-- [ ] the ceremony displays once via the injectable `tty_writer` and requires full re-entry before **any**
+- [x] `key new` generates a fresh 24-word mnemonic from 256-bit `OsEntropy` with a valid checksum — F-1, S-4.
+- [x] the ceremony displays once via the injectable `tty_writer` and requires full re-entry before **any**
   keystore is written; a mismatch allows retry or a clean abort (exit 4); no keystore exists on disk until
   re-entry matches — F-6, U-1, S-5.
-- [ ] the mnemonic passphrase is resolved flag > env > prompt-confirm, captured **before** derivation, empty
+- [x] the mnemonic passphrase is resolved flag > env > prompt-confirm, captured **before** derivation, empty
   valid, wrapped in `Zeroizing` — F-12 (architecture §Design note (c)).
-- [ ] per index: signing SK derived at `m/12381/3600/i/0/0`, encrypted as EIP-2335 v4 scrypt, written 0600 /
+- [x] per index: signing SK derived at `m/12381/3600/i/0/0`, encrypted as EIP-2335 v4 scrypt, written 0600 /
   atomically / refuse-overwrite — F-2, F-3, F-4, S-3.
-- [ ] the keystore passphrase uses `NewKeystorePassphrase` (confirm, ≥8) or `--passphrase-env` +
+- [x] the keystore passphrase uses `NewKeystorePassphrase` (confirm, ≥8) or `--passphrase-env` +
   `require_min_len(8)` — F-7.
-- [ ] the `KeyDeps` seam injects entropy/keystore_pw/mnemonic_src/tty_writer/writer/logger; `FixedEntropy` is
+- [x] the `KeyDeps` seam injects entropy/keystore_pw/mnemonic_src/tty_writer/writer/logger; `FixedEntropy` is
   `#[cfg(test)]`-only — S-4, testability.
-- [ ] SIGINT before any write leaves zero keystores; with `--count N`, SIGINT after *k* writes leaves *k*
+- [x] SIGINT before any write leaves zero keystores; with `--count N`, SIGINT after *k* writes leaves *k*
   complete keystores — S-5.
-- [ ] per-key progress + an end-of-run summary (paths + signing pubkeys) go to stderr with the TTY/non-TTY split
+- [x] per-key progress + an end-of-run summary (paths + signing pubkeys) go to stderr with the TTY/non-TTY split
   — F-15.
-- [ ] entropy, mnemonic, seed, every `sk_bytes`, and both passphrases are `Zeroizing` at every hop — S-1.
+- [x] entropy, mnemonic, seed, every `sk_bytes`, and both passphrases are `Zeroizing` at every hop — S-1.
 
 **Test plan**
 - `KeyDeps`-seam unit tests with `FixedEntropy` (deterministic mnemonic + salt/iv/uuid), fake prompt sources, and

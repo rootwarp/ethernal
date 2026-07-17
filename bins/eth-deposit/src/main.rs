@@ -19,6 +19,7 @@ mod errors;
 mod gen_cli;
 mod gen_cmd;
 mod key_cli;
+mod key_cmd;
 mod logging;
 mod run_cmd;
 mod send_cmd;
@@ -105,7 +106,7 @@ fn main() {
 
     let result: Result<(), AppError> = match matches.subcommand() {
         Some(("key", sub)) => match sub.subcommand() {
-            Some(("new", m)) => key_cli::run_new(m),
+            Some(("new", m)) => key_cli::run_new(m, cancel),
             Some(("recover", m)) => key_cli::run_recover(m),
             // subcommand_required(true) on the key group; clap rejects bare `key`.
             _ => unreachable!("key requires a subcommand"),

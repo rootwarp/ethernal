@@ -299,6 +299,7 @@ dependencies = [
  "eth-deposit-tx",
  "hex",
  "libc",
+ "rpassword",
  "serde",
  "serde_json",
  "sha2",
