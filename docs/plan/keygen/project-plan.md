@@ -114,3 +114,5 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 | M-K1 | **passed** | `9ef24e5` | wordlist pin `2f5eed53…` / 13116 bytes asserted; all K1 acceptance criteria checked |
 | K2-1 | done | `feat(keystore): add pure EIP-2335 v4 scrypt encrypt writer` | EIP-2335 scrypt encrypt byte-for-byte + Loader round-trip + wrong-passphrase reject |
 | K2-2 | done | `feat(core): add atomic 0600 write_new_0600 with refuse-overwrite` | write_new_0600 0600 + AlreadyExists; no leftover tmp on handled errors; FsWriter unchanged |
+| K2-3 | done | `feat(keystore): add confirm-twice NewKeystorePassphrase source` | confirm-twice + ≥8 (normalized); require_min_len; Env/Term sources unchanged |
+| M-K2 | **passed** | *(K2-1..K2-3 commits)* | encrypt vector + round-trip; write_new_0600 refuse-overwrite; NewKeystorePassphrase |

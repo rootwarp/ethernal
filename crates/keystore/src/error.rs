@@ -102,6 +102,22 @@ pub enum KeystoreError {
     #[error("passphrase source: {0}")]
     PassphraseSource(Box<KeystoreError>),
 
+    /// The two interactive passphrase entries did not match (keygen create path).
+    /// Maps to exit code 2.
+    #[error("passphrases do not match")]
+    PassphraseMismatch,
+
+    /// The passphrase is shorter than the required minimum length (keygen create
+    /// path; F-7). Length is measured after EIP-2335 normalization (NFKD + strip
+    /// controls), as UTF-8 byte length. Maps to exit code 2.
+    #[error("passphrase must be at least {min} characters (got {got})")]
+    PassphraseTooShort {
+        /// The required minimum length (UTF-8 bytes after EIP-2335 normalize).
+        min: usize,
+        /// The normalized UTF-8 byte length that was actually supplied.
+        got: usize,
+    },
+
     /// EIP-2335 keystore encryption failed (KDF, cipher, or serialization).
     /// Maps to exit code 3 at the bin layer (K3-4).
     #[error("encrypt keystore: {detail}")]

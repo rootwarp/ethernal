@@ -147,12 +147,12 @@ accepting any non-empty passphrase. Satisfies F-7 and U-2.
   behavior stays for `gen`.
 
 **Acceptance criteria**
-- [ ] `NewKeystorePassphrase::read` prompts twice, rejects a mismatch, and rejects `< 8` chars with a clear
+- [x] `NewKeystorePassphrase::read` prompts twice, rejects a mismatch, and rejects `< 8` chars with a clear
   message — F-7, U-2, F-16.
-- [ ] `require_min_len(pw, 8)` enforces the ≥8 minimum on the `--passphrase-env` path (keygen-only) — F-7.
-- [ ] `EnvSource` and `TermPromptSource` are unchanged; a single-prompt read still accepts any non-empty
+- [x] `require_min_len(pw, 8)` enforces the ≥8 minimum on the `--passphrase-env` path (keygen-only) — F-7.
+- [x] `EnvSource` and `TermPromptSource` are unchanged; a single-prompt read still accepts any non-empty
   passphrase (`gen` decrypt path unaffected) — architecture §"Shared components keep their behavior".
-- [ ] the new source is tested through the injectable `with_opener` seam (no real terminal) — testability.
+- [x] the new source is tested through the injectable `with_opener` seam (no real terminal) — testability.
 
 **Test plan**
 - `#[cfg(test)]` using `with_opener` with a scripted fake tty: matching entries → `Ok`; mismatched entries →

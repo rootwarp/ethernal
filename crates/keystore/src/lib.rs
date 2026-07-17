@@ -16,5 +16,8 @@ mod scandir;
 
 pub use error::KeystoreError;
 pub use keystore::{Key, KeyLoader, Loader};
-pub use passphrase::{EnvSource, PassphraseSource, TermPromptSource};
+pub use passphrase::{
+    require_min_len, EnvSource, NewKeystorePassphrase, PassphraseSource, TermPromptSource,
+    KEYSTORE_PASSPHRASE_MIN_LEN,
+};
 pub use scandir::{scan_dir, DirectoryIndex};
