@@ -9,7 +9,9 @@ use std::path::Path;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use eth_deposit_core::bls;
+use eth_deposit_core::deposit::eth1_withdrawal_credentials;
 use eth_deposit_core::network::{self, Network};
+use eth_deposit_signer::validate_eip55_address;
 
 use crate::errors::AppError;
 
@@ -46,6 +48,9 @@ pub struct GenConfig {
     pub verify_with_deposit_cli: bool,
     /// Name or path of the staking-deposit-cli binary. Default "deposit".
     pub deposit_cli_path: String,
+    /// 0x01 execution-address withdrawal credentials resolved from
+    /// `--withdrawal-address` (`0x01 ‖ 0x00×11 ‖ addr20`).
+    pub withdrawal_credentials: [u8; 32],
 }
 
 /// The maximum value accepted for --parallel (Go: runtime.NumCPU()*4).
@@ -62,7 +67,7 @@ pub fn command() -> Command {
     Command::new("gen")
         .about("Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys")
         .override_usage(
-            "eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR [--passphrase-env VAR]",
+            "eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]",
         )
         .long_about(
             "Produces deposit_data-<ts>.json for one or more BLS validator public keys by\n\
@@ -74,6 +79,7 @@ pub fn command() -> Command {
              \x20   --network hoodi \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\
              \x20   --pubkeys 0x93247f2209abcafd...,0xa1b2c3d4e5f6... \\\n\
+             \x20   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \\\n\
              \x20   --output-dir ./out\n\n\
              \x20 # Mainnet, single pubkey (requires explicit acknowledgement)\n\
              \x20 eth-deposit gen \\\n\
@@ -81,6 +87,7 @@ pub fn command() -> Command {
              \x20   --i-understand-this-is-mainnet \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\
              \x20   --pubkeys 0x93247f2209abcafd... \\\n\
+             \x20   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \\\n\
              \x20   --output-dir ./out",
         )
         .arg(
@@ -161,6 +168,12 @@ pub fn command() -> Command {
                 .default_value("deposit")
                 .help("Name or absolute path of the staking-deposit-cli binary used for --verify-with-deposit-cli (minimum supported version: 2.7.0). Defaults to \"deposit\" (looked up in PATH)."),
         )
+        .arg(
+            Arg::new("withdrawal-address")
+                .long("withdrawal-address")
+                .value_name("ADDR")
+                .help("EIP-55 checksummed execution address for 0x01 withdrawal credentials (required; lowercase or checksum-mismatched addresses are rejected)"),
+        )
 }
 
 /// Builds a validated [`GenConfig`] from parsed flags, enforcing the Go
@@ -224,6 +237,22 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
         )));
     }
 
+    // 6. Require-choice gate for --withdrawal-address (not clap required(true),
+    // so a future 0x00 path stays expressible). Parse via strict EIP-55 and
+    // build 0x01 execution-address credentials.
+    let withdrawal_address = m
+        .get_one::<String>("withdrawal-address")
+        .cloned()
+        .unwrap_or_default();
+    if withdrawal_address.is_empty() {
+        return Err(AppError::exit2(
+            "--withdrawal-address: required flag not set; pass a checksummed EIP-55 execution address",
+        ));
+    }
+    let addr = validate_eip55_address(&withdrawal_address)
+        .map_err(|e| AppError::exit2(format!("--withdrawal-address: {e}")))?;
+    let withdrawal_credentials = eth1_withdrawal_credentials(addr);
+
     let cfg = GenConfig {
         keystore_dir,
         pubkeys,
@@ -240,9 +269,10 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
         parallel: parallel as usize,
         verify_with_deposit_cli: m.get_flag("verify-with-deposit-cli"),
         deposit_cli_path: m.get_one::<String>("deposit-cli-path").unwrap().clone(),
+        withdrawal_credentials,
     };
 
-    // 6. Print confirmation banner to stderr before invoking the pipeline.
+    // 7. Print confirmation banner to stderr before invoking the pipeline.
     print_banner(banner_out, &cfg);
 
     Ok(cfg)
@@ -392,6 +422,24 @@ mod tests {
     //     NOT PORTED — clap's `SetTrue` action has no `=false` form. The
     //     ack-omitted gate is covered by `mainnet_without_ack`.
 
+    /// Known EIP-55 checksummed address (signer local test key). Happy-path
+    /// tests must pass this under K5-2's require-choice gate.
+    const TEST_WITHDRAWAL_ADDR: &str = "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1";
+    /// Expected 0x01 credentials for [`TEST_WITHDRAWAL_ADDR`].
+    const TEST_WITHDRAWAL_CREDS: [u8; 32] = [
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x64, 0x2f,
+        0x0e, 0x3c, 0x3a, 0xf5, 0x45, 0xe7, 0xac, 0xbd, 0x38, 0xb0, 0x72, 0x51, 0xb3, 0x99, 0x09,
+        0x14, 0xf1,
+    ];
+
+    /// Appends `--withdrawal-address` + the known checksummed test address.
+    fn with_wd<'a>(args: &[&'a str]) -> Vec<&'a str> {
+        let mut v = args.to_vec();
+        v.push("--withdrawal-address");
+        v.push(TEST_WITHDRAWAL_ADDR);
+        v
+    }
+
     /// Derives a real BLS12-381 G1 pubkey (hex, unprefixed) from a fixed seed.
     fn valid_pubkey(seed: u8) -> String {
         let mut secret = [0u8; 32];
@@ -503,21 +551,23 @@ mod tests {
         let dir = Tmp::new();
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
-        let (cfg, banner) = run(&[
+        let pk_hex = format!("0x{pk}");
+        let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
-            &format!("0x{pk}"),
+            &pk_hex,
             "--network",
             "hoodi",
             "--output-dir",
             dir.str(),
-        ])
+        ]))
         .expect("should succeed");
         assert_eq!(cfg.keystore_dir, ks.str());
         assert_eq!(cfg.network, Network::Hoodi);
         assert_eq!(cfg.output_dir, dir.str());
         assert_eq!(cfg.pubkeys.len(), 1);
+        assert_eq!(cfg.withdrawal_credentials, TEST_WITHDRAWAL_CREDS);
         assert!(banner.contains("eth-deposit gen:"));
         assert!(banner.contains("network=hoodi"));
         assert!(banner.contains("count=1"));
@@ -530,16 +580,17 @@ mod tests {
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
         let pk2 = valid_pubkey(2);
-        let (cfg, banner) = run(&[
+        let pks = format!("0x{pk},0x{pk2}");
+        let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
-            &format!("0x{pk},0x{pk2}"),
+            &pks,
             "--network",
             "hoodi",
             "--output-dir",
             dir.str(),
-        ])
+        ]))
         .expect("should succeed");
         assert_eq!(cfg.pubkeys.len(), 2);
         let want = format!(
@@ -556,46 +607,48 @@ mod tests {
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
         // Missing clap-required flags → parse error.
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--pubkeys",
             &pk,
             "--network",
             "hoodi",
             "--output-dir",
             dir.str()
-        ])
+        ]))
         .is_err());
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--network",
             "hoodi",
             "--output-dir",
             dir.str()
-        ])
+        ]))
         .is_err());
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
             &pk,
             "--output-dir",
             dir.str()
-        ])
+        ]))
         .is_err());
         // Missing --output-dir (validated in load_config) → exit 2.
-        let err = load_err(&[
+        // Pass withdrawal so the output-dir gate is the one that fires.
+        let err = load_err(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
             &pk,
             "--network",
             "hoodi",
-        ]);
+        ]));
         assert_eq!(exit_code_for(&err), 2);
         assert!(err.to_string().contains("required flag not set"));
+        assert!(err.to_string().contains("--output-dir"));
         // All present → ok.
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -604,7 +657,7 @@ mod tests {
             "hoodi",
             "--output-dir",
             dir.str()
-        ])
+        ]))
         .is_ok());
     }
 
@@ -615,7 +668,7 @@ mod tests {
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
         let base_ok = |net: &str| {
-            run(&[
+            run(&with_wd(&[
                 "--keystore-dir",
                 ks.str(),
                 "--pubkeys",
@@ -624,7 +677,7 @@ mod tests {
                 net,
                 "--output-dir",
                 dir.str(),
-            ])
+            ]))
             .is_ok()
         };
         assert!(base_ok("hoodi"));
@@ -633,7 +686,7 @@ mod tests {
             assert!(!base_ok(bad), "network {bad} should be rejected");
         }
         // mainnet needs the ack flag to reach a happy load.
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -643,7 +696,7 @@ mod tests {
             "--output-dir",
             dir.str(),
             "--i-understand-this-is-mainnet",
-        ])
+        ]))
         .is_ok());
     }
 
@@ -652,7 +705,7 @@ mod tests {
     fn invalid_pubkeys_is_exit2() {
         let dir = Tmp::new();
         let ks = Tmp::new();
-        let err = load_err(&[
+        let err = load_err(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -661,7 +714,7 @@ mod tests {
             "hoodi",
             "--output-dir",
             dir.str(),
-        ]);
+        ]));
         assert_eq!(exit_code_for(&err), 2);
     }
 
@@ -673,7 +726,7 @@ mod tests {
         let pk = valid_pubkey(1);
         // The banner writer captures nothing because the gate fires before it.
         let mut argv = vec!["gen"];
-        let extra = [
+        let extra = with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -682,7 +735,7 @@ mod tests {
             "mainnet",
             "--output-dir",
             dir.str(),
-        ];
+        ]);
         argv.extend_from_slice(&extra);
         let m = command().try_get_matches_from(argv).unwrap();
         let mut banner = Vec::new();
@@ -701,7 +754,7 @@ mod tests {
         let dir = Tmp::new();
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
-        let (cfg, banner) = run(&[
+        let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -711,7 +764,7 @@ mod tests {
             "--output-dir",
             dir.str(),
             "--i-understand-this-is-mainnet",
-        ])
+        ]))
         .expect("should succeed");
         assert_eq!(cfg.network, Network::Mainnet);
         assert!(cfg.mainnet_ack);
@@ -724,7 +777,7 @@ mod tests {
         let dir = Tmp::new();
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
-        let (cfg, banner) = run(&[
+        let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -734,7 +787,7 @@ mod tests {
             "--output-dir",
             dir.str(),
             "--i-understand-this-is-mainnet",
-        ])
+        ]))
         .expect("should succeed");
         assert_eq!(cfg.network, Network::Hoodi);
         assert!(banner.contains("network=hoodi"));
@@ -749,7 +802,7 @@ mod tests {
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
         let base = |extra: &[&str]| -> GenConfig {
-            let mut a = vec![
+            let mut a = with_wd(&[
                 "--keystore-dir",
                 ks.str(),
                 "--pubkeys",
@@ -758,7 +811,7 @@ mod tests {
                 "hoodi",
                 "--output-dir",
                 dir.str(),
-            ];
+            ]);
             a.extend_from_slice(extra);
             run(&a).expect("ok").0
         };
@@ -780,6 +833,7 @@ mod tests {
             base(&["--passphrase-env", "MY_PASSPHRASE"]).passphrase_env,
             "MY_PASSPHRASE"
         );
+        assert_eq!(base(&[]).withdrawal_credentials, TEST_WITHDRAWAL_CREDS);
     }
 
     // Go: TestParallelFlag — default 1, valid N propagates, invalid rejected exit 2.
@@ -789,7 +843,7 @@ mod tests {
         let ks = Tmp::new();
         let pk = valid_pubkey(1);
         let ok = |extra: &[&str]| -> Result<(GenConfig, String), String> {
-            let mut a = vec![
+            let mut a = with_wd(&[
                 "--keystore-dir",
                 ks.str(),
                 "--pubkeys",
@@ -798,7 +852,7 @@ mod tests {
                 "hoodi",
                 "--output-dir",
                 dir.str(),
-            ];
+            ]);
             a.extend_from_slice(extra);
             run(&a)
         };
@@ -810,7 +864,7 @@ mod tests {
             &["--parallel", "99999"][..],
             &["--parallel=-1"][..],
         ] {
-            let mut a = vec![
+            let mut a = with_wd(&[
                 "--keystore-dir",
                 ks.str(),
                 "--pubkeys",
@@ -819,7 +873,7 @@ mod tests {
                 "hoodi",
                 "--output-dir",
                 dir.str(),
-            ];
+            ]);
             a.extend_from_slice(bad);
             let err = load_err(&a);
             assert_eq!(exit_code_for(&err), 2, "parallel {bad:?}");
@@ -836,7 +890,7 @@ mod tests {
 
         // nonexistent keystore-dir → err.
         let missing_ks = dir.0.join("no-such-dir");
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             missing_ks.to_str().unwrap(),
             "--pubkeys",
@@ -845,13 +899,13 @@ mod tests {
             "hoodi",
             "--output-dir",
             dir.str(),
-        ])
+        ]))
         .is_err());
 
         // file as keystore-dir → err.
         let file = dir.0.join("a-file");
         std::fs::write(&file, b"x").unwrap();
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             file.to_str().unwrap(),
             "--pubkeys",
@@ -860,12 +914,12 @@ mod tests {
             "hoodi",
             "--output-dir",
             dir.str(),
-        ])
+        ]))
         .is_err());
 
         // nonexistent output-dir → err.
         let missing_out = dir.0.join("no-out");
-        let err = load_err(&[
+        let err = load_err(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -874,11 +928,11 @@ mod tests {
             "hoodi",
             "--output-dir",
             missing_out.to_str().unwrap(),
-        ]);
+        ]));
         assert_eq!(exit_code_for(&err), 2);
 
         // file as output-dir → err.
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -887,7 +941,7 @@ mod tests {
             "hoodi",
             "--output-dir",
             file.to_str().unwrap(),
-        ])
+        ]))
         .is_err());
     }
 
@@ -900,7 +954,7 @@ mod tests {
         let invalid = std::env::temp_dir().join("gen-cli-does-not-exist-xyz");
 
         // dry-run without --output-dir → ok, OutputDir empty.
-        let (cfg, _) = run(&[
+        let (cfg, _) = run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -908,13 +962,13 @@ mod tests {
             "--network",
             "hoodi",
             "--dry-run",
-        ])
+        ]))
         .unwrap();
         assert_eq!(cfg.output_dir, "");
         assert!(cfg.dry_run);
 
         // dry-run with invalid --output-dir → ok (validation skipped).
-        assert!(run(&[
+        assert!(run(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -924,22 +978,22 @@ mod tests {
             "--output-dir",
             invalid.to_str().unwrap(),
             "--dry-run",
-        ])
+        ]))
         .is_ok());
 
         // no dry-run, missing --output-dir → exit 2.
-        let err = load_err(&[
+        let err = load_err(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
             &pk,
             "--network",
             "hoodi",
-        ]);
+        ]));
         assert_eq!(exit_code_for(&err), 2);
 
         // no dry-run, invalid --output-dir → exit 2.
-        let err = load_err(&[
+        let err = load_err(&with_wd(&[
             "--keystore-dir",
             ks.str(),
             "--pubkeys",
@@ -948,7 +1002,96 @@ mod tests {
             "hoodi",
             "--output-dir",
             invalid.to_str().unwrap(),
+        ]));
+        assert_eq!(exit_code_for(&err), 2);
+    }
+
+    // K5-2: require-choice gate — absent --withdrawal-address → exit 2.
+    #[test]
+    fn withdrawal_address_required() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
         ]);
         assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("--withdrawal-address"),
+            "err: {err}"
+        );
+        assert!(
+            err.to_string().contains("required flag not set"),
+            "err: {err}"
+        );
+        // dry-run also requires the flag (gate is independent of dry-run).
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--dry-run",
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("--withdrawal-address"));
+    }
+
+    // K5-2: lowercase / checksum-mismatch / bad hex → exit 2 via validate_eip55_address.
+    #[test]
+    fn withdrawal_address_eip55_rejects() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let base = |addr: &str| -> AppError {
+            load_err(&[
+                "--keystore-dir",
+                ks.str(),
+                "--pubkeys",
+                &pk,
+                "--network",
+                "hoodi",
+                "--output-dir",
+                dir.str(),
+                "--withdrawal-address",
+                addr,
+            ])
+        };
+
+        // all-lowercase (strict EIP-55 rejects).
+        let err = base(&TEST_WITHDRAWAL_ADDR.to_ascii_lowercase());
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("--withdrawal-address"), "{err}");
+        assert!(
+            err.to_string().contains("EIP-55 checksum mismatch"),
+            "{err}"
+        );
+
+        // single-nibble case flip (checksum mismatch).
+        let mut chars: Vec<char> = TEST_WITHDRAWAL_ADDR.chars().collect();
+        assert_eq!(chars[9], 'E');
+        chars[9] = 'e';
+        let flipped: String = chars.into_iter().collect();
+        let err = base(&flipped);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("EIP-55 checksum mismatch"), "{err}");
+
+        // wrong length.
+        let err = base("0x1a642f0E3c3aF545E7AcBD38b07251B3990914");
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("--withdrawal-address"), "{err}");
+
+        // non-hex.
+        let err = base("not-an-address");
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("--withdrawal-address"), "{err}");
     }
 }

@@ -25,9 +25,12 @@ use crate::logging::{Format, Level, Logger};
 /// fixtures. Bump only after golden-file re-validation passes.
 pub const CLI_VERSION: &str = "2.7.0";
 
-/// The 32-byte withdrawal credentials for v1: type 0x00 prefix (BLS
-/// withdrawal), all other bytes zero. A future --withdrawal-address flag
-/// plugs in here.
+/// The 32-byte withdrawal credentials placeholder for the deferred 0x00 BLS
+/// withdrawal path (F-14): type 0x00 prefix with an all-zero body.
+///
+/// Unreachable under the require-choice gate on `--withdrawal-address` (K5-2);
+/// kept as the documented hook for a future 0x00 credential mode.
+#[allow(dead_code)] // intentionally retained as the F-14 / 0x00 placeholder (K5-2)
 pub fn default_withdrawal_creds() -> [u8; 32] {
     [0u8; 32]
 }
@@ -301,7 +304,7 @@ fn process_pubkey(
         &Request {
             network: cfg.network,
             pubkeys: vec![pk],
-            withdrawal_credentials: default_withdrawal_creds(),
+            withdrawal_credentials: cfg.withdrawal_credentials,
             amount_gwei: 32_000_000_000,
             deposit_cli_version: CLI_VERSION.to_string(),
         },
@@ -655,6 +658,11 @@ mod tests {
     }
 
     fn base_cfg(pks: Vec<[u8; 48]>) -> GenConfig {
+        // Known EIP-55 address from signer tests → 0x01 creds for pipeline tests.
+        let addr = [
+            0x1a, 0x64, 0x2f, 0x0e, 0x3c, 0x3a, 0xf5, 0x45, 0xe7, 0xac, 0xbd, 0x38, 0xb0, 0x72,
+            0x51, 0xb3, 0x99, 0x09, 0x14, 0xf1,
+        ];
         GenConfig {
             keystore_dir: "/fake/keystores".to_string(),
             pubkeys: pks,
@@ -668,6 +676,7 @@ mod tests {
             parallel: 1,
             verify_with_deposit_cli: false,
             deposit_cli_path: "deposit".to_string(),
+            withdrawal_credentials: deposit::eth1_withdrawal_credentials(addr),
         }
     }
 

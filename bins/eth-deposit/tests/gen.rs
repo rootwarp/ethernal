@@ -7,6 +7,10 @@
 //! the `gen_cli.rs` `#[cfg(test)]` module — it exercises `load_config`
 //! (validate/banner only), matching Go's no-op run callback which never runs the
 //! pipeline. Driving the binary here would instead run the real pipeline.
+//!
+//! K5-2: every successful `gen` invocation must pass `--withdrawal-address`
+//! (require-choice gate); command-level tests also cover the gate and EIP-55
+//! rejects.
 
 mod common;
 
@@ -15,6 +19,12 @@ use std::os::unix::fs::PermissionsExt;
 use common::{eth_deposit, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, TempDir};
 
 const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
+
+/// Known EIP-55 checksummed address (signer local test key).
+const WITHDRAWAL_ADDR: &str = "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1";
+/// Expected hex (no 0x) of 0x01 ‖ 11 zero ‖ addr20 for [`WITHDRAWAL_ADDR`].
+const WITHDRAWAL_CREDS_HEX: &str =
+    "0100000000000000000000001a642f0e3c3af545e7acbd38b07251b3990914f1";
 
 // Go: TestGenDryRun_NoOutputDir_RealPipelineEmitsJSON — the real pipeline over
 // the committed hoodi fixtures emits the deposit JSON to stdout in dry-run mode.
@@ -32,6 +42,8 @@ fn gen_dry_run_real_pipeline_emits_json() {
             "--dry-run",
             "--passphrase-env",
             PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
         ])
         .output()
         .expect("run gen");
@@ -45,6 +57,11 @@ fn gen_dry_run_real_pipeline_emits_json() {
     let arr = entries.as_array().expect("array");
     assert_eq!(arr.len(), 1, "one deposit entry");
     assert_eq!(arr[0]["pubkey"], hoodi_pubkey());
+    assert_eq!(
+        arr[0]["withdrawal_credentials"].as_str().unwrap(),
+        WITHDRAWAL_CREDS_HEX,
+        "0x01 execution-address credentials must appear in deposit data"
+    );
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -73,7 +90,12 @@ fn gen_writes_output_file() {
             "--output-dir",
         ])
         .arg(out_dir.path())
-        .args(["--passphrase-env", PASS_ENV])
+        .args([
+            "--passphrase-env",
+            PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
         .output()
         .expect("run gen");
     assert!(
@@ -94,6 +116,12 @@ fn gen_writes_output_file() {
         files.len(),
         1,
         "expected one deposit_data file, got {files:?}"
+    );
+    let data = std::fs::read(files[0].path()).expect("read deposit_data");
+    let entries: serde_json::Value = serde_json::from_slice(&data).expect("JSON");
+    assert_eq!(
+        entries[0]["withdrawal_credentials"].as_str().unwrap(),
+        WITHDRAWAL_CREDS_HEX
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -136,7 +164,13 @@ fn verify_with_deposit_cli_passes() {
             "--output-dir",
         ])
         .arg(out_dir.path())
-        .args(["--passphrase-env", PASS_ENV, "--verify-with-deposit-cli"])
+        .args([
+            "--passphrase-env",
+            PASS_ENV,
+            "--verify-with-deposit-cli",
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
         .output()
         .expect("run gen");
     assert!(
@@ -166,7 +200,13 @@ fn verify_with_deposit_cli_fails_exit3() {
             "--output-dir",
         ])
         .arg(out_dir.path())
-        .args(["--passphrase-env", PASS_ENV, "--verify-with-deposit-cli"])
+        .args([
+            "--passphrase-env",
+            PASS_ENV,
+            "--verify-with-deposit-cli",
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
         .output()
         .expect("run gen");
     assert_eq!(
@@ -204,6 +244,7 @@ fn verify_with_deposit_cli_not_found_exit2() {
             "--deposit-cli-path",
         ])
         .arg(&missing)
+        .args(["--withdrawal-address", WITHDRAWAL_ADDR])
         .output()
         .expect("run gen");
     assert_eq!(
@@ -234,6 +275,8 @@ fn verify_with_deposit_cli_skipped_in_dry_run() {
             "--passphrase-env",
             PASS_ENV,
             "--verify-with-deposit-cli",
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
         ])
         .output()
         .expect("run gen");
@@ -241,5 +284,113 @@ fn verify_with_deposit_cli_skipped_in_dry_run() {
         out.status.success(),
         "verify must be skipped in dry-run; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// K5-2: absent --withdrawal-address → exit 2 (require-choice gate).
+#[test]
+fn gen_without_withdrawal_address_exit2() {
+    let out = eth_deposit()
+        .env(PASS_ENV, hoodi_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--passphrase-env",
+            PASS_ENV,
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--withdrawal-address"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("required flag not set"),
+        "stderr: {stderr}"
+    );
+}
+
+// K5-2: lowercase --withdrawal-address → exit 2 (strict EIP-55).
+#[test]
+fn gen_withdrawal_address_lowercase_exit2() {
+    let lower = WITHDRAWAL_ADDR.to_ascii_lowercase();
+    let out = eth_deposit()
+        .env(PASS_ENV, hoodi_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--passphrase-env",
+            PASS_ENV,
+            "--withdrawal-address",
+            &lower,
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("EIP-55 checksum mismatch") || stderr.contains("--withdrawal-address"),
+        "stderr: {stderr}"
+    );
+}
+
+// K5-2: checksum-mismatched --withdrawal-address → exit 2.
+#[test]
+fn gen_withdrawal_address_checksum_mismatch_exit2() {
+    // Flip case of one alphabetic nibble ('E' → 'e' at index 9).
+    let mut chars: Vec<char> = WITHDRAWAL_ADDR.chars().collect();
+    assert_eq!(chars[9], 'E');
+    chars[9] = 'e';
+    let flipped: String = chars.into_iter().collect();
+
+    let out = eth_deposit()
+        .env(PASS_ENV, hoodi_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--passphrase-env",
+            PASS_ENV,
+            "--withdrawal-address",
+            &flipped,
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("EIP-55 checksum mismatch") || stderr.contains("--withdrawal-address"),
+        "stderr: {stderr}"
     );
 }

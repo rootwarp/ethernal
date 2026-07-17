@@ -82,13 +82,13 @@ no deposit is ever built on the all-zero placeholder by accident. Satisfies F-13
   deferred 0x00 path (F-14).
 
 **Acceptance criteria**
-- [ ] `gen --withdrawal-address <checksummed>` emits a `0x01 ‖ 11 zero ‖ addr20` credential in the deposit data;
+- [x] `gen --withdrawal-address <checksummed>` emits a `0x01 ‖ 11 zero ‖ addr20` credential in the deposit data;
   the `DepositMessage`/`DepositData` roots reflect it (updated for free) — F-13, G6
   (research/withdrawal-credentials.md §"How credentials flow").
-- [ ] `gen` **without** `--withdrawal-address` → exit 2 with a clear message (require-choice gate, a conditional
+- [x] `gen` **without** `--withdrawal-address` → exit 2 with a clear message (require-choice gate, a conditional
   check in `load_config`, not clap `required(true)`) — PRD Q2, F-13 (risk R2).
-- [ ] a lowercase or checksum-mismatched `--withdrawal-address` → exit 2 (via `validate_eip55_address`) — F-13.
-- [ ] flag + gate ship in **one** issue / one merge / one release; `default_withdrawal_creds()` remains present as
+- [x] a lowercase or checksum-mismatched `--withdrawal-address` → exit 2 (via `validate_eip55_address`) — F-13.
+- [x] flag + gate ship in **one** issue / one merge / one release; `default_withdrawal_creds()` remains present as
   the documented, unreachable placeholder — risk R2, F-14.
 
 **Test plan**
