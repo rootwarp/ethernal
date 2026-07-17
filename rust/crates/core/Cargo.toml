@@ -1,0 +1,19 @@
+[package]
+name = "eth-deposit-core"
+version.workspace = true
+edition.workspace = true
+description = "Core deposit pipeline: SSZ hash-tree-root, network params, BLS signing, deposit generation, Launchpad JSON output"
+
+[lib]
+name = "eth_deposit_core"
+
+[dependencies]
+blst = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
