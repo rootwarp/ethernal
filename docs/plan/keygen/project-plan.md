@@ -119,3 +119,5 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 | K3-1 | done | `feat(bin): add nested key CLI surface and config validation` | key new/recover clap; TTY guard; three-form mnemonic passphrase; output-dir validation |
 | K3-2 | done | `feat(bin): implement key new ceremony and keystore pipeline` | KeyDeps; ceremony; derive→encrypt→write; FixedEntropy tests |
 | K3-3 | done | `feat(bin): implement key recover from TTY or stdin` | validate-first; start-index/count; shared encrypt/write; no ceremony |
+| K3-4 | done | `feat(bin): key exit-code map and secret-hygiene tests` | Bip39→2 Hd/Encrypt/write→3 Aborted→4; hygiene; gen Output→1 preserved |
+| M-K3 | **passed** | *(K3-1..K3-4 commits)* | key new/recover + exit map + secret hygiene |

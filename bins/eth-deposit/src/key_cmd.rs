@@ -535,28 +535,20 @@ fn map_entropy_err(e: EntropyError) -> AppError {
 }
 
 fn map_bip39_err(e: Bip39Error) -> AppError {
-    AppError::Exit {
-        msg: e.to_string(),
-        code: 2,
-    }
+    AppError::Bip39(e)
 }
 
 fn map_hd_err(e: hd::HdError) -> AppError {
-    AppError::Exit {
-        msg: e.to_string(),
-        code: 3,
-    }
+    AppError::Hd(e)
 }
 
 fn map_encrypt_err(e: KeystoreError) -> AppError {
-    AppError::Exit {
-        msg: e.to_string(),
-        code: 3,
-    }
+    // Typed Keystore(Encrypt) → exit 3 via exit_code_for (K3-4).
+    AppError::Keystore(e)
 }
 
 fn map_write_err(e: eth_deposit_core::output::OutputError) -> AppError {
-    // Call-site Exit{3}: gen's OutputError must stay → 1 (architecture fork a).
+    // Call-site Exit{3}: gen's AppError::Output must stay → 1 (architecture fork a).
     AppError::Exit {
         msg: e.to_string(),
         code: 3,
@@ -564,18 +556,8 @@ fn map_write_err(e: eth_deposit_core::output::OutputError) -> AppError {
 }
 
 fn map_passphrase_err(e: KeystoreError) -> AppError {
-    // PassphraseTooShort / Mismatch / EnvVarEmpty / NoTty → 2; others via Keystore arm.
-    match e {
-        KeystoreError::PassphraseTooShort { .. }
-        | KeystoreError::PassphraseMismatch
-        | KeystoreError::EnvVarEmpty { .. }
-        | KeystoreError::NoTty { .. }
-        | KeystoreError::ReadPassphrase { .. } => AppError::Exit {
-            msg: e.to_string(),
-            code: 2,
-        },
-        other => AppError::Keystore(other),
-    }
+    // PassphraseTooShort / Mismatch / EnvVarEmpty / NoTty → 2 via Keystore arm.
+    AppError::Keystore(e)
 }
 
 // ---------------------------------------------------------------------------
@@ -1678,5 +1660,204 @@ mod tests {
         let a = std::fs::read(&f_new[0]).unwrap();
         let b = std::fs::read(&f_rec[0]).unwrap();
         assert_eq!(a, b, "key new and key recover must produce identical shape");
+    }
+
+    // =========================================================================
+    // K3-4 secret hygiene (S-2 / G5)
+    // =========================================================================
+
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+    impl Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Secrets (mnemonic, seed, SK, both passphrases — raw + hex) must never
+    /// appear in summary/logger; mnemonic display is only on `tty_writer`.
+    #[test]
+    fn secret_hygiene_key_new_buffers() {
+        let dir = Tmp::new();
+        let mut cfg = base_cfg(dir.str(), 1);
+        // Distinct mnemonic passphrase so we can grep for it.
+        cfg.mnemonic_passphrase =
+            MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+
+        let keystore_pw_plain = "password1";
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(keystore_pw_plain.as_bytes().to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(
+            Level::Debug,
+            Format::Text,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        {
+            let mut deps = KeyDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::Tty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+            };
+            run_key_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+
+        let tty_s = String::from_utf8(tty).expect("tty utf8");
+        let summary_s = String::from_utf8(summary).expect("summary utf8");
+        let logs = logbuf.lock().unwrap().clone();
+        let logs_s = String::from_utf8_lossy(&logs).into_owned();
+
+        // Mnemonic display: only on tty_writer (S-2).
+        assert!(
+            tty_s.contains(ZERO_MNEMONIC),
+            "ceremony must display mnemonic on tty_writer"
+        );
+        assert!(
+            !summary_s.contains(ZERO_MNEMONIC),
+            "mnemonic leaked to summary/stderr: {summary_s}"
+        );
+        assert!(
+            !logs_s.contains(ZERO_MNEMONIC),
+            "mnemonic leaked to logger: {logs_s}"
+        );
+
+        // Seed (24-word abandon…art + TREZOR).
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR");
+        let seed_hex = hex::encode(seed.as_slice());
+        assert!(
+            !summary_s.contains(&seed_hex) && !logs_s.contains(&seed_hex),
+            "seed hex leaked"
+        );
+        assert!(
+            !summary_s
+                .as_bytes()
+                .windows(seed.len())
+                .any(|w| w == seed.as_slice())
+                && !logs.windows(seed.len()).any(|w| w == seed.as_slice()),
+            "raw seed leaked"
+        );
+
+        // Signing SK for index 0.
+        let derived = derive_path(seed.as_slice(), &KeyPath::signing(0)).unwrap();
+        let sk = derived.to_bytes();
+        let sk_hex = hex::encode(sk.as_slice());
+        assert!(
+            !summary_s.contains(&sk_hex) && !logs_s.contains(&sk_hex),
+            "sk hex leaked"
+        );
+        assert!(
+            !summary_s
+                .as_bytes()
+                .windows(sk.len())
+                .any(|w| w == sk.as_slice())
+                && !logs.windows(sk.len()).any(|w| w == sk.as_slice()),
+            "raw sk leaked"
+        );
+
+        // Keystore passphrase (raw + hex).
+        assert!(
+            !summary_s.contains(keystore_pw_plain) && !logs_s.contains(keystore_pw_plain),
+            "keystore passphrase leaked"
+        );
+        let ks_hex = hex::encode(keystore_pw_plain.as_bytes());
+        assert!(
+            !summary_s.contains(&ks_hex) && !logs_s.contains(&ks_hex),
+            "keystore passphrase hex leaked"
+        );
+
+        // Mnemonic passphrase (raw + hex).
+        assert!(
+            !summary_s.contains("TREZOR") && !logs_s.contains("TREZOR"),
+            "mnemonic passphrase leaked"
+        );
+        let mp_hex = hex::encode(b"TREZOR");
+        assert!(
+            !summary_s.contains(&mp_hex) && !logs_s.contains(&mp_hex),
+            "mnemonic passphrase hex leaked"
+        );
+
+        // tty_writer must not contain seed/SK/passphrases either (only mnemonic).
+        assert!(!tty_s.contains(&seed_hex), "seed hex on tty");
+        assert!(!tty_s.contains(&sk_hex), "sk hex on tty");
+        assert!(!tty_s.contains(keystore_pw_plain), "keystore pw on tty");
+        // "TREZOR" is not in the abandon…art mnemonic; ensure it is not shown.
+        assert!(!tty_s.contains("TREZOR"), "mnemonic passphrase on tty");
+
+        // Progress/summary should still be non-empty (paths + pubkeys only).
+        assert!(summary_s.contains("wrote 1 keystore"), "{summary_s}");
+        assert!(!logs.is_empty(), "debug logger should emit events");
+    }
+
+    /// Recover path: no tty display; secrets still absent from summary/logger.
+    #[test]
+    fn secret_hygiene_key_recover_buffers() {
+        let dir = Tmp::new();
+        let mut cfg = recover_cfg(dir.str(), 1, 0);
+        cfg.mnemonic_passphrase =
+            MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+        let keystore_pw_plain = "password1";
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(keystore_pw_plain.as_bytes().to_vec());
+        // Injected mnemonic (simulates pipe/TTY read) — must not reappear on buffers.
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(
+            Level::Debug,
+            Format::Text,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        {
+            let mut deps = KeyDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+            };
+            run_key_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+
+        let tty_s = String::from_utf8(tty).unwrap();
+        let summary_s = String::from_utf8(summary).unwrap();
+        let logs_s = String::from_utf8_lossy(&logbuf.lock().unwrap()).into_owned();
+
+        assert!(
+            tty_s.is_empty(),
+            "recover must not write mnemonic to tty: {tty_s:?}"
+        );
+        for secret in [
+            ABANDON_12,
+            "TREZOR",
+            keystore_pw_plain,
+            &hex::encode(bip39::to_seed(ABANDON_12, b"TREZOR").as_slice()),
+            &hex::encode(b"TREZOR"),
+            &hex::encode(keystore_pw_plain.as_bytes()),
+        ] {
+            assert!(
+                !summary_s.contains(secret),
+                "secret {secret:?} in summary"
+            );
+            assert!(!logs_s.contains(secret), "secret {secret:?} in logs");
+        }
     }
 }

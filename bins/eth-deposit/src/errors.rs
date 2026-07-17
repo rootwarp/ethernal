@@ -13,8 +13,10 @@
 
 use std::fmt;
 
+use eth_deposit_core::bip39::Bip39Error;
 use eth_deposit_core::bls::BlsError;
 use eth_deposit_core::deposit::DepositError;
+use eth_deposit_core::hd::HdError;
 use eth_deposit_core::network::NetworkError;
 use eth_deposit_core::output::OutputError;
 use eth_deposit_keystore::KeystoreError;
@@ -41,12 +43,21 @@ pub enum AppError {
     },
 
     /// SIGINT / cancellation — the port of `context.Canceled` +
-    /// `ErrUserAborted`. Exit code 4.
+    /// `ErrUserAborted`. Exit code 4. Also ceremony mismatch abort (F-6).
     Aborted(String),
+
+    /// BIP-39 validation / entropy conversion failure (user input). Exit code 2.
+    Bip39(Bip39Error),
+
+    /// EIP-2333 HD derivation failure (crypto). Exit code 3.
+    Hd(HdError),
 
     Keystore(KeystoreError),
     Deposit(DepositError),
     Network(NetworkError),
+    /// Deposit-data write path (`gen`). Exit code 1 via fallback — keystore
+    /// writes from `key new`/`recover` must use call-site `Exit{code:3}` so
+    /// this arm stays gen-only (architecture fork (a)).
     Output(OutputError),
     Tx(TxError),
 
@@ -107,6 +118,8 @@ impl fmt::Display for AppError {
             }
             AppError::Aborted(detail) if detail.is_empty() => f.write_str("user aborted"),
             AppError::Aborted(detail) => write!(f, "user aborted: {detail}"),
+            AppError::Bip39(e) => e.fmt(f),
+            AppError::Hd(e) => e.fmt(f),
             AppError::Keystore(e) => e.fmt(f),
             AppError::Deposit(e) => e.fmt(f),
             AppError::Network(e) => e.fmt(f),
@@ -135,6 +148,16 @@ impl fmt::Display for AppError {
     }
 }
 
+impl From<Bip39Error> for AppError {
+    fn from(e: Bip39Error) -> Self {
+        AppError::Bip39(e)
+    }
+}
+impl From<HdError> for AppError {
+    fn from(e: HdError) -> Self {
+        AppError::Hd(e)
+    }
+}
 impl From<KeystoreError> for AppError {
     fn from(e: KeystoreError) -> Self {
         AppError::Keystore(e)
@@ -222,9 +245,12 @@ pub fn exit_code_for(err: &AppError) -> i32 {
         AppError::Tx(TxError::ChainIdMismatch { .. }) => 2,
         AppError::Tx(TxError::MissingFromForNonce) => 2,
 
-        // Exit code 2: user / configuration errors (gen).
+        // Exit code 2: user / configuration errors (gen + keygen bip39).
+        AppError::Bip39(_) => 2,
         AppError::Keystore(e) => match e {
-            KeystoreError::WrongPassphrase { .. } => 3,
+            // Decrypt wrong-passphrase and encrypt failure are crypto (3).
+            KeystoreError::WrongPassphrase { .. } | KeystoreError::Encrypt { .. } => 3,
+            // PassphraseTooShort / Mismatch / EnvVarEmpty / NoTty / malformed → 2.
             _ => 2,
         },
         AppError::KeystoreNotFoundFor { .. } => 2,
@@ -234,7 +260,9 @@ pub fn exit_code_for(err: &AppError) -> i32 {
         AppError::Network(_) => 2,
 
         // Exit code 3: crypto / signer errors and external verification
-        // failures (gen).
+        // failures (gen + keygen HD). Keystore *write* stays call-site Exit{3}
+        // so AppError::Output remains fallback 1 for gen (architecture fork a).
+        AppError::Hd(_) => 3,
         AppError::Deposit(DepositError::SelfVerifyFailed { .. }) => 3,
         AppError::BlsInit(_) => 3,
         AppError::DepositCliFailed { .. } => 3,
@@ -537,5 +565,97 @@ mod tests {
     fn wrap_input_err_is_exit2() {
         let inner = AppError::Internal("bad hex value".into());
         assert_eq!(code(AppError::input("--max-fee-per-gas", inner)), 2);
+    }
+
+    // --- keygen exit map (K3-4 / F-9) ---
+
+    #[test]
+    fn bip39_is_exit2() {
+        assert_eq!(code(AppError::Bip39(Bip39Error::Checksum)), 2);
+        assert_eq!(
+            code(AppError::Bip39(Bip39Error::UnknownWord("x".into()))),
+            2
+        );
+        assert_eq!(code(AppError::Bip39(Bip39Error::WordCount(13))), 2);
+        assert_eq!(
+            code(AppError::context("wrap", AppError::Bip39(Bip39Error::Checksum))),
+            2
+        );
+    }
+
+    #[test]
+    fn hd_is_exit3() {
+        assert_eq!(
+            code(AppError::Hd(HdError::Master("too short".into()))),
+            3
+        );
+        assert_eq!(
+            code(AppError::context(
+                "derive",
+                AppError::Hd(HdError::Master("x".into()))
+            )),
+            3
+        );
+    }
+
+    #[test]
+    fn keystore_encrypt_is_exit3() {
+        assert_eq!(
+            code(AppError::Keystore(KeystoreError::Encrypt {
+                detail: "kdf failed".into()
+            })),
+            3
+        );
+    }
+
+    #[test]
+    fn keystore_passphrase_short_is_exit2() {
+        assert_eq!(
+            code(AppError::Keystore(KeystoreError::PassphraseTooShort {
+                min: 8,
+                got: 7
+            })),
+            2
+        );
+        assert_eq!(
+            code(AppError::Keystore(KeystoreError::PassphraseMismatch)),
+            2
+        );
+    }
+
+    #[test]
+    fn output_error_stays_exit1_for_gen() {
+        // Architecture: AppError::Output is gen's path → fallback 1.
+        // Keystore writes must not use this variant (call-site Exit{3}).
+        assert_eq!(code(AppError::Output(OutputError::AlreadyExists)), 1);
+        assert_eq!(
+            code(AppError::Output(OutputError::WriteTmp(std::io::Error::other(
+                "disk full"
+            )))),
+            1
+        );
+    }
+
+    #[test]
+    fn keystore_write_call_site_exit3() {
+        // key_cmd::map_write_err shape — not AppError::Output.
+        assert_eq!(
+            code(AppError::Exit {
+                msg: "output: file already exists".into(),
+                code: 3
+            }),
+            3
+        );
+    }
+
+    #[test]
+    fn ceremony_abort_and_sigint_are_exit4() {
+        assert_eq!(
+            code(AppError::Aborted(
+                "mnemonic re-entry mismatch; no keystores written".into()
+            )),
+            4
+        );
+        assert_eq!(code(AppError::Aborted("interrupted".into())), 4);
     }
 }

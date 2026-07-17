@@ -197,12 +197,12 @@ S-2/G5 (no secret leakage), and preserves `gen`'s `OutputError → 1`.
   the injectable `tty_writer`, and assert the secrets never appear in the captured stdout/stderr/logger buffers.
 
 **Acceptance criteria**
-- [ ] exit map holds: `Bip39Error` → 2; passphrase `<8` / non-TTY `new` / bad `--count` / bad address → 2;
+- [x] exit map holds: `Bip39Error` → 2; passphrase `<8` / non-TTY `new` / bad `--count` / bad address → 2;
   `HdError` + encrypt failure → 3; keystore write (incl. overwrite-refusal) → 3 at the call site; ceremony
   mismatch/abort + SIGINT → 4; unexpected-internal stays 1 — F-9 (architecture §Exit-code mapping).
-- [ ] the secret-hygiene test asserts the mnemonic, seed, secret-key, and **both** passphrases (raw + hex) never
+- [x] the secret-hygiene test asserts the mnemonic, seed, secret-key, and **both** passphrases (raw + hex) never
   appear in stdout/stderr/logger buffers; the one-time mnemonic display goes **only** to the `tty_writer` — S-2, G5.
-- [ ] `gen`'s `writer_error_exit1` still passes (its `OutputError` stays `→ 1`) — regression (architecture R2).
+- [x] `gen`'s `writer_error_exit1` still passes (its `OutputError` stays `→ 1`) — regression (architecture R2).
 
 **Test plan**
 - Unit tests asserting each `AppError` variant → its expected code (2/3/4/1).
