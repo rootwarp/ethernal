@@ -5,9 +5,9 @@
 //! the passphrase comes from so the loader can be tested without a TTY or a
 //! live environment variable.
 
-use std::sync::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::sync::Mutex;
 
 use crate::error::KeystoreError;
 

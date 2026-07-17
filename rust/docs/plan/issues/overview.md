@@ -104,8 +104,8 @@ and diffs stdout/stderr/exit codes on identical inputs.
 | R3-1/R3-2 | done | 2624360 | unsigned-tx golden byte-identical; 44 tests; redaction invariant tested |
 | R2-3/R2-4 | done | 6d9825f | gen: Rust and Go binaries byte-identical stdout AND stderr |
 | R3-5, R4-1/2/3 | done | dbc210f | diff-go.sh 12/12 across all five subcommands |
-| R5-1 | in progress | — | bin-level Go test suites being ported |
-| R5-2 | in progress | — | README/USER-GUIDE notes done; final clippy/fmt pending R5-1 |
+| R5-1 | done | d444d3b | 160 tests (66 unit + 94 integration); stub-driven RPC paths; e2e pipeline; workspace 30/30 green |
+| R5-2 | done | (this commit) | workspace clippy -D warnings clean, fmt clean, diff-go 12/12 — M5 reached |
 
 Open question resolutions to date: (1) ws:// dropped, documented; (2)
 --verify-with-deposit-cli ported as-is; (3) go/ kept as reference — revisit
