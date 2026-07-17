@@ -133,20 +133,41 @@ fn key_recover_nonexistent_output_dir_exits_two() {
     );
 }
 
-/// `key recover` is exempt from the TTY guard — with a valid output-dir it
-/// validates and returns success (runtime pipeline is K3-3, so no keystores yet).
+/// `key recover` is exempt from the TTY guard: piped mnemonic on non-TTY stdin
+/// is accepted (F-10). Uses --passphrase-env so no interactive keystore prompt.
 #[test]
 fn key_recover_validates_without_tty() {
+    use std::io::Write;
+    use std::process::Stdio;
+
     let dir = common::TempDir::new("key-recover-ok");
-    let out = eth_deposit()
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
+    let pw_var = format!("ETH_DEPOSIT_TEST_RECOVER_PW_{}", std::process::id());
+    let mut child = eth_deposit()
         .args(["key", "recover", "--output-dir"])
         .arg(dir.path())
-        .args(["--count", "2", "--start-index", "1"])
-        .output()
-        .expect("run");
+        .args([
+            "--count",
+            "1",
+            "--start-index",
+            "1",
+            "--passphrase-env",
+            &pw_var,
+        ])
+        .env(&pw_var, "password1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(mnemonic.as_bytes()).expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
     assert!(
         out.status.success(),
-        "key recover should validate on non-TTY; stderr: {}",
+        "key recover should accept piped mnemonic on non-TTY; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -155,5 +176,16 @@ fn key_recover_validates_without_tty() {
         "banner missing: {stderr}"
     );
     assert!(stderr.contains("start_index=1"), "banner: {stderr}");
-    assert!(stderr.contains("count=2"), "banner: {stderr}");
+    assert!(stderr.contains("count=1"), "banner: {stderr}");
+    // One keystore at index 1.
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read out")
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("keystore-m_12381_3600_1_")
+        })
+        .collect();
+    assert_eq!(entries.len(), 1, "expected one keystore at index 1: {entries:?}");
 }

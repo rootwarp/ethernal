@@ -107,7 +107,7 @@ fn main() {
     let result: Result<(), AppError> = match matches.subcommand() {
         Some(("key", sub)) => match sub.subcommand() {
             Some(("new", m)) => key_cli::run_new(m, cancel),
-            Some(("recover", m)) => key_cli::run_recover(m),
+            Some(("recover", m)) => key_cli::run_recover(m, cancel),
             // subcommand_required(true) on the key group; clap rejects bare `key`.
             _ => unreachable!("key requires a subcommand"),
         },

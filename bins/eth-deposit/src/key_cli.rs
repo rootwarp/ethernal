@@ -203,13 +203,12 @@ pub fn run_new(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
     key_cmd::run_key_new(&cfg, cancel)
 }
 
-/// `key recover` entry: validate config only. Runtime pipeline is K3-3.
-/// Exempt from the TTY guard (piped stdin is allowed).
-pub fn run_recover(m: &ArgMatches) -> Result<(), AppError> {
+/// `key recover` entry: validate config, then read mnemonic (TTY or pipe) →
+/// validate → derive → encrypt → write (K3-3). Exempt from the TTY-only gate.
+pub fn run_recover(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
     let mut stderr = std::io::stderr();
-    let _cfg = load_config(m, KeyMode::Recover, &mut stderr)?;
-    // K3-3: read mnemonic → validate → derive → encrypt → write.
-    Ok(())
+    let cfg = load_config(m, KeyMode::Recover, &mut stderr)?;
+    key_cmd::run_key_recover(&cfg, cancel)
 }
 
 /// Rejects non-interactive `key new` (stdin and stdout must both be TTYs).

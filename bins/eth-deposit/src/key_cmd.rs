@@ -1,10 +1,11 @@
-//! `key new` runtime: ceremony + derive → encrypt → write pipeline.
+//! `key new` / `key recover` runtime: ceremony (new only) + derive → encrypt →
+//! write pipeline.
 //!
 //! Dependencies are injectable via [`KeyDeps`] so unit tests can drive the
 //! full flow with [`FixedEntropy`] (test-only), scripted line sources, and
 //! buffers — no real terminal required.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -56,9 +57,10 @@ pub struct KeyDeps<'a> {
     pub entropy: &'a dyn Entropy,
     /// Keystore encryption passphrase (confirm+≥8 or env+min-len).
     pub keystore_pw: &'a dyn PassphraseSource,
-    /// Ceremony re-entry / mnemonic-passphrase prompts / retry answers.
+    /// Ceremony re-entry / recover mnemonic / mnemonic-passphrase prompts.
     pub mnemonic_src: &'a dyn MnemonicSource,
-    /// Where the mnemonic is displayed **once** (TTY only; never stdout/stderr/logger).
+    /// Where the mnemonic is displayed **once** on `key new` (TTY only; never
+    /// stdout/stderr/logger). Unused by `key recover` (may be `io::sink()`).
     pub tty_writer: &'a mut dyn Write,
     /// Progress + end-of-run summary (stderr in production).
     pub summary_out: &'a mut dyn Write,
@@ -127,6 +129,55 @@ pub fn run_key_new(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError
     run_key_new_with_deps(&mut deps, cancel)
 }
 
+/// Production entry for `key recover`: read existing mnemonic (TTY or pipe),
+/// validate, then derive → encrypt → write (no ceremony).
+pub fn run_key_recover(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError> {
+    let logger = Logger::stderr(Level::Info, Format::Text);
+    let entropy = OsEntropy;
+    let progress = if stderr_is_tty() {
+        Progress::Tty
+    } else {
+        Progress::NonTty
+    };
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let env_source;
+    let checked_env;
+    let tty_pw;
+    let keystore_pw: &dyn PassphraseSource = if !cfg.passphrase_env.is_empty() {
+        env_source = EnvSource::new(&cfg.passphrase_env);
+        checked_env = MinLenPassphrase {
+            inner: &env_source,
+            min: KEYSTORE_PASSPHRASE_MIN_LEN,
+        };
+        &checked_env
+    } else {
+        tty_pw = NewKeystorePassphrase::new(std::io::stderr());
+        &tty_pw
+    };
+
+    // TTY prompt or piped stdin (F-10); no TTY-only gate on recover.
+    let mnemonic_src = RecoverMnemonicSource::new(std::io::stderr());
+    let mut tty_writer = io::sink();
+    let mut summary_out = std::io::stderr();
+
+    let mut deps = KeyDeps {
+        cfg,
+        entropy: &entropy,
+        keystore_pw,
+        mnemonic_src: &mnemonic_src,
+        tty_writer: &mut tty_writer,
+        summary_out: &mut summary_out,
+        progress,
+        logger: &logger,
+        now_unix,
+    };
+    run_key_recover_with_deps(&mut deps, cancel)
+}
+
 /// Opens `/dev/tty` for the mnemonic display only. **No stderr fallback** (S-2).
 fn open_tty_writer() -> io::Result<std::fs::File> {
     std::fs::OpenOptions::new().write(true).open("/dev/tty")
@@ -137,8 +188,13 @@ fn stderr_is_tty() -> bool {
     unsafe { libc::isatty(2) == 1 }
 }
 
+fn stdin_is_tty() -> bool {
+    // SAFETY: isatty is async-signal-safe and has no preconditions.
+    unsafe { libc::isatty(0) == 1 }
+}
+
 // ---------------------------------------------------------------------------
-// Pipeline
+// Pipeline — key new
 // ---------------------------------------------------------------------------
 
 /// Testable core of `key new`: entropy → mnemonic → mnemonic passphrase →
@@ -159,7 +215,6 @@ pub fn run_key_new_with_deps(
         .fill(entropy_bytes.as_mut())
         .map_err(map_entropy_err)?;
     let mnemonic = bip39::entropy_to_mnemonic(entropy_bytes.as_slice()).map_err(map_bip39_err)?;
-    // entropy_bytes drops here (Zeroizing).
     drop(entropy_bytes);
 
     let word_count = mnemonic.split_whitespace().count();
@@ -175,24 +230,86 @@ pub fn run_key_new_with_deps(
 
     // 2. Mnemonic passphrase: flag > env > prompt-confirm; empty valid (F-12).
     check_cancel(cancel)?;
-    let mnemonic_pass = resolve_mnemonic_passphrase(&cfg.mnemonic_passphrase, deps.mnemonic_src, cancel)?;
+    let mnemonic_pass = resolve_mnemonic_passphrase(
+        &cfg.mnemonic_passphrase,
+        deps.mnemonic_src,
+        cancel,
+        /* confirm */ true,
+    )?;
 
     // 3. Ceremony: display once on tty_writer, require full re-entry (F-6).
-    //    No keystore is written until re-entry matches.
     check_cancel(cancel)?;
     run_ceremony(mnemonic.as_str(), deps.tty_writer, deps.mnemonic_src, cancel)?;
     log.debug("key new: ceremony complete", &[]);
 
-    // 4. Keystore passphrase (F-7) — after ceremony so abort leaves nothing.
+    // 4–6. Keystore passphrase → seed → derive/encrypt/write.
+    finish_from_mnemonic(deps, cancel, mnemonic.as_str(), mnemonic_pass.as_slice(), "key new")
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline — key recover
+// ---------------------------------------------------------------------------
+
+/// Testable core of `key recover`: read mnemonic (TTY/pipe) → validate →
+/// mnemonic passphrase (single-entry prompt) → seed → derive/encrypt/write.
+/// **No** display/re-entry ceremony (F-10).
+pub fn run_key_recover_with_deps(
+    deps: &mut KeyDeps<'_>,
+    cancel: &CancelToken,
+) -> Result<(), AppError> {
+    let log = deps.logger;
+    let cfg = deps.cfg;
+
+    check_cancel(cancel)?;
+
+    // 1. Existing mnemonic from TTY prompt or piped stdin (F-10).
+    log.debug("key recover: reading mnemonic", &[]);
+    let mnemonic = deps
+        .mnemonic_src
+        .read_line("Enter your mnemonic: ")?;
+    // 2. Validate first — 12/15/18/21/24; bad word/checksum → exit 2 (F-11).
+    bip39::validate_mnemonic(mnemonic.as_str()).map_err(map_bip39_err)?;
+    let word_count = mnemonic.split_whitespace().count();
+    log.debug(
+        "key recover: mnemonic validated",
+        &[("words", word_count.to_string())],
+    );
+
+    // 3. Mnemonic passphrase: flag > env > prompt (single-entry on recover).
+    check_cancel(cancel)?;
+    let mnemonic_pass = resolve_mnemonic_passphrase(
+        &cfg.mnemonic_passphrase,
+        deps.mnemonic_src,
+        cancel,
+        /* confirm */ false,
+    )?;
+
+    // 4–6. Keystore passphrase → seed → derive/encrypt/write (shared with new).
+    finish_from_mnemonic(
+        deps,
+        cancel,
+        mnemonic.as_str(),
+        mnemonic_pass.as_slice(),
+        "key recover",
+    )
+}
+
+/// Shared tail: keystore passphrase → to_seed → per-index derive/encrypt/write.
+fn finish_from_mnemonic(
+    deps: &mut KeyDeps<'_>,
+    cancel: &CancelToken,
+    mnemonic: &str,
+    mnemonic_pass: &[u8],
+    label: &str,
+) -> Result<(), AppError> {
+    let log = deps.logger;
+    let cfg = deps.cfg;
+
     check_cancel(cancel)?;
     let keystore_pass = Zeroizing::new(deps.keystore_pw.read().map_err(map_passphrase_err)?);
 
-    // 5. Seed derivation (passphrase captured before this hop).
     check_cancel(cancel)?;
-    let seed = bip39::to_seed(mnemonic.as_str(), mnemonic_pass.as_slice());
-    // Least lifetime: scrub mnemonic material once seed is derived (seed stays).
-    drop(mnemonic);
-    drop(mnemonic_pass);
+    let seed = bip39::to_seed(mnemonic, mnemonic_pass);
 
     let count = cfg.count as usize;
     let start = cfg.start_index;
@@ -202,12 +319,14 @@ pub fn run_key_new_with_deps(
     for i in 0..count {
         check_cancel(cancel)?;
 
-        let index = start.saturating_add(i as u32);
+        let index = start.checked_add(i as u32).ok_or_else(|| {
+            AppError::exit2("--start-index + --count overflows u32")
+        })?;
         let path = KeyPath::signing(index);
         let path_str = path.to_string();
 
         log.debug(
-            "key new: deriving signing key",
+            &format!("{label}: deriving signing key"),
             &[("index", index.to_string()), ("path", path_str.clone())],
         );
 
@@ -216,7 +335,6 @@ pub fn run_key_new_with_deps(
         let pubkey = derived.public_key();
         let pubkey_hex = hex::encode(pubkey);
 
-        // Draw salt(32) / iv(16) / uuid(16) via entropy (caller-supplied to encrypt).
         let mut salt = [0u8; 32];
         let mut iv = [0u8; 16];
         let mut uuid_bytes = [0u8; 16];
@@ -236,7 +354,6 @@ pub fn run_key_new_with_deps(
             uuid_bytes,
         })
         .map_err(map_encrypt_err)?;
-        // sk_bytes Zeroizing drops at end of iteration.
 
         check_cancel(cancel)?;
 
@@ -259,20 +376,23 @@ pub fn run_key_new_with_deps(
 
     print_key_summary(deps.summary_out, &written);
     log.debug(
-        "key new: complete",
+        &format!("{label}: complete"),
         &[("count", written.len().to_string())],
     );
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Mnemonic passphrase resolution (flag > env > prompt-confirm > empty)
+// Mnemonic passphrase resolution (flag > env > prompt > empty)
 // ---------------------------------------------------------------------------
 
+/// `confirm`: when true (key new), bare Prompt requires double-entry; when
+/// false (key recover), single-entry only.
 fn resolve_mnemonic_passphrase(
     form: &MnemonicPassphraseForm,
     src: &dyn MnemonicSource,
     cancel: &CancelToken,
+    confirm: bool,
 ) -> Result<Zeroizing<Vec<u8>>, AppError> {
     match form {
         MnemonicPassphraseForm::Empty => Ok(Zeroizing::new(Vec::new())),
@@ -281,13 +401,15 @@ fn resolve_mnemonic_passphrase(
             Ok(Zeroizing::new(value.as_bytes().to_vec()))
         }
         MnemonicPassphraseForm::Prompt => {
-            // Echo-off secret entry (S-2); ceremony re-entry stays on read_line.
+            // Echo-off secret entry (S-2).
             check_cancel(cancel)?;
             let first = src.read_secret("Mnemonic passphrase (empty is valid): ")?;
-            check_cancel(cancel)?;
-            let second = src.read_secret("Confirm mnemonic passphrase: ")?;
-            if first.as_str() != second.as_str() {
-                return Err(AppError::exit2("mnemonic passphrases do not match"));
+            if confirm {
+                check_cancel(cancel)?;
+                let second = src.read_secret("Confirm mnemonic passphrase: ")?;
+                if first.as_str() != second.as_str() {
+                    return Err(AppError::exit2("mnemonic passphrases do not match"));
+                }
             }
             Ok(Zeroizing::new(first.as_bytes().to_vec()))
         }
@@ -503,14 +625,14 @@ impl StdinMnemonicSource {
 impl MnemonicSource for StdinMnemonicSource {
     fn read_line(&self, prompt: &str) -> Result<Zeroizing<String>, AppError> {
         self.write_prompt(prompt)?;
-        let mut line = String::new();
+        let mut line = Zeroizing::new(String::new());
         io::stdin()
-            .read_line(&mut line)
+            .read_line(&mut *line)
             .map_err(|e| AppError::exit2(format!("read input: {e}")))?;
         while line.ends_with('\n') || line.ends_with('\r') {
             line.pop();
         }
-        Ok(Zeroizing::new(line))
+        Ok(line)
     }
 
     fn read_secret(&self, prompt: &str) -> Result<Zeroizing<String>, AppError> {
@@ -528,6 +650,107 @@ impl MnemonicSource for StdinMnemonicSource {
                 let _ = writeln!(w);
                 let _ = w.flush();
             }
+        }
+        match result {
+            Ok(pw) => Ok(Zeroizing::new(pw)),
+            Err(err) => Err(AppError::exit2(format!(
+                "read mnemonic passphrase: {err}; \
+                 for non-interactive use, supply --mnemonic-passphrase VALUE or \
+                 --mnemonic-passphrase-env VAR"
+            ))),
+        }
+    }
+}
+
+/// Trim leading/trailing Unicode whitespace, keeping the result in
+/// [`Zeroizing`]. If no trim is needed, returns `s` unchanged (single buffer).
+/// Otherwise allocates a trimmed `Zeroizing` and drops `s` so the untrimmed
+/// copy is scrubbed (S-1).
+fn zeroizing_trim(s: Zeroizing<String>) -> Zeroizing<String> {
+    let t = s.trim();
+    if t.len() == s.len() {
+        s
+    } else {
+        // Trimmed form moves into Zeroizing immediately; `s` zeroizes on drop.
+        let out = Zeroizing::new(t.to_string());
+        drop(s);
+        out
+    }
+}
+
+/// Recover mnemonic source: interactive TTY prompt **or** piped stdin (F-10).
+/// When stdin is not a TTY, the prompt is skipped and the mnemonic is read
+/// from the pipe (one line or full stdin trimmed).
+struct RecoverMnemonicSource {
+    prompt_out: Mutex<Box<dyn Write + Send>>,
+}
+
+impl RecoverMnemonicSource {
+    fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
+        Self {
+            prompt_out: Mutex::new(Box::new(prompt_out)),
+        }
+    }
+}
+
+impl MnemonicSource for RecoverMnemonicSource {
+    fn read_line(&self, prompt: &str) -> Result<Zeroizing<String>, AppError> {
+        if stdin_is_tty() {
+            {
+                let mut w = self
+                    .prompt_out
+                    .lock()
+                    .map_err(|_| AppError::Internal("prompt writer lock poisoned".into()))?;
+                write!(w, "{prompt}")
+                    .map_err(|e| AppError::exit2(format!("write prompt: {e}")))?;
+                w.flush()
+                    .map_err(|e| AppError::exit2(format!("write prompt: {e}")))?;
+            }
+            // Zeroizing from the first allocation (S-1).
+            let mut line = Zeroizing::new(String::new());
+            io::stdin()
+                .read_line(&mut *line)
+                .map_err(|e| AppError::exit2(format!("read mnemonic: {e}")))?;
+            while line.ends_with('\n') || line.ends_with('\r') {
+                line.pop();
+            }
+            Ok(line)
+        } else {
+            // Piped stdin: read into Zeroizing, then trim without leaving a
+            // plain uncleared buffer (S-1 / architecture lifecycle).
+            let mut buf = Zeroizing::new(String::new());
+            io::stdin()
+                .read_to_string(&mut *buf)
+                .map_err(|e| AppError::exit2(format!("read mnemonic from stdin: {e}")))?;
+            let mnemonic = zeroizing_trim(buf);
+            if mnemonic.is_empty() {
+                return Err(AppError::exit2(
+                    "empty mnemonic on stdin; provide a BIP-39 mnemonic via pipe or interactive prompt",
+                ));
+            }
+            Ok(mnemonic)
+        }
+    }
+
+    fn read_secret(&self, prompt: &str) -> Result<Zeroizing<String>, AppError> {
+        // Same echo-off path as key new for the 25th-word secret.
+        {
+            let mut w = self
+                .prompt_out
+                .lock()
+                .map_err(|_| AppError::Internal("prompt writer lock poisoned".into()))?;
+            write!(w, "{prompt}").map_err(|e| AppError::exit2(format!("write prompt: {e}")))?;
+            w.flush()
+                .map_err(|e| AppError::exit2(format!("write prompt: {e}")))?;
+        }
+        let config = rpassword::ConfigBuilder::new()
+            .input_file_path("/dev/tty")
+            .output_discard()
+            .build();
+        let result = rpassword::read_password_with_config(config);
+        if let Ok(mut w) = self.prompt_out.lock() {
+            let _ = writeln!(w);
+            let _ = w.flush();
         }
         match result {
             Ok(pw) => Ok(Zeroizing::new(pw)),
@@ -749,6 +972,42 @@ mod tests {
         Ok((tty, summary))
     }
 
+    fn recover_cfg(dir: &str, count: u32, start_index: u32) -> KeyConfig {
+        KeyConfig {
+            mode: KeyMode::Recover,
+            count,
+            output_dir: dir.into(),
+            start_index,
+            passphrase_env: String::new(),
+            mnemonic_passphrase: MnemonicPassphraseForm::Empty,
+        }
+    }
+
+    fn run_recover_with(
+        cfg: &KeyConfig,
+        entropy: &dyn Entropy,
+        keystore_pw: &dyn PassphraseSource,
+        mnemonic_src: &dyn MnemonicSource,
+        cancel: &CancelToken,
+    ) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = discard_logger();
+        let mut deps = KeyDeps {
+            cfg,
+            entropy,
+            keystore_pw,
+            mnemonic_src,
+            tty_writer: &mut tty,
+            summary_out: &mut summary,
+            progress: Progress::Tty,
+            logger: &logger,
+            now_unix: 1_700_000_000,
+        };
+        run_key_recover_with_deps(&mut deps, cancel)?;
+        Ok((tty, summary))
+    }
+
     // --- happy path ---
 
     #[test]
@@ -958,6 +1217,7 @@ mod tests {
             &MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into())),
             &ScriptedLines::new(vec![]),
             &CancelToken::new(),
+            true,
         )
         .unwrap();
         let seed = bip39::to_seed(ABANDON_12, pass.as_slice());
@@ -968,20 +1228,32 @@ mod tests {
             &MnemonicPassphraseForm::Empty,
             &ScriptedLines::new(vec![]),
             &CancelToken::new(),
+            true,
         )
         .unwrap();
         assert!(empty.is_empty());
 
-        // Prompt form double-confirm.
+        // Prompt form double-confirm (key new).
         let prompted = resolve_mnemonic_passphrase(
             &MnemonicPassphraseForm::Prompt,
             &ScriptedLines::new(vec!["TREZOR", "TREZOR"]),
             &CancelToken::new(),
+            true,
         )
         .unwrap();
         assert_eq!(prompted.as_slice(), b"TREZOR");
         let seed2 = bip39::to_seed(ABANDON_12, prompted.as_slice());
         assert_eq!(hex::encode(seed2.as_slice()), TREZOR_SEED_HEX);
+
+        // Recover: single-entry Prompt (no confirm line).
+        let single = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::Prompt,
+            &ScriptedLines::new(vec!["TREZOR"]),
+            &CancelToken::new(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(single.as_slice(), b"TREZOR");
     }
 
     #[test]
@@ -1164,5 +1436,247 @@ mod tests {
         let e = FixedEntropy::zero_mnemonic();
         assert_sync(&e);
         let _ = Arc::new(e);
+    }
+
+    // =========================================================================
+    // key recover (K3-3)
+    // =========================================================================
+
+    #[test]
+    fn zeroizing_trim_no_ws_keeps_same_content() {
+        let s = Zeroizing::new("abandon about".into());
+        let t = zeroizing_trim(s);
+        assert_eq!(t.as_str(), "abandon about");
+    }
+
+    #[test]
+    fn zeroizing_trim_strips_surrounding_ws() {
+        let s = Zeroizing::new("  abandon about  \n".into());
+        let t = zeroizing_trim(s);
+        assert_eq!(t.as_str(), "abandon about");
+    }
+
+    #[test]
+    fn recover_12_word_loader_round_trip() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        // No ceremony: first scripted line is the mnemonic itself.
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+        let entropy = FixedEntropy::new(vec![]); // salt/iv/uuid zeros
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let (tty, summary) =
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+
+        // No ceremony: tty_writer must not receive the mnemonic.
+        let tty_s = String::from_utf8(tty).unwrap();
+        assert!(
+            !tty_s.contains(ABANDON_12),
+            "recover must not display mnemonic: {tty_s:?}"
+        );
+        let summary_s = String::from_utf8(summary).unwrap();
+        assert!(summary_s.contains("wrote 1 keystore"), "{summary_s}");
+        assert!(!summary_s.contains(ABANDON_12));
+
+        let files = dir.keystore_files();
+        assert_eq!(files.len(), 1);
+        let seed = bip39::to_seed(ABANDON_12, b"");
+        let loader = Loader::new();
+        let key = loader
+            .load(&files[0], &FixedPassphrase(b"password1".to_vec()))
+            .unwrap();
+        let derived = derive_path(seed.as_slice(), &KeyPath::signing(0)).unwrap();
+        assert_eq!(key.secret.as_slice(), derived.to_bytes().as_slice());
+        assert_eq!(key.pubkey_hex, hex::encode(derived.public_key()));
+
+        let raw = std::fs::read(&files[0]).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["version"], 4);
+        assert_eq!(v["path"], "m/12381/3600/0/0/0");
+        assert_eq!(v["crypto"]["kdf"]["function"], "scrypt");
+    }
+
+    #[test]
+    fn recover_24_word_loader_round_trip() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let files = dir.keystore_files();
+        assert_eq!(files.len(), 1);
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"");
+        let key = Loader::new()
+            .load(&files[0], &FixedPassphrase(b"password1".to_vec()))
+            .unwrap();
+        let derived = derive_path(seed.as_slice(), &KeyPath::signing(0)).unwrap();
+        assert_eq!(key.secret.as_slice(), derived.to_bytes().as_slice());
+    }
+
+    #[test]
+    fn recover_bad_word_exit2() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon notaword";
+        let lines = ScriptedLines::new(vec![bad]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let err = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2, "err={err}");
+        assert!(
+            err.to_string().contains("unknown word") || err.to_string().contains("notaword"),
+            "err={err}"
+        );
+        assert!(dir.keystore_files().is_empty());
+    }
+
+    #[test]
+    fn recover_bad_checksum_exit2() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        // 12× abandon — wrong checksum (valid ends with about).
+        let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+        let lines = ScriptedLines::new(vec![bad]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let err = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2, "err={err}");
+        assert!(
+            err.to_string().contains("checksum"),
+            "err={err}"
+        );
+        assert!(dir.keystore_files().is_empty());
+    }
+
+    #[test]
+    fn recover_start_index_range_filenames() {
+        let dir = Tmp::new();
+        // indices 5, 6, 7
+        let cfg = recover_cfg(dir.str(), 3, 5);
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+
+        let mut files = dir.keystore_files();
+        files.sort();
+        assert_eq!(files.len(), 3, "files={files:?}");
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.contains("m_12381_3600_5_0_0")),
+            "names={names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.contains("m_12381_3600_6_0_0")),
+            "names={names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.contains("m_12381_3600_7_0_0")),
+            "names={names:?}"
+        );
+
+        // Loader round-trip for each index.
+        let seed = bip39::to_seed(ABANDON_12, b"");
+        let loader = Loader::new();
+        let pw_src = FixedPassphrase(b"password1".to_vec());
+        for f in &files {
+            let name = f.file_name().unwrap().to_string_lossy();
+            let idx: u32 = name
+                .split('_')
+                .nth(3)
+                .and_then(|s| s.parse().ok())
+                .expect("index");
+            assert!((5..=7).contains(&idx));
+            let key = loader.load(f, &pw_src).unwrap();
+            let derived = derive_path(seed.as_slice(), &KeyPath::signing(idx)).unwrap();
+            assert_eq!(key.secret.as_slice(), derived.to_bytes().as_slice());
+        }
+    }
+
+    #[test]
+    fn recover_no_ceremony_tty_empty() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let (tty, _) =
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap();
+        assert!(
+            tty.is_empty(),
+            "recover must not write to tty_writer: {}",
+            String::from_utf8_lossy(&tty)
+        );
+    }
+
+    #[test]
+    fn recover_mnemonic_passphrase_prompt_single_entry() {
+        let dir = Tmp::new();
+        let mut cfg = recover_cfg(dir.str(), 1, 0);
+        cfg.mnemonic_passphrase = MnemonicPassphraseForm::Prompt;
+        // mnemonic, then single passphrase (no confirm).
+        let lines = ScriptedLines::new(vec![ABANDON_12, "TREZOR"]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let seed = bip39::to_seed(ABANDON_12, b"TREZOR");
+        assert_eq!(hex::encode(seed.as_slice()), TREZOR_SEED_HEX);
+        let files = dir.keystore_files();
+        assert_eq!(files.len(), 1);
+        let key = Loader::new()
+            .load(&files[0], &FixedPassphrase(b"password1".to_vec()))
+            .unwrap();
+        let derived = derive_path(seed.as_slice(), &KeyPath::signing(0)).unwrap();
+        assert_eq!(key.secret.as_slice(), derived.to_bytes().as_slice());
+    }
+
+    #[test]
+    fn recover_same_shape_as_key_new() {
+        // Same fixed mnemonic (24-word abandon…art), empty mnemonic-pass,
+        // same FixedEntropy salt/iv/uuid zeros and now_unix → identical JSON.
+        let dir_new = Tmp::new();
+        let dir_rec = Tmp::new();
+        let cfg_new = base_cfg(dir_new.str(), 1);
+        let cfg_rec = recover_cfg(dir_rec.str(), 1, 0);
+
+        let entropy_new = FixedEntropy::zero_mnemonic();
+        let entropy_rec = FixedEntropy::new(vec![]); // only salt/iv/uuid
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines_new = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let lines_rec = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+
+        run_with(
+            &cfg_new,
+            &entropy_new,
+            &pw,
+            &lines_new,
+            &CancelToken::new(),
+        )
+        .unwrap();
+        run_recover_with(
+            &cfg_rec,
+            &entropy_rec,
+            &pw,
+            &lines_rec,
+            &CancelToken::new(),
+        )
+        .unwrap();
+
+        let f_new = dir_new.keystore_files();
+        let f_rec = dir_rec.keystore_files();
+        assert_eq!(f_new.len(), 1);
+        assert_eq!(f_rec.len(), 1);
+        assert_eq!(
+            f_new[0].file_name(),
+            f_rec[0].file_name(),
+            "filenames should match"
+        );
+        // Same secret + password + salt/iv/uuid → byte-identical keystore JSON.
+        let a = std::fs::read(&f_new[0]).unwrap();
+        let b = std::fs::read(&f_rec[0]).unwrap();
+        assert_eq!(a, b, "key new and key recover must produce identical shape");
     }
 }

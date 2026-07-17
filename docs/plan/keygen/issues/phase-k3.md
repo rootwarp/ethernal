@@ -153,15 +153,15 @@ over `--start-index`/`--count`. Satisfies F-10 (stdin/TTY), F-11 (12–24-word v
   the double-entry confirm is a `key new` concern only (the mnemonic already exists).
 
 **Acceptance criteria**
-- [ ] `key recover` reads the mnemonic from an interactive TTY prompt **or** piped stdin — F-10.
-- [ ] `validate_mnemonic` runs first; 12/15/18/21/24-word mnemonics accepted; a bad word or bad checksum → exit 2
+- [x] `key recover` reads the mnemonic from an interactive TTY prompt **or** piped stdin — F-10.
+- [x] `validate_mnemonic` runs first; 12/15/18/21/24-word mnemonics accepted; a bad word or bad checksum → exit 2
   with a clear message — F-11, F-16.
-- [ ] `--start-index N` / `--count N` select the derivation range and produce the matching per-index keystore
+- [x] `--start-index N` / `--count N` select the derivation range and produce the matching per-index keystore
   filenames — F-11.
-- [ ] there is **no** display/re-entry ceremony (mnemonic already exists) — F-10.
-- [ ] the produced keystores round-trip through the existing `Loader` and are identical in shape to `key new`
+- [x] there is **no** display/re-entry ceremony (mnemonic already exists) — F-10.
+- [x] the produced keystores round-trip through the existing `Loader` and are identical in shape to `key new`
   output — F-3, C-3.
-- [ ] the mnemonic passphrase is supported (empty default), captured before derivation; the bare-prompt form is
+- [x] the mnemonic passphrase is supported (empty default), captured before derivation; the bare-prompt form is
   single-entry — F-12.
 
 **Test plan**
