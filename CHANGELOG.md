@@ -41,6 +41,46 @@ its release notes remain on GitHub).
 
 ## eth-deposit
 
+### eth-deposit (unreleased) — keygen + withdrawal credentials
+
+#### Added
+
+- **`eth-deposit key new`** — generates a fresh 24-word BIP-39 mnemonic (OS CSPRNG),
+  runs a TTY-only display-once + full re-entry ceremony, then writes EIP-2335 v4
+  scrypt signing keystores (`m/12381/3600/i/0/0`) under `--output-dir`. Non-TTY
+  stdin/stdout → exit 2 before any entropy is drawn.
+- **`eth-deposit key recover`** — rebuilds keystores from an existing 12–24-word
+  mnemonic (interactive TTY prompt or piped stdin). Supports `--start-index` /
+  `--count` for partial ranges. No ceremony (mnemonic already exists).
+- **Three-form BIP-39 mnemonic passphrase** on both key subcommands: raw
+  `--mnemonic-passphrase VALUE`, `--mnemonic-passphrase-env VAR`, bare
+  `--mnemonic-passphrase` (prompt; double-entry confirm on `key new`), or omit
+  for empty (default). Distinct from the keystore passphrase (`--passphrase-env`).
+  **Security:** raw `VALUE` is visible in `ps` and shell history — prefer env or
+  prompt for high-value mnemonics (documented in `docs/USER-GUIDE.md`).
+- **`gen --withdrawal-address ADDR`** — emits real 0x01 execution-address
+  withdrawal credentials (`0x01 ‖ 11 zero bytes ‖ addr20`). Address must be a
+  correctly mixed-case **EIP-55** checksum; lowercase or checksum mismatch →
+  exit 2. Intentional asymmetry vs `build`/`run` `--from`, which remains
+  lenient (any-case 20-byte hex).
+
+#### Breaking
+
+- **`gen` requires an explicit withdrawal choice.** Invoking `eth-deposit gen`
+  without `--withdrawal-address` exits 2 with a clear message (require-choice
+  gate). There is no default / placeholder credential path for operators. Update
+  scripts and goldens that previously called `gen` without the flag.
+
+#### Documentation
+
+- `docs/USER-GUIDE.md`: new "Step 0 — create validator keys" covering `key new` /
+  `key recover`, passphrase flows, the raw-mnemonic-passphrase `ps`/history note,
+  and the EIP-55 strict-vs-lenient asymmetry.
+- `README.md`: command list, quickstart, and divergence table updated for `key`
+  and required `--withdrawal-address`.
+
+---
+
 ### eth-deposit (unreleased) - 2026-07-12
 
 **Breaking change:** `eth-deposit-gen` and `eth-deposit-tx` are merged into a single

@@ -1,9 +1,10 @@
 # eth-utils User Guide
 
 Comprehensive guide for `eth-deposit`, the CLI in this repository that takes a
-validator all the way from BLS keystore to a broadcast Ethereum deposit
+validator all the way from a BIP-39 mnemonic to a broadcast Ethereum deposit
 transaction:
 
+- **`eth-deposit key new|recover`** — generates or recovers EIP-2335 BLS validator keystores from a BIP-39 mnemonic (the front of the pipeline).
 - **`eth-deposit gen`** — produces Launchpad-compatible deposit data JSON (BLS signatures over the deposit message) from EIP-2335 validator keystores.
 - **`eth-deposit build|sign|run|send`** — builds, signs (Ledger or local key), and broadcasts the Ethereum transaction that submits the deposit to the Beacon Chain deposit contract.
 
@@ -18,34 +19,36 @@ transaction:
 1. [Concepts and workflow model](#concepts-and-workflow-model)
 2. [Install](#install)
 3. [Quick start (Hoodi testnet)](#quick-start-hoodi-testnet)
-4. [Step 1 — Generate deposit data (`eth-deposit gen`)](#step-1--generate-deposit-data-eth-deposit-gen)
-5. [Step 2 — Build the unsigned transaction (`eth-deposit build`)](#step-2--build-the-unsigned-transaction-eth-deposit-build)
-6. [Step 3 — Sign the transaction (`eth-deposit sign`)](#step-3--sign-the-transaction-eth-deposit-sign)
-7. [Step 4 — Broadcast (optional) (`eth-deposit send`)](#step-4--broadcast-optional-eth-deposit-send)
-8. [Convenience: `eth-deposit run` (build + sign in one shot)](#convenience-eth-deposit-run-build--sign-in-one-shot)
-9. [Air-gapped workflow](#air-gapped-workflow)
-10. [Networks](#networks)
-11. [Exit codes](#exit-codes)
-12. [Security](#security)
-13. [Recipes](#recipes)
-14. [Troubleshooting](#troubleshooting)
+4. [Step 0 — Create validator keys (`eth-deposit key`)](#step-0--create-validator-keys-eth-deposit-key)
+5. [Step 1 — Generate deposit data (`eth-deposit gen`)](#step-1--generate-deposit-data-eth-deposit-gen)
+6. [Step 2 — Build the unsigned transaction (`eth-deposit build`)](#step-2--build-the-unsigned-transaction-eth-deposit-build)
+7. [Step 3 — Sign the transaction (`eth-deposit sign`)](#step-3--sign-the-transaction-eth-deposit-sign)
+8. [Step 4 — Broadcast (optional) (`eth-deposit send`)](#step-4--broadcast-optional-eth-deposit-send)
+9. [Convenience: `eth-deposit run` (build + sign in one shot)](#convenience-eth-deposit-run-build--sign-in-one-shot)
+10. [Air-gapped workflow](#air-gapped-workflow)
+11. [Networks](#networks)
+12. [Exit codes](#exit-codes)
+13. [Security](#security)
+14. [Recipes](#recipes)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Concepts and workflow model
 
-A validator deposit takes two artifacts:
+A validator deposit takes three artifacts:
 
 | Artifact | Produced by | Contains |
 |---|---|---|
+| **EIP-2335 keystores** | `eth-deposit key new` / `key recover` | Encrypted BLS signing keys (one JSON file per validator index) |
 | **Deposit data JSON** | `eth-deposit gen` | BLS-signed deposit message: validator pubkey, withdrawal credentials, signature, deposit_data_root, amount |
 | **Signed Ethereum transaction** | `eth-deposit build`/`sign`/`run` | EIP-1559 transaction calling the deposit contract's `deposit(bytes,bytes,bytes,bytes32)` with 32 ETH value, signed by the **sender's** secp256k1 key |
 
 Two distinct keys are involved:
-- **BLS validator key** (per validator) — held in EIP-2335 keystores; used by `eth-deposit gen` to sign the deposit message. Never leaves the keystore decryption boundary.
+- **BLS validator key** (per validator) — held in EIP-2335 keystores created by `eth-deposit key` (or any compatible tool); used by `eth-deposit gen` to sign the deposit message. Never leaves the keystore decryption boundary.
 - **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `eth-deposit sign`/`run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas.
 
-The two-phase split (`build` then `sign`) supports air-gapped operation: build the unsigned tx on an online machine, transfer the JSON to a signing machine (which may be offline), sign there, transfer the signed JSON back online, broadcast.
+The two-phase split (`build` then `sign`) supports air-gapped operation: build the unsigned tx on an online machine, transfer the JSON to a signing machine (which may be offline), sign there, transfer the signed JSON back online, broadcast. Prefer generating BLS keys (`key new`) on an air-gapped machine as well.
 
 ---
 
@@ -84,12 +87,18 @@ eth-deposit --version
 End-to-end deposit on Hoodi using a Ledger:
 
 ```bash
-# 1. Generate deposit data
+# 0. Create validator keystores (interactive TTY ceremony — write down the mnemonic)
+mkdir -p ./keystores ./out
 export KEYSTORE_PASS=my-keystore-passphrase
+eth-deposit key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+# note the pubkey printed in the summary, then:
+
+# 1. Generate deposit data (withdrawal address must be EIP-55 checksummed)
 eth-deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
-  --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
+  --pubkeys 0x<pubkey-from-key-new-summary> \
+  --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out \
   --passphrase-env KEYSTORE_PASS
 unset KEYSTORE_PASS
@@ -114,7 +123,123 @@ eth-deposit send \
   --wait-for-receipt
 ```
 
-For a local-key dev flow, see the [recipes](#recipes) below.
+If you already have EIP-2335 keystores from another tool, skip step 0 and pass those paths to `gen`. For a local-key dev flow, see the [recipes](#recipes) below.
+
+---
+
+## Step 0 — Create validator keys (`eth-deposit key`)
+
+`eth-deposit key` produces EIP-2335 v4 scrypt signing keystores from a BIP-39 English mnemonic. Two subcommands:
+
+| Subcommand | Purpose | I/O |
+|---|---|---|
+| `key new` | Fresh 24-word mnemonic + keystores | **TTY only** (stdin and stdout must both be terminals) |
+| `key recover` | Keystores from an existing mnemonic | Interactive TTY prompt **or** piped stdin |
+
+Both write one `keystore-m_12381_3600_<i>_0_0-<unix>.json` (mode `0o600`) per index into `--output-dir`. The directory must already exist and be writable.
+
+### Shared flags
+
+| Flag | Description | Default |
+|---|---|---|
+| `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON files | — |
+| `--count N` | Number of validator keys to produce (must be ≥ 1) | `1` |
+| `--passphrase-env VAR` | Env var holding the **keystore** encryption passphrase (min 8 chars after EIP-2335 normalization). Omit for a TTY prompt-with-confirm | TTY prompt |
+| `--mnemonic-passphrase [VALUE]` | Optional BIP-39 mnemonic passphrase ("25th word"). Bare flag → interactive prompt; with `VALUE` → raw argv value; omit → empty (default) | empty |
+| `--mnemonic-passphrase-env VAR` | Env var holding the BIP-39 mnemonic passphrase (empty string is valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
+
+`key recover` also accepts:
+
+| Flag | Description | Default |
+|---|---|---|
+| `--start-index N` | First HD derivation index; produces indices `[start, start+count)` | `0` |
+
+`key new` always starts at index `0` (no `--start-index`).
+
+**Two different passphrases.** The keystore passphrase (`--passphrase-env` / TTY prompt) encrypts the JSON keystore files and has an 8-character minimum. The optional **mnemonic passphrase** is the BIP-39 "25th word" mixed into seed derivation; empty is valid and there is no minimum. They are never interchangeable.
+
+### Security note — raw `--mnemonic-passphrase VALUE`
+
+A raw `--mnemonic-passphrase VALUE` is visible in the process table (`ps`) and in shell history. Prefer:
+
+- `--mnemonic-passphrase-env VAR` (value lives only in the environment), or
+- bare `--mnemonic-passphrase` (interactive prompt; on `key new` the prompt is double-entry confirmed).
+
+Treat the raw form as a **scripting convenience, not for high-value mnemonics**.
+
+### `key new` — TTY ceremony
+
+```
+eth-deposit key new --output-dir DIR [--count N] [--passphrase-env VAR] \
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
+```
+
+Flow:
+
+1. **Non-TTY guard** — if stdin or stdout is not a terminal, exit 2 **before** any entropy is drawn (a mnemonic must never land on a pipe or log).
+2. **Entropy → mnemonic** — 256-bit OS CSPRNG → 24-word English BIP-39 mnemonic with a valid checksum.
+3. **Mnemonic passphrase** — resolved from flag / env / prompt-with-confirm / empty (see above).
+4. **Ceremony** — the mnemonic is displayed **once** on the controlling terminal (`/dev/tty`, never stdout/stderr/logs). Write it down offline. You then re-enter the full mnemonic to confirm; mismatch → retry or abort (exit 4).
+5. **Keystore passphrase** — env (min length 8) or interactive confirm-with-min-length.
+6. **Derive → encrypt → write** — EIP-2333/2334 signing path `m/12381/3600/i/0/0` for `i` in `0..count`, EIP-2335 scrypt keystores at `0o600`.
+
+Example:
+
+```bash
+mkdir -p ./keystores
+export KEYSTORE_PASS=my-keystore-passphrase
+
+eth-deposit key new \
+  --output-dir ./keystores \
+  --count 2 \
+  --passphrase-env KEYSTORE_PASS
+
+# optional 25th word via env (preferred over raw argv):
+export MNEMONIC_PW=...
+eth-deposit key new \
+  --output-dir ./keystores \
+  --mnemonic-passphrase-env MNEMONIC_PW \
+  --passphrase-env KEYSTORE_PASS
+unset MNEMONIC_PW KEYSTORE_PASS
+```
+
+### `key recover` — TTY or piped stdin
+
+```
+eth-deposit key recover --output-dir DIR [--count N] [--start-index N] \
+  [--passphrase-env VAR] \
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
+```
+
+Unlike `key new`, there is **no** display/re-entry ceremony — the mnemonic already exists. Accepts 12/15/18/21/24-word English BIP-39 mnemonics (word-list membership + checksum validated first; bad input → exit 2). Interactive prompt when stdin is a TTY; otherwise the whole mnemonic is read from stdin (one line).
+
+Examples:
+
+```bash
+# Interactive (prompts for mnemonic, then keystore passphrase if no env)
+eth-deposit key recover \
+  --output-dir ./keystores \
+  --count 3 \
+  --start-index 0 \
+  --passphrase-env KEYSTORE_PASS
+
+# Piped (scripting / recovery automation)
+echo "$MNEMONIC" | eth-deposit key recover \
+  --output-dir ./keystores \
+  --count 1 \
+  --passphrase-env KEYSTORE_PASS
+```
+
+Use `--start-index` to extend an existing set (e.g. you already deposited indices 0–2 and need index 3):
+
+```bash
+eth-deposit key recover --output-dir ./keystores --start-index 3 --count 1 \
+  --passphrase-env KEYSTORE_PASS
+```
+
+### After key creation
+
+The summary on stderr lists each written path and its 96-hex-char BLS pubkey. Feed those pubkeys (and the keystore directory) into [Step 1 — `gen`](#step-1--generate-deposit-data-eth-deposit-gen). Keep the mnemonic offline and offline-only; never paste it into chat, tickets, or cloud notes.
 
 ---
 
@@ -123,7 +248,8 @@ For a local-key dev flow, see the [recipes](#recipes) below.
 ### Synopsis
 
 ```
-eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR [options]
+eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR \
+  --withdrawal-address ADDR [options]
 ```
 
 ### Flags
@@ -134,6 +260,7 @@ eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-di
 | `--pubkeys HEX[,...]` *(required)* | Comma-separated 96-hex-char BLS pubkeys (0x-prefixed or bare) | — |
 | `--network NET` *(required)* | `mainnet` or `hoodi` | — |
 | `--output-dir DIR` *(required)* | Existing, writable directory for `deposit_data-<ts>.json` | — |
+| `--withdrawal-address ADDR` *(required)* | EIP-55 **checksummed** execution address for 0x01 withdrawal credentials (`0x01 ‖ 11 zero bytes ‖ addr20`). Absent, lowercase, or checksum-mismatched → exit 2 | — |
 | `--passphrase-env VAR` | Env var holding the keystore passphrase (omit for TTY prompt) | TTY prompt |
 | `--i-understand-this-is-mainnet` | Required when `--network mainnet`; acknowledges irreversibility | `false` |
 | `--dry-run` | Print JSON to stdout instead of writing a file; sha256 to stderr | `false` |
@@ -142,6 +269,12 @@ eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-di
 | `--json-logs` | Emit logs as JSON objects | `false` |
 | `--verify-with-deposit-cli` | Cross-check output with `staking-deposit-cli >= 2.7.0` | `false` |
 | `--deposit-cli-path PATH` | Path to `deposit` binary for verification | `deposit` (PATH) |
+
+### EIP-55 asymmetry (`--withdrawal-address` vs `--from`)
+
+`--withdrawal-address` is **strict**: the address must be a correctly mixed-case EIP-55 checksum. All-lowercase, all-uppercase, or a mixed-case checksum mismatch is rejected with exit 2. This matches ethstaker/staking-deposit-cli and catches typos before they become irreversible withdrawal credentials.
+
+By contrast, `build`/`run`'s `--from` is **lenient**: any 0x-prefixed (or bare) 20-byte hex is accepted regardless of case — no checksum check. Do not expect the two flags to behave the same way.
 
 ### Example — Hoodi single validator
 
@@ -152,6 +285,7 @@ eth-deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
   --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
+  --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out \
   --passphrase-env KEYSTORE_PASS
 ```
@@ -163,6 +297,7 @@ eth-deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
   --pubkeys 0xpub1...,0xpub2...,0xpub3...,0xpub4... \
+  --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out \
   --passphrase-env KEYSTORE_PASS \
   --parallel 4
@@ -180,11 +315,12 @@ eth-deposit gen \
   --i-understand-this-is-mainnet \
   --keystore-dir ./keystores/ \
   --pubkeys 0xpub1... \
+  --withdrawal-address 0xYourChecksummedExecutionAddress \
   --output-dir ./out \
   --passphrase-env KEYSTORE_PASS
 ```
 
-Without the flag, `--network mainnet` exits with code 2.
+Without the flag, `--network mainnet` exits with code 2. Without `--withdrawal-address`, `gen` exits with code 2 (require-choice gate — there is no default BLS-to-execution credential).
 
 ### Example — dry-run preview
 
@@ -498,23 +634,24 @@ The two-phase design supports air-gapping the signing machine entirely:
   eth-deposit send ...
 ```
 
-1. **Online machine** — generate deposit data and the unsigned transaction:
+1. **Air-gapped (recommended for mainnet)** — create BLS keystores with `eth-deposit key new` (TTY ceremony), transfer only the encrypted keystores (and later pubkeys) off the machine. Or generate keystores online if you accept the risk.
+2. **Online machine** — generate deposit data and the unsigned transaction:
    ```bash
-   eth-deposit gen ... --output-dir ./out
+   eth-deposit gen ... --withdrawal-address 0x... --output-dir ./out
    eth-deposit build --network hoodi --input-file ./out/deposit_data-*.json --nonce N --output unsigned_tx.json
    ```
-2. **Transfer** `unsigned_tx.json` to the air-gapped machine (USB, QR code, etc.). It contains no secrets.
-3. **Air-gapped machine** — sign with the Ledger:
+3. **Transfer** `unsigned_tx.json` to the air-gapped machine (USB, QR code, etc.). It contains no secrets.
+4. **Air-gapped machine** — sign with the Ledger:
    ```bash
    eth-deposit sign --signer ledger --input unsigned_tx.json --output signed_tx.json
    ```
-4. **Transfer** `signed_tx.json` back to an online machine.
-5. **Online machine** — broadcast:
+5. **Transfer** `signed_tx.json` back to an online machine.
+6. **Online machine** — broadcast:
    ```bash
    eth-deposit send --input signed_tx.json --rpc-url https://...
    ```
 
-Neither artifact contains the private key. The Ledger never exports the key. Note that a merged `eth-deposit` binary on the air-gapped machine also carries the `gen`/`build`/`send` code paths it isn't using there — see `CHANGELOG.md` for that tradeoff.
+Neither the unsigned nor the signed deposit-tx artifact contains the BLS private key. The Ledger never exports the secp256k1 key. Note that a merged `eth-deposit` binary on the air-gapped machine also carries the `gen`/`build`/`send` code paths it isn't using there — see `CHANGELOG.md` for that tradeoff.
 
 ---
 
@@ -544,7 +681,7 @@ All `eth-deposit` subcommands use a consistent set of exit codes you can script 
 |---|---|
 | 0 | Success |
 | 1 | Unexpected internal error |
-| 2 | User / configuration error (bad input, missing/invalid flag, unknown network, missing `--from`/`--nonce`/`--gas-limit` for RPC mode, build-side RPC chain-ID mismatch) |
+| 2 | User / configuration error (bad input, missing/invalid flag, unknown network, missing `--withdrawal-address`, non-TTY `key new`, missing `--from`/`--nonce`/`--gas-limit` for RPC mode, build-side RPC chain-ID mismatch) |
 | 3 | Signer / crypto error (Ledger not found, Ethereum app not open, invalid key, signer-side chain-ID mismatch, BLS/SSZ failure) |
 | 4 | User abort (SIGINT, or rejected confirmation prompt) |
 | 5 | Broadcast / RPC error (RPC dial failure, gas/nonce estimation failure, broadcast-side chain-ID mismatch, node rejection) — `build`/`run` estimation and `send` broadcast |
@@ -573,21 +710,25 @@ fi
 
 `eth-deposit` protects:
 
-- **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from env vars only; Ledger keys never leave the device.
-- **Signed artifacts are protected against tampering at rest** (0o600 perms; receiver can verify by recovering the sender and checking the tx hash).
+- **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from env vars only; Ledger keys never leave the device. BLS mnemonics from `key new` are shown only on the controlling terminal and never on stdout/stderr/logs.
+- **Signed artifacts and keystores are written with restricted perms** (0o600; receiver can verify a signed tx by recovering the sender and checking the tx hash).
 - **Broadcast is gated by chain-ID match and operator confirmation.** A signed-for-Holesky transaction will not be broadcast to a mainnet RPC endpoint.
 
 It does NOT protect:
 
-- A compromised machine. If your build/sign machine is compromised, the unsigned tx data field (which encodes the deposit) could be silently altered. Verify on the Ledger screen before pressing confirm.
+- A compromised machine. If your build/sign machine is compromised, the unsigned tx data field (which encodes the deposit) could be silently altered. Verify on the Ledger screen before pressing confirm. A compromised keygen machine can capture the mnemonic at generation time — prefer air-gapped `key new` for mainnet.
 - Network-level interception of the broadcast (not a concern for signed transactions — they cannot be modified without invalidating the signature).
 - BLS keystore confidentiality. The keystore passphrase is your responsibility; use a strong one and clear `KEYSTORE_PASS` from your shell after use.
+- A raw `--mnemonic-passphrase VALUE` on the command line (visible in `ps` and shell history) — see [Step 0](#step-0--create-validator-keys-eth-deposit-key).
 
 ### Key handling rules
 
+- **BLS mnemonic (`key new` / `key recover`)** — write it down offline during the ceremony; store it offline only. Never commit it, pipe `key new` (refused), or paste it into tickets/chat. Prefer air-gapped generation for high-value validators.
+- **Mnemonic passphrase (BIP-39 "25th word")** — prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (prompt). **Do not** use raw `--mnemonic-passphrase VALUE` for high-value mnemonics: the value is visible in the process table (`ps`) and shell history. A mistyped 25th word yields keys you cannot recover from the mnemonic alone.
+- **Keystore passphrase** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 characters. There is no raw-argv form (unlike the mnemonic passphrase).
 - `ETH_DEPOSIT_TX_PRIVATE_KEY` — env var only. There is NO `--private-key` flag. The env-var-name flag (`--private-key-env`) is validated to match `^[A-Z_][A-Z0-9_]*$` to prevent users from accidentally passing the key value.
 - `LocalSigner` zeroizes the key bytes in memory when `Close()` is called (end of every `sign` / `run` invocation).
-- For mainnet: use Ledger. The local signer is explicitly tagged "for development only" in its docs and is not recommended for any real-fund deposit.
+- For mainnet: use Ledger for the deposit-tx signer. The local signer is explicitly tagged "for development only" in its docs and is not recommended for any real-fund deposit.
 - The synthetic test key in `testdata/phase3/holesky/private_key.txt` is `0x0101010101010101010101010101010101010101010101010101010101010101` (obvious pattern). Never use it with real funds; it's for tests only.
 
 ### On-device verification (Ledger)
@@ -614,10 +755,17 @@ The typed exit codes let your automation distinguish between "operator rejected"
 ```bash
 export KEYSTORE_PASS=test-passphrase
 export ETH_DEPOSIT_TX_PRIVATE_KEY=0x0101...   # synthetic; never real
+mkdir -p ./keystores ./out
+
+# Interactive key new (or recover from a fixed test mnemonic via stdin)
+eth-deposit key new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
+# copy pubkey from the summary:
 
 eth-deposit gen \
   --network hoodi --keystore-dir ./keystores/ \
-  --pubkeys 0x... --output-dir ./out --passphrase-env KEYSTORE_PASS
+  --pubkeys 0x... \
+  --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
+  --output-dir ./out --passphrase-env KEYSTORE_PASS
 
 eth-deposit run \
   --network hoodi --signer local \
@@ -632,7 +780,9 @@ unset KEYSTORE_PASS ETH_DEPOSIT_TX_PRIVATE_KEY
 ```bash
 export KEYSTORE_PASS=...
 
-eth-deposit gen ... --output-dir ./out --passphrase-env KEYSTORE_PASS
+eth-deposit gen ... \
+  --withdrawal-address 0x... \
+  --output-dir ./out --passphrase-env KEYSTORE_PASS
 
 eth-deposit run \
   --network hoodi --signer ledger \
@@ -652,9 +802,16 @@ unset KEYSTORE_PASS
 ### Recipe 3 — Air-gapped Ledger (mainnet-ready)
 
 ```bash
+# Air-gapped machine B — generate BLS keys (TTY only)
+mkdir -p ./keystores
+eth-deposit key new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
+# transfer keystores (encrypted) + note the pubkeys to online machine A
+# keep the mnemonic offline only
+
 # Online machine A
 eth-deposit gen --network mainnet --i-understand-this-is-mainnet \
   --keystore-dir ./keystores/ --pubkeys 0x... \
+  --withdrawal-address 0xYourChecksummedExecutionAddress \
   --output-dir ./out --passphrase-env KEYSTORE_PASS
 eth-deposit build --network mainnet \
   --input-file ./out/deposit_data-*.json \
@@ -675,8 +832,11 @@ eth-deposit send --input signed_tx.json --rpc-url https://your-mainnet-rpc
 ### Recipe 4 — Multiple validators in one shot
 
 ```bash
+eth-deposit key new --output-dir ./keystores --count 3 --passphrase-env KEYSTORE_PASS
+
 eth-deposit gen --network hoodi --keystore-dir ./keystores/ \
   --pubkeys 0xpub1...,0xpub2...,0xpub3... \
+  --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out --passphrase-env KEYSTORE_PASS --parallel 4
 
 # One sign per validator, increment nonce
@@ -689,15 +849,26 @@ for i in 0 1 2; do
 done
 ```
 
-### Recipe 5 — Pipe between commands
+### Recipe 5 — Recover additional indices from an existing mnemonic
 
 ```bash
-eth-deposit gen --network hoodi ... --dry-run | \
+# You already have indices 0..2; derive the next three
+echo "$MNEMONIC" | eth-deposit key recover \
+  --output-dir ./keystores \
+  --start-index 3 \
+  --count 3 \
+  --passphrase-env KEYSTORE_PASS
+```
+
+### Recipe 6 — Pipe between commands
+
+```bash
+eth-deposit gen --network hoodi ... --withdrawal-address 0x... --dry-run | \
   eth-deposit build --network hoodi --input-file - --nonce 0 | \
   jq '.'   # pretty-print the unsigned tx
 ```
 
-### Recipe 6 — Verify a signed tx independently
+### Recipe 7 — Verify a signed tx independently
 
 ```bash
 # Decode and inspect with cast
@@ -712,10 +883,23 @@ cast decode-typed-tx "$RAW"
 
 ## Troubleshooting
 
+### `eth-deposit key` errors
+
+| Symptom | Cause / fix |
+|---|---|
+| `key new requires an interactive terminal ...` (exit 2) | `key new` is TTY-only. Run it in a real terminal; do not pipe or redirect stdin/stdout. Use `key recover` for scripted mnemonic input. |
+| `--output-dir: directory "..." does not exist` / `not writable` (exit 2) | Create the directory first (`mkdir -p`) and ensure write permission. |
+| `--count: value 0 is invalid` (exit 2) | Pass `--count` ≥ 1. |
+| Invalid mnemonic / checksum (exit 2, `key recover`) | Check word count (12/15/18/21/24), spelling against the English wordlist, and that the full phrase matches what you wrote down (including any mnemonic passphrase). |
+| Ceremony re-entry mismatch → abort (exit 4) | You declined retry after a wrong re-entry, or sent SIGINT. Run `key new` again; the previous mnemonic was never written to disk. |
+| Keystore passphrase too short (exit 2) | Keystore passphrase must be at least 8 characters (after EIP-2335 normalization). |
+
 ### `eth-deposit gen` errors
 
 | Symptom | Cause / fix |
 |---|---|
+| `--withdrawal-address: required flag not set` (exit 2) | Pass `--withdrawal-address` with an EIP-55 checksummed execution address. There is no default. |
+| `--withdrawal-address: ... EIP-55 checksum mismatch` (exit 2) | Address must be correctly mixed-case EIP-55 (not all-lowercase). Tools like `cast to-check-sum-address` can re-checksum. Note: `build`'s `--from` is lenient and does **not** require EIP-55 — only `--withdrawal-address` is strict. |
 | `mainnet selected; pass --i-understand-this-is-mainnet to acknowledge` (exit 2) | Add the flag. Mainnet is irreversible. |
 | `pubkey ... not found in keystore directory` (exit 2) | The pubkey listed in `--pubkeys` has no matching keystore file. Check the keystore directory contents. |
 | `decrypt: invalid passphrase` (exit 3) | Wrong `KEYSTORE_PASS`. The passphrase decrypts every keystore — all must share it. |

@@ -125,3 +125,5 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 | K5-2 | done | `feat(bin): gen --withdrawal-address with require-choice gate` | 0x01 creds; absent/lowercase/mismatch exit 2; flag+gate one release |
 | M-K5 | **passed** | *(K5-1..K5-2 commits)* | gen requires withdrawal-address; EIP-55; 0x01 creds |
 | K4-1 | done | `test(bin): key recover to gen E2E with frozen fixtures` | abandon+TREZOR chain; 0x01 deposit golden; no entropy flag |
+| K4-2 | done | `docs: keygen USER-GUIDE Step 0, README, CHANGELOG` | ceremony docs; ps/history note; EIP-55 asymmetry; gen breaking |
+| M-K4 | **passed** | *(K4-1..K4-2 commits)* | E2E golden frozen; docs shipped; manual cross-tool session still open in log |

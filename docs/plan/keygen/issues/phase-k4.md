@@ -75,12 +75,12 @@ Satisfies U-1, U-3, and the documentation half of C-2/R5.
   table). `CHANGELOG.md`: record the **breaking** `gen` change (now requires `--withdrawal-address`; exit 2 without).
 
 **Acceptance criteria**
-- [ ] USER-GUIDE "Step 0 — create validator keys" documents `key new` (ceremony, TTY-only) and `key recover`
+- [x] USER-GUIDE "Step 0 — create validator keys" documents `key new` (ceremony, TTY-only) and `key recover`
   (stdin) — U-1, U-3.
-- [ ] the raw `--mnemonic-passphrase` `ps`/shell-history exposure is documented, with env/prompt recommended —
+- [x] the raw `--mnemonic-passphrase` `ps`/shell-history exposure is documented, with env/prompt recommended —
   architecture §Design note (c) security note.
-- [ ] the EIP-55 strict-vs-lenient asymmetry (`--withdrawal-address` vs `--from`) is documented — risk R5, F-13.
-- [ ] CHANGELOG records the breaking `gen` require-choice change — F-13, PRD Q2 (risk R2).
+- [x] the EIP-55 strict-vs-lenient asymmetry (`--withdrawal-address` vs `--from`) is documented — risk R5, F-13.
+- [x] CHANGELOG records the breaking `gen` require-choice change — F-13, PRD Q2 (risk R2).
 
 **Test plan**
 - Docs review (no automated test); `make test && make lint` still green; cross-reference the divergence note with
