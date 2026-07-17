@@ -31,14 +31,14 @@ S-4 (determinism via the fixed mnemonic, not a hidden entropy flag).
 - Determinism comes from `key recover` with the fixed mnemonic — **no** hidden `--entropy-*` flag (S-4 / PRD Q4).
 
 **Acceptance criteria**
-- [ ] `key recover` (fixed mnemonic + `TREZOR` env passphrase) derives seed `c55257c3…463b04` and keystores whose
+- [x] `key recover` (fixed mnemonic + `TREZOR` env passphrase) derives seed `c55257c3…463b04` and keystores whose
   per-index signing pubkeys match the committed fixture — G3, C-1
   (research/eip-2333-2334.md; research/bip39.md chain anchor).
-- [ ] those keystores feed `gen --withdrawal-address <checksummed>` (BLS-verify on) → deposit data with real 0x01
+- [x] those keystores feed `gen --withdrawal-address <checksummed>` (BLS-verify on) → deposit data with real 0x01
   creds — G3, G6, F-13.
-- [ ] the produced deposit data is **byte-stable** against the committed golden under
+- [x] the produced deposit data is **byte-stable** against the committed golden under
   `bins/eth-deposit/tests/testdata/keygen/` — G3 (risk R3, frozen once post-K5).
-- [ ] no hidden entropy flag: determinism is via the fixed mnemonic through `key recover`, not entropy injection —
+- [x] no hidden entropy flag: determinism is via the fixed mnemonic through `key recover`, not entropy injection —
   S-4.
 
 **Test plan**
