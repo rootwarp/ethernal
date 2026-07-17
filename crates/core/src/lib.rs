@@ -5,9 +5,12 @@
 //! signature is re-verified immediately after signing, and all output is
 //! byte-for-byte compatible with the official staking-deposit-cli JSON schema.
 
+pub mod bip39;
 pub mod bls;
 pub mod cancel;
 pub mod deposit;
+pub mod entropy;
+pub mod hd;
 pub mod network;
 pub mod output;
 pub mod ssz;

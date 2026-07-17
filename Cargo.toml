@@ -28,6 +28,7 @@ aes = "0.8"
 ctr = "0.9"
 zeroize = "1"
 unicode-normalization = "0.1"
+getrandom = "0.3"
 
 # Encoding / serialization
 hex = "0.4"
