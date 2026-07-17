@@ -290,7 +290,7 @@ pub(crate) fn recover_address(
 
 /// EIP-55 checksummed 0x-prefixed address string (go-ethereum
 /// `common.Address.Hex()` equivalent).
-pub(crate) fn eip55_checksum(addr: &[u8; 20]) -> String {
+pub fn eip55_checksum(addr: &[u8; 20]) -> String {
     let lower = hex::encode(addr);
     let hash = keccak256(lower.as_bytes());
     let mut out = String::with_capacity(42);

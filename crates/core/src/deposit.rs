@@ -380,6 +380,17 @@ pub fn entries_from_json(data: &[u8]) -> Result<Vec<Entry>, DepositError> {
     Ok(entries)
 }
 
+/// Build 0x01 execution-address withdrawal credentials:
+/// `0x01 ‖ 0x00 × 11 ‖ addr` (32 bytes total).
+///
+/// Byte layout: index 0 = `0x01`, indices 1..12 zero, indices 12..32 = `addr`.
+pub fn eth1_withdrawal_credentials(addr: [u8; 20]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[0] = 0x01;
+    out[12..32].copy_from_slice(&addr);
+    out
+}
+
 impl Entry {
     /// Checks that the entry carries semantically meaningful values. It
     /// returns a descriptive error for each invariant that fails:

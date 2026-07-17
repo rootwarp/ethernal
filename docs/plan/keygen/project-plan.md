@@ -121,3 +121,4 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 | K3-3 | done | `feat(bin): implement key recover from TTY or stdin` | validate-first; start-index/count; shared encrypt/write; no ceremony |
 | K3-4 | done | `feat(bin): key exit-code map and secret-hygiene tests` | Bip39→2 Hd/Encrypt/write→3 Aborted→4; hygiene; gen Output→1 preserved |
 | M-K3 | **passed** | *(K3-1..K3-4 commits)* | key new/recover + exit map + secret hygiene |
+| K5-1 | done | `feat(signer): strict EIP-55 validate and eth1 withdrawal creds` | validate_eip55_address; eth1_withdrawal_credentials layout |

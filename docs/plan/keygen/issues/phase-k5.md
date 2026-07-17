@@ -35,14 +35,14 @@ address; `0x01 ‖ 11 zero bytes ‖ addr20`) and G6.
   `0x01 ‖ 0x00×11 ‖ addr` (research/withdrawal-credentials.md §"0x01 execution-address credential").
 
 **Acceptance criteria**
-- [ ] `validate_eip55_address` accepts a correctly EIP-55-checksummed 20-byte address (returns its 20 bytes) and
+- [x] `validate_eip55_address` accepts a correctly EIP-55-checksummed 20-byte address (returns its 20 bytes) and
   **rejects** its all-lowercase form and any checksum-mismatched form (`input != eip55_checksum(bytes)`) — F-13
   (research/withdrawal-credentials.md §"Validation — staking-deposit-cli requires EIP-55").
-- [ ] `validate_eip55_address` rejects wrong length and non-hex input with an error → exit 2 (mapped in K5-2) —
+- [x] `validate_eip55_address` rejects wrong length and non-hex input with an error → exit 2 (mapped in K5-2) —
   F-13.
-- [ ] `eth1_withdrawal_credentials(addr)` == `0x01` ‖ 11 zero bytes ‖ `addr` (byte 0 = `0x01`, bytes 1..12 zero,
+- [x] `eth1_withdrawal_credentials(addr)` == `0x01` ‖ 11 zero bytes ‖ `addr` (byte 0 = `0x01`, bytes 1..12 zero,
   bytes 12..32 == addr) — F-13, G6 (research/withdrawal-credentials.md §"0x01 execution-address credential").
-- [ ] `eip55_checksum` is exported `pub` from `signer`; `cargo tree` shows no new crate edge and no new dependency
+- [x] `eip55_checksum` is exported `pub` from `signer`; `cargo tree` shows no new crate edge and no new dependency
   — architecture §Design note (b).
 
 **Test plan**

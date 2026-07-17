@@ -20,7 +20,8 @@
 use eth_deposit_core::bls::{BlsError, Signer, Verifier};
 use eth_deposit_core::cancel::CancelToken;
 use eth_deposit_core::deposit::{
-    entries_from_json, entry_from_json, DepositError, Entry, Generator, Request,
+    entries_from_json, entry_from_json, eth1_withdrawal_credentials, DepositError, Entry,
+    Generator, Request,
 };
 use eth_deposit_core::network::{self, Network};
 use eth_deposit_core::ssz;
@@ -653,4 +654,26 @@ fn validate_invalid() {
             c.want_substr
         );
     }
+}
+
+// -----------------------------------------------------------------------------
+// eth1_withdrawal_credentials (K5-1)
+// -----------------------------------------------------------------------------
+
+#[test]
+fn eth1_withdrawal_credentials_layout() {
+    let addr: [u8; 20] = [
+        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+        0x11, 0x11, 0x11, 0x11, 0x11,
+    ];
+    let wc = eth1_withdrawal_credentials(addr);
+    assert_eq!(wc.len(), 32);
+    assert_eq!(wc[0], 0x01, "prefix must be ETH1_ADDRESS_WITHDRAWAL_PREFIX");
+    assert_eq!(&wc[1..12], &[0u8; 11], "bytes 1..12 must be zero");
+    assert_eq!(&wc[12..32], &addr, "bytes 12..32 must equal the address");
+    // Full expected layout used by phase2 fixture / validation tests.
+    let mut want = [0u8; 32];
+    want[0] = 0x01;
+    want[12..].copy_from_slice(&addr);
+    assert_eq!(wc, want);
 }
