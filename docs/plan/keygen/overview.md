@@ -36,7 +36,13 @@ compatibility (below).
 
 ---
 
-## All issues
+> **SUPERSEDED (2026-07-17, detail-planning pipeline):** the issue skeleton below
+> was the planning seed. The canonical plan is now `project-plan.md` (14 issues /
+> 23 pts, phases K1–K5, execution order K1→K2/K3→K5→K4) with sprint-ready detail
+> in `issues/phase-k*.md`. Requirements: `prd.md`; design: `architecture.md`;
+> verified spec facts and fixtures: `research/`.
+
+## All issues (original skeleton — superseded, see note above)
 
 | ID | Title | Pts | Stream | Depends on |
 |---|---|---|---|---|
@@ -78,7 +84,23 @@ compatibility (below).
    deposit data validates; proves the keystores we write are consumable by the
    pipeline that already has byte-identity heritage.
 
-## Open questions (decide before the affected issue starts)
+## Open questions — RESOLVED 2026-07-17 (detail planning kickoff)
+
+1. **Withdrawal credentials:** in scope as a final phase (K5) of this plan.
+   Narrowed at the PRD gate (see `prd.md` Q1/Q2 resolutions): K5 = the 0x01
+   `--withdrawal-address` path only, plus a gate making `gen` require an
+   explicit withdrawal choice (exit 2 otherwise). Real 0x00 BLS credentials
+   are deferred to a follow-up feature; the placeholder stays until then.
+2. **Mnemonic passphrase:** **supported in v1** — optional `--mnemonic-passphrase`
+   on `key new`/`key recover`, empty default (full staking-deposit-cli parity;
+   K1-1 seed derivation and the K3 ceremony gain the optional passphrase).
+3. **`key recover` stdin:** allowed (piped mnemonic); `key new` stays TTY-only.
+4. **Deterministic test escape:** recommendation stands — no hidden flags;
+   binary-level determinism via `key recover` with the fixed test mnemonic.
+
+The original questions are preserved below for the record.
+
+## Open questions (original, as drafted)
 
 1. **Withdrawal credentials wiring (affects K4 scope):** `gen` currently hard-codes
    placeholder 0x00 credentials with an all-zero body (`gen_cmd.rs`,
