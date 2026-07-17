@@ -209,3 +209,35 @@ pub(crate) fn is_posix_env_var_name(s: &str) -> bool {
     }
     chars.all(|c| c == '_' || c.is_ascii_uppercase() || c.is_ascii_digit())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_posix_env_var_name;
+
+    // Underpins the `--private-key-env` validation exercised end-to-end by
+    // tests/sign.rs (`invalid_env_var_name_*`). `^[A-Z_][A-Z0-9_]*$`.
+    #[test]
+    fn posix_env_var_name_matrix() {
+        for ok in [
+            "FOO",
+            "_FOO",
+            "ETH_DEPOSIT_TX_PRIVATE_KEY",
+            "A1",
+            "_",
+            "X_2_Y",
+        ] {
+            assert!(is_posix_env_var_name(ok), "{ok:?} should be valid");
+        }
+        for bad in [
+            "",                 // empty
+            "1FOO",             // leading digit
+            "my_lowercase_var", // lowercase
+            "FOO-BAR",          // hyphen
+            "FOO BAR",          // space
+            "0xabcdef",         // a hex key passed as a name
+            "föö",              // non-ascii
+        ] {
+            assert!(!is_posix_env_var_name(bad), "{bad:?} should be invalid");
+        }
+    }
+}

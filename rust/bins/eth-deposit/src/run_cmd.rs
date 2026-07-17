@@ -395,3 +395,78 @@ fn go_join(dir: &str, name: &str) -> String {
         format!("{d}/{name}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::exit_code_for;
+    use eth_deposit_core::network::{self, Network};
+
+    /// A `RunConfig` for driving [`require_ledger_flags_for_rpc`] directly.
+    fn run_cfg(signer: &str, rpc_url: &str, gas_limit: u64, nonce: Option<u64>) -> RunConfig {
+        RunConfig {
+            build: Config {
+                network: Network::Holesky,
+                network_params: network::lookup(Network::Holesky),
+                input_file: String::new(),
+                output_file: String::new(),
+                index: 0,
+                rpc_url: rpc_url.to_string(),
+                from: [0u8; 20],
+                gas_limit,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                nonce,
+            },
+            signer: signer.to_string(),
+            private_key_env_var: DEFAULT_PRIV_KEY_ENV.to_string(),
+            output_file: String::new(),
+            keep_unsigned: false,
+            raw_output_file: String::new(),
+        }
+    }
+
+    // Go: TestRequireLedgerFlagsForRPC (table).
+    #[test]
+    fn require_ledger_flags_for_rpc_gate() {
+        // offline ledger (no rpc) → ok.
+        assert!(require_ledger_flags_for_rpc(&run_cfg("ledger", "", 0, None)).is_ok());
+
+        // ledger rpc nonce omitted → err (names both flags).
+        let err = require_ledger_flags_for_rpc(&run_cfg("ledger", "http://n", 250_000, None))
+            .unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("--nonce") && err.to_string().contains("--gas-limit"));
+
+        // ledger rpc gas omitted → err.
+        let err =
+            require_ledger_flags_for_rpc(&run_cfg("ledger", "http://n", 0, Some(5))).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+
+        // ledger rpc both omitted → err.
+        assert!(require_ledger_flags_for_rpc(&run_cfg("ledger", "http://n", 0, None)).is_err());
+
+        // ledger rpc both set → ok.
+        assert!(
+            require_ledger_flags_for_rpc(&run_cfg("ledger", "http://n", 250_000, Some(5))).is_ok()
+        );
+
+        // local rpc both omitted (exempt) → ok.
+        assert!(require_ledger_flags_for_rpc(&run_cfg("local", "http://n", 0, None)).is_ok());
+    }
+
+    // Path derivation used to place the .raw / unsigned companion files.
+    #[test]
+    fn path_derivation() {
+        assert_eq!(raw_path_for("/path/to/signed.json"), "/path/to/signed.raw");
+        assert_eq!(
+            unsigned_path_for("/path/to/signed.json"),
+            "/path/to/unsigned.json"
+        );
+        // No "signed" stem → prepend "unsigned-".
+        assert_eq!(
+            unsigned_path_for("/path/to/tx.json"),
+            "/path/to/unsigned-tx.json"
+        );
+    }
+}

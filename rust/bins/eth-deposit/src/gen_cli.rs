@@ -373,3 +373,582 @@ fn print_banner(w: &mut dyn Write, cfg: &GenConfig) {
         cfg.pubkeys.len()
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::exit_code_for;
+    use eth_deposit_core::bls::{self, Signer};
+    use std::path::PathBuf;
+
+    // Port of `internal/cli/cli_test.go` (validation + banner) and
+    // `cli_fuzz_test.go`. Go drove the app with a NO-OP run callback, so these
+    // exercise exactly `load_config` (parse/validate/banner) — never the
+    // pipeline. Divergences from the Go table:
+    //   - Missing clap-`required` flags (keystore-dir/pubkeys/network) and empty
+    //     `--network` surface as clap parse errors, not `load_config` errors —
+    //     `run` returns `Err` either way (both exit 2 at the binary).
+    //   - `--i-understand-this-is-mainnet=false` (Go's explicit-false-ack tests):
+    //     NOT PORTED — clap's `SetTrue` action has no `=false` form. The
+    //     ack-omitted gate is covered by `mainnet_without_ack`.
+
+    /// Derives a real BLS12-381 G1 pubkey (hex, unprefixed) from a fixed seed.
+    fn valid_pubkey(seed: u8) -> String {
+        let mut secret = [0u8; 32];
+        secret[0] = seed;
+        let signer = bls::new_signer(&secret).expect("new_signer");
+        hex::encode(signer.public_key().expect("public_key"))
+    }
+
+    /// A temp directory that removes itself on drop.
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn new() -> Tmp {
+            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!("gen-cli-test-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&p).unwrap();
+            Tmp(p)
+        }
+        fn str(&self) -> &str {
+            self.0.to_str().unwrap()
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Runs parse + validate + banner, mirroring Go's no-op-callback app.
+    fn run(args: &[&str]) -> Result<(GenConfig, String), String> {
+        let mut argv = vec!["gen"];
+        argv.extend_from_slice(args);
+        let m = command()
+            .try_get_matches_from(argv)
+            .map_err(|e| format!("clap: {e}"))?;
+        let mut banner = Vec::new();
+        let cfg = load_config(&m, &mut banner).map_err(|e| format!("load: {e}"))?;
+        Ok((cfg, String::from_utf8(banner).unwrap()))
+    }
+
+    /// Runs parse (expected to succeed) + validate (expected to fail), returning
+    /// the `AppError` so exit codes can be asserted.
+    fn load_err(args: &[&str]) -> AppError {
+        let mut argv = vec!["gen"];
+        argv.extend_from_slice(args);
+        let m = command().try_get_matches_from(argv).expect("clap parse ok");
+        let mut banner = Vec::new();
+        load_config(&m, &mut banner).expect_err("load should fail")
+    }
+
+    // --- parse_pubkeys (cli_test pubkey cases + fuzz seeds) ---
+
+    // Go: TestPubkeyHexLength / TestPubkeyInvalidHexChars / TestPubkeyMixedPrefix.
+    #[test]
+    fn parse_pubkeys_matrix() {
+        let pk = valid_pubkey(1);
+        let pk2 = valid_pubkey(2);
+
+        assert_eq!(parse_pubkeys(&pk).unwrap().len(), 1); // unprefixed
+        assert_eq!(parse_pubkeys(&format!("0x{pk}")).unwrap().len(), 1); // prefixed
+        assert_eq!(parse_pubkeys(&format!("0x{pk},0x{pk2}")).unwrap().len(), 2);
+        assert_eq!(parse_pubkeys(&format!("{pk},{pk2}")).unwrap().len(), 2); // unprefixed multi
+
+        assert!(
+            parse_pubkeys(&format!("0x{}", &pk[..94])).is_err(),
+            "too short"
+        );
+        assert!(parse_pubkeys(&format!("0x{pk}ab")).is_err(), "too long");
+        assert!(parse_pubkeys("").is_err(), "empty");
+        assert!(parse_pubkeys(&"g".repeat(96)).is_err(), "invalid hex chars");
+        // Mixed prefix: first 0x-prefixed, second bare.
+        assert!(
+            parse_pubkeys(&format!("0x{pk},{pk2}")).is_err(),
+            "mixed prefix"
+        );
+    }
+
+    // Go: FuzzParsePubkeys — parse_pubkeys must never panic, whatever the input.
+    #[test]
+    fn parse_pubkeys_never_panics() {
+        let pk = valid_pubkey(1);
+        let mut corpus: Vec<String> = vec![
+            pk.clone(),
+            format!("0x{pk}"),
+            format!("{pk},{pk}"),
+            String::new(),
+            ",".into(),
+            "0x".into(),
+            "0xgg".into(),
+            "\0".repeat(200),
+            format!("ABCDEF{}", &pk[..90]),
+            format!("0x{pk},{pk}"),
+        ];
+        // Add systematic byte-pattern inputs.
+        for b in 0u16..=255 {
+            corpus.push((b as u8 as char).to_string().repeat(96));
+            corpus.push(format!("0x{}", (b as u8 as char).to_string().repeat(96)));
+        }
+        for s in &corpus {
+            let _ = parse_pubkeys(s); // must not panic; Err is fine.
+        }
+    }
+
+    // --- load_config validation matrix ---
+
+    // Go: TestSinglePubkeyHappyPath
+    #[test]
+    fn single_pubkey_happy_path() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let (cfg, banner) = run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &format!("0x{pk}"),
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+        ])
+        .expect("should succeed");
+        assert_eq!(cfg.keystore_dir, ks.str());
+        assert_eq!(cfg.network, Network::Hoodi);
+        assert_eq!(cfg.output_dir, dir.str());
+        assert_eq!(cfg.pubkeys.len(), 1);
+        assert!(banner.contains("eth-deposit gen:"));
+        assert!(banner.contains("network=hoodi"));
+        assert!(banner.contains("count=1"));
+    }
+
+    // Go: TestBannerFormat / TestMultiPubkeyHappyPath / TestUnprefixedPubkeys.
+    #[test]
+    fn banner_format_multi_pubkey() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let pk2 = valid_pubkey(2);
+        let (cfg, banner) = run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &format!("0x{pk},0x{pk2}"),
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+        ])
+        .expect("should succeed");
+        assert_eq!(cfg.pubkeys.len(), 2);
+        let want = format!(
+            "eth-deposit gen: network=hoodi first_pubkey=0x{pk} last_pubkey=0x{pk2} count=2"
+        );
+        assert!(banner.contains(&want), "banner {banner:?}\nwant {want:?}");
+    }
+
+    // Go: TestMissingRequiredFlags — clap rejects missing required flags; a missing
+    // (non-clap-required) --output-dir is rejected by load_config with exit 2.
+    #[test]
+    fn missing_required_flags() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        // Missing clap-required flags → parse error.
+        assert!(run(&[
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str()
+        ])
+        .is_err());
+        assert!(run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str()
+        ])
+        .is_err());
+        assert!(run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--output-dir",
+            dir.str()
+        ])
+        .is_err());
+        // Missing --output-dir (validated in load_config) → exit 2.
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("required flag not set"));
+        // All present → ok.
+        assert!(run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str()
+        ])
+        .is_ok());
+    }
+
+    // Go: TestInvalidNetwork / TestNetworkParsedBeforeOtherWork.
+    #[test]
+    fn invalid_network() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let base_ok = |net: &str| {
+            run(&[
+                "--keystore-dir",
+                ks.str(),
+                "--pubkeys",
+                &pk,
+                "--network",
+                net,
+                "--output-dir",
+                dir.str(),
+            ])
+            .is_ok()
+        };
+        assert!(base_ok("hoodi"));
+        // gen supports mainnet/hoodi only, case-sensitive; sepolia/HOODI/Mainnet rejected.
+        for bad in ["sepolia", "HOODI", "Mainnet", "invalidnet"] {
+            assert!(!base_ok(bad), "network {bad} should be rejected");
+        }
+        // mainnet needs the ack flag to reach a happy load.
+        assert!(run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "mainnet",
+            "--output-dir",
+            dir.str(),
+            "--i-understand-this-is-mainnet",
+        ])
+        .is_ok());
+    }
+
+    // Go: TestErrorIsExitCoder — invalid pubkeys → exit 2.
+    #[test]
+    fn invalid_pubkeys_is_exit2() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            "not-valid-hex!!!",
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+    }
+
+    // Go: TestMainnetWithoutAck — exit 2, "mainnet selected", banner NOT emitted.
+    #[test]
+    fn mainnet_without_ack() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        // The banner writer captures nothing because the gate fires before it.
+        let mut argv = vec!["gen"];
+        let extra = [
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "mainnet",
+            "--output-dir",
+            dir.str(),
+        ];
+        argv.extend_from_slice(&extra);
+        let m = command().try_get_matches_from(argv).unwrap();
+        let mut banner = Vec::new();
+        let err = load_config(&m, &mut banner).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("mainnet selected"));
+        assert!(
+            !String::from_utf8(banner).unwrap().contains("first_pubkey="),
+            "banner must not be emitted"
+        );
+    }
+
+    // Go: TestMainnetWithAck — MAINNET banner (uppercase), ack set.
+    #[test]
+    fn mainnet_with_ack() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let (cfg, banner) = run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "mainnet",
+            "--output-dir",
+            dir.str(),
+            "--i-understand-this-is-mainnet",
+        ])
+        .expect("should succeed");
+        assert_eq!(cfg.network, Network::Mainnet);
+        assert!(cfg.mainnet_ack);
+        assert!(banner.contains("MAINNET"), "banner {banner:?}");
+    }
+
+    // Go: TestHoodiWithAckFlag — a harmless ack flag on hoodi shows lowercase.
+    #[test]
+    fn hoodi_with_ack_flag() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let (cfg, banner) = run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+            "--i-understand-this-is-mainnet",
+        ])
+        .expect("should succeed");
+        assert_eq!(cfg.network, Network::Hoodi);
+        assert!(banner.contains("network=hoodi"));
+        assert!(!banner.contains("MAINNET"));
+    }
+
+    // Go: TestDryRunFlag / TestVerboseFlag / TestJSONLogsFlag /
+    // TestVerifyWithDepositCLIFlag / TestDepositCLIPathFlag / TestPassphraseEnvOptional.
+    #[test]
+    fn boolean_and_string_flags_propagate() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let base = |extra: &[&str]| -> GenConfig {
+            let mut a = vec![
+                "--keystore-dir",
+                ks.str(),
+                "--pubkeys",
+                pk.as_str(),
+                "--network",
+                "hoodi",
+                "--output-dir",
+                dir.str(),
+            ];
+            a.extend_from_slice(extra);
+            run(&a).expect("ok").0
+        };
+        assert!(!base(&[]).dry_run);
+        assert!(base(&["--dry-run"]).dry_run);
+        assert!(!base(&[]).verbose);
+        assert!(base(&["--verbose"]).verbose);
+        assert!(!base(&[]).json_logs);
+        assert!(base(&["--json-logs"]).json_logs);
+        assert!(!base(&[]).verify_with_deposit_cli);
+        assert!(base(&["--verify-with-deposit-cli"]).verify_with_deposit_cli);
+        assert_eq!(base(&[]).deposit_cli_path, "deposit");
+        assert_eq!(
+            base(&["--deposit-cli-path", "/usr/local/bin/deposit"]).deposit_cli_path,
+            "/usr/local/bin/deposit"
+        );
+        assert_eq!(base(&[]).passphrase_env, "");
+        assert_eq!(
+            base(&["--passphrase-env", "MY_PASSPHRASE"]).passphrase_env,
+            "MY_PASSPHRASE"
+        );
+    }
+
+    // Go: TestParallelFlag — default 1, valid N propagates, invalid rejected exit 2.
+    #[test]
+    fn parallel_flag() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let ok = |extra: &[&str]| -> Result<(GenConfig, String), String> {
+            let mut a = vec![
+                "--keystore-dir",
+                ks.str(),
+                "--pubkeys",
+                pk.as_str(),
+                "--network",
+                "hoodi",
+                "--output-dir",
+                dir.str(),
+            ];
+            a.extend_from_slice(extra);
+            run(&a)
+        };
+        assert_eq!(ok(&[]).unwrap().0.parallel, 1);
+        assert_eq!(ok(&["--parallel", "4"]).unwrap().0.parallel, 4);
+        // Zero, too-large, and negative (via `=` so clap doesn't treat it as a flag).
+        for bad in [
+            &["--parallel", "0"][..],
+            &["--parallel", "99999"][..],
+            &["--parallel=-1"][..],
+        ] {
+            let mut a = vec![
+                "--keystore-dir",
+                ks.str(),
+                "--pubkeys",
+                pk.as_str(),
+                "--network",
+                "hoodi",
+                "--output-dir",
+                dir.str(),
+            ];
+            a.extend_from_slice(bad);
+            let err = load_err(&a);
+            assert_eq!(exit_code_for(&err), 2, "parallel {bad:?}");
+            assert!(err.to_string().contains("--parallel"));
+        }
+    }
+
+    // Go: TestKeystoreDirValidation / TestNonexistentOutputDir / TestOutputDirIsFile.
+    #[test]
+    fn dir_validation() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+
+        // nonexistent keystore-dir → err.
+        let missing_ks = dir.0.join("no-such-dir");
+        assert!(run(&[
+            "--keystore-dir",
+            missing_ks.to_str().unwrap(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+        ])
+        .is_err());
+
+        // file as keystore-dir → err.
+        let file = dir.0.join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(run(&[
+            "--keystore-dir",
+            file.to_str().unwrap(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+        ])
+        .is_err());
+
+        // nonexistent output-dir → err.
+        let missing_out = dir.0.join("no-out");
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            missing_out.to_str().unwrap(),
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+
+        // file as output-dir → err.
+        assert!(run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            file.to_str().unwrap(),
+        ])
+        .is_err());
+    }
+
+    // Go: TestOutputDirConditionalRequiredness — output-dir required/validated only
+    // outside --dry-run.
+    #[test]
+    fn output_dir_conditional_requiredness() {
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let invalid = std::env::temp_dir().join("gen-cli-does-not-exist-xyz");
+
+        // dry-run without --output-dir → ok, OutputDir empty.
+        let (cfg, _) = run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert_eq!(cfg.output_dir, "");
+        assert!(cfg.dry_run);
+
+        // dry-run with invalid --output-dir → ok (validation skipped).
+        assert!(run(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            invalid.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .is_ok());
+
+        // no dry-run, missing --output-dir → exit 2.
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+
+        // no dry-run, invalid --output-dir → exit 2.
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            invalid.to_str().unwrap(),
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+    }
+}

@@ -33,7 +33,9 @@ pub enum DepositError {
 
     /// The request's stated network does not match the network the Generator
     /// was constructed for.
-    #[error(r#"network mismatch: request "{request}" but generator is configured for "{configured}""#)]
+    #[error(
+        r#"network mismatch: request "{request}" but generator is configured for "{configured}""#
+    )]
     NetworkMismatch { request: String, configured: String },
 
     /// The operation was cancelled (SIGINT). Maps to exit code 4.
@@ -331,8 +333,8 @@ fn decode_fixed_hex(
 ///   - deposit_data_root:      32 bytes
 ///   - fork_version:            4 bytes
 pub fn entry_from_json(data: &[u8]) -> Result<Entry, DepositError> {
-    let raw: JsonEntryIn = serde_json::from_slice(data)
-        .map_err(|e| DepositError::UnmarshalEntry(e.to_string()))?;
+    let raw: JsonEntryIn =
+        serde_json::from_slice(data).map_err(|e| DepositError::UnmarshalEntry(e.to_string()))?;
     entry_from_raw(raw)
 }
 
@@ -365,8 +367,8 @@ fn entry_from_raw(raw: JsonEntryIn) -> Result<Entry, DepositError> {
 /// Parses a Launchpad deposit_data-*.json file, which is a JSON array of
 /// entry objects.
 pub fn entries_from_json(data: &[u8]) -> Result<Vec<Entry>, DepositError> {
-    let raws: Vec<JsonEntryIn> = serde_json::from_slice(data)
-        .map_err(|e| DepositError::UnmarshalEntries(e.to_string()))?;
+    let raws: Vec<JsonEntryIn> =
+        serde_json::from_slice(data).map_err(|e| DepositError::UnmarshalEntries(e.to_string()))?;
     let mut entries = Vec::with_capacity(raws.len());
     for (i, raw) in raws.into_iter().enumerate() {
         let e = entry_from_raw(raw).map_err(|err| DepositError::EntryAt {

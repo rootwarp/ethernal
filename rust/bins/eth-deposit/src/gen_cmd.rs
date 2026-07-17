@@ -471,3 +471,1074 @@ pub fn run_gen(cfg: &GenConfig, cancel: &CancelToken) -> Result<(), AppError> {
         run(&mut FsWriter::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::exit_code_for;
+    use eth_deposit_core::bls::Signer;
+    use eth_deposit_core::output::OutputError;
+    use eth_deposit_keystore::{Key, KeystoreError};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    // Port of `cmd/eth-deposit/gen_test.go` `runGenWithDeps` tests: the gen
+    // pipeline driven with fakes through the `GenDeps` seam. Since the Rust
+    // `DirectoryIndex` has no public constructor, the "scanner" is either a
+    // closure returning `DirectoryIndex::default()` / `scan_dir` over a temp dir
+    // of `{"pubkey":...}` files, or an error closure.
+    //
+    // NOT PORTED from gen_test.go: `TestMain_BuildsCleanly` (cargo builds the
+    // binary implicitly), `TestNoSlogImportInSigningPackages` (a Go source-import
+    // lint with no Rust analogue), `BenchmarkRunGenWithDeps_Parallel`, and the
+    // pick*/productionGenDeps helper tests (Rust wires these inline in `run_gen`).
+    // The `progressOut` buffer has no Rust field: the non-TTY path logs via the
+    // `Logger` (asserted below); the TTY path writes to real stderr.
+
+    // --- fakes ---
+
+    struct FakeSigner {
+        pubkey: [u8; 48],
+        sig: [u8; 96],
+    }
+    impl Signer for FakeSigner {
+        fn sign(&self, _root: [u8; 32]) -> Result<[u8; 96], BlsError> {
+            Ok(self.sig)
+        }
+        fn public_key(&self) -> Result<[u8; 48], BlsError> {
+            Ok(self.pubkey)
+        }
+    }
+
+    struct FakeVerifier {
+        ok: bool,
+    }
+    impl Verifier for FakeVerifier {
+        fn verify(&self, _pk: [u8; 48], _root: [u8; 32], _sig: [u8; 96]) -> Result<bool, BlsError> {
+            Ok(self.ok)
+        }
+    }
+
+    struct FakeLoader {
+        #[allow(clippy::type_complexity)]
+        f: Box<dyn Fn(&Path) -> Result<Key, KeystoreError> + Sync>,
+    }
+    impl KeyLoader for FakeLoader {
+        fn load(&self, path: &Path, _pw: &dyn PassphraseSource) -> Result<Key, KeystoreError> {
+            (self.f)(path)
+        }
+    }
+
+    struct FakeWriter {
+        path: String,
+        sha: String,
+        err: bool,
+    }
+    impl OutputWriter for FakeWriter {
+        fn write(
+            &mut self,
+            _dir: &Path,
+            _entries: &[Entry],
+            _now: i64,
+        ) -> Result<(String, String), OutputError> {
+            if self.err {
+                return Err(OutputError::WriteDryRun(std::io::Error::other("disk full")));
+            }
+            Ok((self.path.clone(), self.sha.clone()))
+        }
+    }
+
+    struct CapturingWriter {
+        entries: Arc<Mutex<Vec<Entry>>>,
+    }
+    impl OutputWriter for CapturingWriter {
+        fn write(
+            &mut self,
+            _dir: &Path,
+            entries: &[Entry],
+            _now: i64,
+        ) -> Result<(String, String), OutputError> {
+            *self.entries.lock().unwrap() = entries.to_vec();
+            Ok(("/out/deposit_data.json".to_string(), "cafebabe".to_string()))
+        }
+    }
+
+    #[derive(Clone)]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A temp dir removed on drop.
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn new() -> Tmp {
+            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!("gen-cmd-test-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&p).unwrap();
+            Tmp(p)
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn discard_logger() -> Logger {
+        Logger::new(Level::Error, Format::Text, Box::new(std::io::sink()))
+    }
+
+    /// N distinct pubkeys where `pk[i][0] == i+1`.
+    fn multi_pks(n: usize) -> Vec<[u8; 48]> {
+        (0..n)
+            .map(|i| {
+                let mut p = [0u8; 48];
+                p[0] = (i + 1) as u8;
+                p
+            })
+            .collect()
+    }
+
+    /// Writes `{"pubkey":...}` files for `pks` into a fresh temp dir and returns
+    /// a real `DirectoryIndex` over them (mapping pubkey → path).
+    fn index_over(pks: &[[u8; 48]]) -> (Tmp, DirectoryIndex) {
+        let dir = Tmp::new();
+        for (i, pk) in pks.iter().enumerate() {
+            let content = format!("{{\"pubkey\":\"{}\"}}", hex::encode(pk));
+            std::fs::write(dir.0.join(format!("{i}.json")), content).unwrap();
+        }
+        let idx = scan_dir(&dir.0).expect("scan_dir");
+        (dir, idx)
+    }
+
+    /// A loader that derives `secret[0]` from the keystore file's pubkey, used
+    /// with `signers_for` so each pubkey routes to its own signer.
+    fn routing_loader() -> FakeLoader {
+        FakeLoader {
+            f: Box::new(|path: &Path| {
+                let raw = std::fs::read(path).map_err(|e| KeystoreError::ReadFile {
+                    path: path.display().to_string(),
+                    source: e,
+                })?;
+                let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+                let pkhex = v["pubkey"].as_str().unwrap().to_string();
+                let first = u8::from_str_radix(&pkhex[..2], 16).unwrap();
+                let mut secret = vec![0u8; 32];
+                secret[0] = first;
+                Ok(Key {
+                    secret,
+                    pubkey_hex: pkhex,
+                })
+            }),
+        }
+    }
+
+    /// A `new_signer` map: `secret[0] == i+1` selects a signer whose pubkey is
+    /// `pks[i]` and whose signature's first byte is `i+1` (distinct per key).
+    fn signer_map(pks: &[[u8; 48]]) -> HashMap<u8, FakeSigner> {
+        let mut m = HashMap::new();
+        for pk in pks {
+            let mut sig = [0u8; 96];
+            sig[0] = pk[0];
+            m.insert(pk[0], FakeSigner { pubkey: *pk, sig });
+        }
+        m
+    }
+
+    fn base_cfg(pks: Vec<[u8; 48]>) -> GenConfig {
+        GenConfig {
+            keystore_dir: "/fake/keystores".to_string(),
+            pubkeys: pks,
+            network: Network::Hoodi,
+            output_dir: "/tmp".to_string(),
+            passphrase_env: String::new(),
+            mainnet_ack: false,
+            dry_run: false,
+            verbose: false,
+            json_logs: false,
+            parallel: 1,
+            verify_with_deposit_cli: false,
+            deposit_cli_path: "deposit".to_string(),
+        }
+    }
+
+    // --- single-pubkey success + error-path tests ---
+
+    // Go: TestRunGenWithDeps_Success_ExitCode0 + _PrintsSummary.
+    #[test]
+    fn success_prints_summary() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let signers = signer_map(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out/deposit_data-99.json".into(),
+            sha: "deadbeef99".into(),
+            err: false,
+        };
+        let mut summary = Vec::<u8>::new();
+        let logger = discard_logger();
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+
+        let cfg = base_cfg(pks);
+        {
+            let mut deps = GenDeps {
+                init_bls: &init_bls,
+                scanner: &scanner,
+                loader: &loader,
+                new_signer: &new_signer,
+                verifier: &verifier,
+                writer: &mut writer,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                verify_deposit_cli: &verify,
+            };
+            run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).expect("success");
+        }
+        let s = String::from_utf8(summary).unwrap();
+        assert!(s.contains("wrote /out/deposit_data-99.json"), "{s}");
+        assert!(s.contains("sha256=deadbeef99"), "{s}");
+        assert!(s.contains("network=hoodi"), "{s}");
+    }
+
+    /// Runs the pipeline with a single pubkey and the given overrides, returning
+    /// the classified error (or panicking on unexpected success/failure).
+    fn run_expect_err(
+        cfg_mut: impl FnOnce(&mut GenConfig),
+        scanner: &(dyn Fn(&Path) -> std::io::Result<DirectoryIndex> + Sync),
+        loader: &(dyn KeyLoader + Sync),
+        verifier: &dyn Verifier,
+        writer: &mut dyn OutputWriter,
+        init_bls: &(dyn Fn() -> Result<(), String> + Sync),
+        cancel: &CancelToken,
+    ) -> AppError {
+        let pks = multi_pks(1);
+        let signers = signer_map(&pks);
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let mut summary = Vec::<u8>::new();
+        let logger = discard_logger();
+        let mut cfg = base_cfg(pks);
+        cfg_mut(&mut cfg);
+        let mut deps = GenDeps {
+            init_bls,
+            scanner,
+            loader,
+            new_signer: &new_signer,
+            verifier,
+            writer,
+            summary_out: &mut summary,
+            progress: Progress::NonTty,
+            logger: &logger,
+            verify_deposit_cli: &verify,
+        };
+        run_gen_with_deps(&cfg, &mut deps, cancel).expect_err("expected error")
+    }
+
+    // Go: TestRunGenWithDeps_BLSInitError_ExitCode3.
+    #[test]
+    fn bls_init_error_exit3() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Err("herumi init failure".to_string());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let err = run_expect_err(
+            |_| {},
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &CancelToken::new(),
+        );
+        assert_eq!(exit_code_for(&err), 3);
+    }
+
+    // Go: TestRunGenWithDeps_KeystoreLoadError_ExitCode2.
+    #[test]
+    fn keystore_load_error_exit2() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let loader = FakeLoader {
+            f: Box::new(|_| {
+                Err(KeystoreError::KeystoreMissing {
+                    path: "/fake/ks.json".into(),
+                })
+            }),
+        };
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let err = run_expect_err(
+            |_| {},
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &CancelToken::new(),
+        );
+        assert_eq!(exit_code_for(&err), 2);
+    }
+
+    // Go: TestRunGenWithDeps_WrongPassphrase_ExitCode3.
+    #[test]
+    fn wrong_passphrase_exit3() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let loader = FakeLoader {
+            f: Box::new(|_| {
+                Err(KeystoreError::WrongPassphrase {
+                    detail: "bad checksum".into(),
+                })
+            }),
+        };
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let err = run_expect_err(
+            |_| {},
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &CancelToken::new(),
+        );
+        assert_eq!(exit_code_for(&err), 3);
+    }
+
+    // Go: TestRunGenWithDeps_PubkeyMismatch_ExitCode2 — the signer returns a
+    // different pubkey than requested.
+    #[test]
+    fn pubkey_mismatch_exit2() {
+        let mut wrong = [0u8; 48];
+        wrong[0] = 0xBB;
+        let (_dir, idx) = index_over(&[wrong]);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        // new_signer always returns pubkey 0xAB, mismatching the requested 0xBB.
+        let mut ab = [0u8; 48];
+        ab[0] = 0xAB;
+        let new_signer = move |_: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            Ok(Box::new(FakeSigner {
+                pubkey: ab,
+                sig: [0u8; 96],
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let mut summary = Vec::<u8>::new();
+        let logger = discard_logger();
+        let cfg = base_cfg(vec![wrong]);
+        let mut deps = GenDeps {
+            init_bls: &init_bls,
+            scanner: &scanner,
+            loader: &loader,
+            new_signer: &new_signer,
+            verifier: &verifier,
+            writer: &mut writer,
+            summary_out: &mut summary,
+            progress: Progress::NonTty,
+            logger: &logger,
+            verify_deposit_cli: &verify,
+        };
+        let err = run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(matches!(
+            err,
+            AppError::Deposit(deposit::DepositError::PubkeyMismatch { .. })
+        ));
+    }
+
+    // Go: TestRunGenWithDeps_WriterError_ExitCode1.
+    #[test]
+    fn writer_error_exit1() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: String::new(),
+            sha: String::new(),
+            err: true,
+        };
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let err = run_expect_err(
+            |_| {},
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &CancelToken::new(),
+        );
+        assert_eq!(exit_code_for(&err), 1);
+    }
+
+    // Go: TestRunGenWithDeps_ScannerError_ExitCode1.
+    #[test]
+    fn scanner_error_exit1() {
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = |_: &Path| Err(std::io::Error::other("permission denied"));
+        let err = run_expect_err(
+            |_| {},
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &CancelToken::new(),
+        );
+        assert_eq!(exit_code_for(&err), 1);
+    }
+
+    // Go: TestRunGenWithDeps_PubkeyNotInIndex_ExitCode2 + _ErrorMessageContainsPubkeyAndDir.
+    #[test]
+    fn pubkey_not_in_index_exit2() {
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = |_: &Path| Ok(DirectoryIndex::default()); // empty
+        let err = run_expect_err(
+            |c| c.keystore_dir = "/fake/keystores".to_string(),
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &CancelToken::new(),
+        );
+        assert_eq!(exit_code_for(&err), 2);
+        let msg = err.to_string();
+        assert!(msg.contains("0x"), "message should name the pubkey: {msg}");
+        assert!(
+            msg.contains("/fake/keystores"),
+            "message should name the dir: {msg}"
+        );
+    }
+
+    // Go: TestRunGenWithDeps_ContextCanceled_ExitCode4 — a pre-cancelled token
+    // short-circuits before the loader is even called.
+    #[test]
+    fn context_canceled_exit4() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let err = run_expect_err(
+            |_| {},
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &cancel,
+        );
+        assert_eq!(exit_code_for(&err), 4);
+    }
+
+    // Go: TestRunGenWithDeps_DryRun_VerifyFailureAbortsWithSameExitCode — the
+    // self-verifier failing → exit 3.
+    #[test]
+    fn self_verify_failed_exit3() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: false }; // self-verify fails
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let err = run_expect_err(
+            |_| {},
+            &scanner,
+            &loader,
+            &verifier,
+            &mut writer,
+            &init_bls,
+            &CancelToken::new(),
+        );
+        assert_eq!(exit_code_for(&err), 3);
+        assert!(matches!(
+            err,
+            AppError::Deposit(deposit::DepositError::SelfVerifyFailed { .. })
+        ));
+    }
+
+    // --- verify-with-deposit-cli seam (Go: TestVerifyDepositCLI_*) ---
+
+    fn run_with_verify(
+        verify_with_cli: bool,
+        dry_run: bool,
+        verify: &dyn Fn(&str, &str) -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let signers = signer_map(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out/deposit_data-1.json".into(),
+            sha: "cafebabe".into(),
+            err: false,
+        };
+        let mut dry = DryRunWriter::new(Vec::<u8>::new());
+        let mut summary = Vec::<u8>::new();
+        let logger = discard_logger();
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let mut cfg = base_cfg(pks);
+        cfg.verify_with_deposit_cli = verify_with_cli;
+        cfg.dry_run = dry_run;
+        let writer_ref: &mut dyn OutputWriter = if dry_run { &mut dry } else { &mut writer };
+        let mut deps = GenDeps {
+            init_bls: &init_bls,
+            scanner: &scanner,
+            loader: &loader,
+            new_signer: &new_signer,
+            verifier: &verifier,
+            writer: writer_ref,
+            summary_out: &mut summary,
+            progress: Progress::NonTty,
+            logger: &logger,
+            verify_deposit_cli: verify,
+        };
+        run_gen_with_deps(&cfg, &mut deps, &CancelToken::new())
+    }
+
+    #[test]
+    fn verify_cli_not_called_when_flag_false() {
+        let verify = |_: &str, _: &str| -> Result<(), AppError> { panic!("must not be called") };
+        run_with_verify(false, false, &verify).expect("ok");
+    }
+
+    #[test]
+    fn verify_cli_called_when_flag_true() {
+        let called = AtomicBool::new(false);
+        let verify = |_: &str, _: &str| -> Result<(), AppError> {
+            called.store(true, Ordering::SeqCst);
+            Ok(())
+        };
+        run_with_verify(true, false, &verify).expect("ok");
+        assert!(
+            called.load(Ordering::SeqCst),
+            "verify should have been called"
+        );
+    }
+
+    #[test]
+    fn verify_cli_not_found_exit2() {
+        let verify = |_: &str, _: &str| -> Result<(), AppError> {
+            Err(AppError::DepositCliNotFound {
+                cli_path: "deposit".into(),
+                detail: "not found in PATH".into(),
+            })
+        };
+        let err = run_with_verify(true, false, &verify).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+    }
+
+    #[test]
+    fn verify_cli_failed_exit3() {
+        let verify = |_: &str, _: &str| -> Result<(), AppError> {
+            Err(AppError::DepositCliFailed {
+                output: "deposit exited 1".into(),
+            })
+        };
+        let err = run_with_verify(true, false, &verify).unwrap_err();
+        assert_eq!(exit_code_for(&err), 3);
+    }
+
+    #[test]
+    fn verify_cli_skipped_in_dry_run() {
+        let verify =
+            |_: &str, _: &str| -> Result<(), AppError> { panic!("must not run in dry-run") };
+        run_with_verify(true, true, &verify).expect("ok");
+    }
+
+    // --- dry-run stdout + sha (Go: TestRunGenWithDeps_DryRun_StdoutContainsJSON) ---
+
+    #[test]
+    fn dry_run_stdout_json_and_sha_match() {
+        use sha2::{Digest, Sha256};
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let signers = signer_map(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut dry = DryRunWriter::new(SharedWriter(Arc::clone(&buf)));
+        let mut summary = Vec::<u8>::new();
+        let logger = discard_logger();
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let mut cfg = base_cfg(pks);
+        cfg.dry_run = true;
+        {
+            let mut deps = GenDeps {
+                init_bls: &init_bls,
+                scanner: &scanner,
+                loader: &loader,
+                new_signer: &new_signer,
+                verifier: &verifier,
+                writer: &mut dry,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                verify_deposit_cli: &verify,
+            };
+            run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).expect("ok");
+        }
+        let stdout = buf.lock().unwrap().clone();
+        serde_json::from_slice::<serde_json::Value>(&stdout).expect("stdout is JSON");
+        let want_sha = hex::encode(Sha256::digest(&stdout));
+        let s = String::from_utf8(summary).unwrap();
+        assert!(
+            s.contains(&format!("sha256={want_sha}")),
+            "summary sha must match stdout: {s}"
+        );
+        assert!(
+            s.contains("wrote <stdout>"),
+            "dry-run summary uses <stdout>: {s}"
+        );
+    }
+
+    // --- parallel determinism (Go: TestRunGenWithDeps_Parallel) ---
+
+    #[test]
+    fn parallel_determinism_and_order() {
+        let pks = multi_pks(3);
+        let mut results: Vec<Vec<Entry>> = Vec::new();
+        for parallel in [1usize, 2, 3] {
+            let (_dir, idx) = index_over(&pks);
+            let signers = signer_map(&pks);
+            let loader = routing_loader();
+            let verifier = FakeVerifier { ok: true };
+            let captured = Arc::new(Mutex::new(Vec::<Entry>::new()));
+            let mut writer = CapturingWriter {
+                entries: Arc::clone(&captured),
+            };
+            let mut summary = Vec::<u8>::new();
+            let logger = discard_logger();
+            let init_bls = || Ok(());
+            let scanner = move |_: &Path| Ok(idx.clone());
+            let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+                let s = &signers[&secret[0]];
+                Ok(Box::new(FakeSigner {
+                    pubkey: s.pubkey,
+                    sig: s.sig,
+                }))
+            };
+            let verify = |_: &str, _: &str| Ok(());
+            let mut cfg = base_cfg(pks.clone());
+            cfg.parallel = parallel;
+            {
+                let mut deps = GenDeps {
+                    init_bls: &init_bls,
+                    scanner: &scanner,
+                    loader: &loader,
+                    new_signer: &new_signer,
+                    verifier: &verifier,
+                    writer: &mut writer,
+                    summary_out: &mut summary,
+                    progress: Progress::NonTty,
+                    logger: &logger,
+                    verify_deposit_cli: &verify,
+                };
+                run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).expect("ok");
+            }
+            results.push(captured.lock().unwrap().clone());
+        }
+        // All parallelism levels produce identical entry slices.
+        assert_eq!(results[0], results[1]);
+        assert_eq!(results[0], results[2]);
+        // Order matches cfg.pubkeys order.
+        for (j, e) in results[0].iter().enumerate() {
+            assert_eq!(e.pubkey, pks[j], "entry {j} out of order");
+        }
+    }
+
+    // Go: TestRunGenWithDeps_ParallelWorkerError — a failing worker propagates the
+    // first non-cancellation error.
+    #[test]
+    fn parallel_worker_error() {
+        let pks = multi_pks(3);
+        let (_dir, idx) = index_over(&pks);
+        // Fail the load for the file backing pubkey index 1 (path ".../1.json").
+        let loader = FakeLoader {
+            f: Box::new(|path: &Path| {
+                if path.file_name().unwrap().to_string_lossy() == "1.json" {
+                    return Err(KeystoreError::KeystoreMissing {
+                        path: path.display().to_string(),
+                    });
+                }
+                let raw = std::fs::read(path).unwrap();
+                let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+                let pkhex = v["pubkey"].as_str().unwrap().to_string();
+                let first = u8::from_str_radix(&pkhex[..2], 16).unwrap();
+                let mut secret = vec![0u8; 32];
+                secret[0] = first;
+                Ok(Key {
+                    secret,
+                    pubkey_hex: pkhex,
+                })
+            }),
+        };
+        let signers = signer_map(&pks);
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let mut summary = Vec::<u8>::new();
+        let logger = discard_logger();
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let mut cfg = base_cfg(pks);
+        cfg.parallel = 2;
+        let mut deps = GenDeps {
+            init_bls: &init_bls,
+            scanner: &scanner,
+            loader: &loader,
+            new_signer: &new_signer,
+            verifier: &verifier,
+            writer: &mut writer,
+            summary_out: &mut summary,
+            progress: Progress::NonTty,
+            logger: &logger,
+            verify_deposit_cli: &verify,
+        };
+        let err = run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).unwrap_err();
+        // The propagated error is the keystore-missing (exit 2), not a cancellation.
+        assert_eq!(exit_code_for(&err), 2);
+    }
+
+    // --- progress (Go: TestProgress_*) — adapted: the non-TTY path logs via the
+    // Logger; there is no separate progressOut buffer in the Rust design. ---
+
+    /// Runs `n` pubkeys with the given `json_logs`, capturing the logger output.
+    fn run_capture_log(n: usize, json_logs: bool) -> String {
+        let pks = multi_pks(n);
+        let (_dir, idx) = index_over(&pks);
+        let signers = signer_map(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let mut summary = Vec::<u8>::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let format = if json_logs {
+            Format::Json
+        } else {
+            Format::Text
+        };
+        let logger = Logger::new(
+            Level::Info,
+            format,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let mut cfg = base_cfg(pks);
+        cfg.json_logs = json_logs;
+        {
+            let mut deps = GenDeps {
+                init_bls: &init_bls,
+                scanner: &scanner,
+                loader: &loader,
+                new_signer: &new_signer,
+                verifier: &verifier,
+                writer: &mut writer,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                verify_deposit_cli: &verify,
+            };
+            run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).expect("ok");
+        }
+        let out = String::from_utf8(logbuf.lock().unwrap().clone()).unwrap();
+        // The non-TTY path must never emit a carriage return.
+        assert!(
+            !out.contains('\r'),
+            "non-TTY progress must not use \\r: {out:?}"
+        );
+        out
+    }
+
+    #[test]
+    fn progress_non_tty_emits_log_events() {
+        // Go: TestProgress_NonTTY_NoCarriageReturn — n>5 → milestone log events.
+        let out = run_capture_log(10, false);
+        assert!(
+            out.contains("signing progress"),
+            "expected progress events: {out}"
+        );
+    }
+
+    #[test]
+    fn progress_suppressed_when_five_or_fewer() {
+        // Go: TestProgress_Suppressed_WhenFiveOrFewer.
+        let out = run_capture_log(5, false);
+        assert!(
+            !out.contains("signing progress"),
+            "n<=5 must suppress progress: {out}"
+        );
+    }
+
+    #[test]
+    fn progress_json_logs_emit_events() {
+        // Go: TestProgress_JSONLogs_EmitsSlogNotCarriageReturn.
+        let out = run_capture_log(6, true);
+        assert!(
+            out.contains("signing progress"),
+            "JSON logs should emit progress: {out}"
+        );
+    }
+
+    // Go: TestRunGenWithDeps_NoSecretInLogs — the secret bytes never appear in
+    // verbose logs.
+    #[test]
+    fn no_secret_in_logs() {
+        let sentinel = vec![0x5Au8; 32];
+        let want_hex = hex::encode(&sentinel);
+        let mut pk = [0u8; 48];
+        pk[0] = 0xAB;
+        let (_dir, idx) = index_over(&[pk]);
+        let secret_clone = sentinel.clone();
+        let loader = FakeLoader {
+            f: Box::new(move |_| {
+                Ok(Key {
+                    secret: secret_clone.clone(),
+                    pubkey_hex: hex::encode(pk),
+                })
+            }),
+        };
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out/deposit_data-1.json".into(),
+            sha: "cafebabe".into(),
+            err: false,
+        };
+        let mut summary = Vec::<u8>::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(
+            Level::Debug,
+            Format::Text,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let new_signer = move |_: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            Ok(Box::new(FakeSigner {
+                pubkey: pk,
+                sig: [0u8; 96],
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let mut cfg = base_cfg(vec![pk]);
+        cfg.verbose = true;
+        {
+            let mut deps = GenDeps {
+                init_bls: &init_bls,
+                scanner: &scanner,
+                loader: &loader,
+                new_signer: &new_signer,
+                verifier: &verifier,
+                writer: &mut writer,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                verify_deposit_cli: &verify,
+            };
+            run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).expect("ok");
+        }
+        let logs = logbuf.lock().unwrap().clone();
+        assert!(
+            !logs.windows(sentinel.len()).any(|w| w == &sentinel[..]),
+            "raw secret leaked"
+        );
+        assert!(
+            !String::from_utf8_lossy(&logs).contains(&want_hex),
+            "hex secret leaked"
+        );
+        assert!(!logs.is_empty(), "verbose mode should emit logs");
+    }
+
+    // Go: TestPrintGenSummary_Format / _DryRunEmptyPath.
+    #[test]
+    fn print_gen_summary_format() {
+        let mut buf = Vec::<u8>::new();
+        print_gen_summary(
+            &mut buf,
+            "/output/deposit_data-1700000000.json",
+            "abc123def456",
+            3,
+            Network::Hoodi,
+        );
+        let got = String::from_utf8(buf).unwrap();
+        assert_eq!(got, "wrote /output/deposit_data-1700000000.json (sha256=abc123def456, n=3, network=hoodi)\n");
+
+        let mut dry = Vec::<u8>::new();
+        print_gen_summary(&mut dry, "", "deadbeef", 1, Network::Hoodi);
+        assert!(String::from_utf8(dry).unwrap().contains("wrote <stdout>"));
+    }
+
+    // Go: TestCLIVersion / TestDefaultWithdrawalCreds.
+    #[test]
+    fn constants() {
+        assert_eq!(CLI_VERSION, "2.7.0");
+        let wc = default_withdrawal_creds();
+        assert_eq!(wc[0], 0x00);
+        assert!(wc[1..].iter().all(|&b| b == 0));
+    }
+
+    // Go: TestBuildGenLogger_* — build_gen_logger selects level/format. Since it
+    // targets stderr, we verify the observable level/format behaviour on an
+    // equivalently constructed Logger (build_gen_logger's own flag→level/format
+    // mapping is a thin wrapper, also exercised by the real pipeline).
+    fn log_to_string(level: Level, format: Format, f: impl FnOnce(&Logger)) -> String {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(level, format, Box::new(SharedWriter(Arc::clone(&buf))));
+        f(&logger);
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn build_gen_logger_behaviour() {
+        // Default: text, info level (debug suppressed).
+        let out = log_to_string(Level::Info, Format::Text, |lg| {
+            lg.debug("this-should-not-appear", &[]);
+            lg.info("this-should-appear", &[]);
+        });
+        assert!(!out.contains("this-should-not-appear"));
+        assert!(out.contains("this-should-appear"));
+        assert!(!out.contains("\"msg\""), "text handler must not emit JSON");
+
+        // Verbose enables debug.
+        let out = log_to_string(Level::Debug, Format::Text, |lg| {
+            lg.debug("debug-sentinel", &[])
+        });
+        assert!(out.contains("debug-sentinel"));
+
+        // JSON format emits a "msg" field.
+        let out = log_to_string(Level::Info, Format::Json, |lg| {
+            lg.info("json-sentinel", &[])
+        });
+        assert!(out.contains("\"msg\""));
+        assert!(out.contains("json-sentinel"));
+
+        // A smoke check that build_gen_logger constructs without panicking.
+        let _ = build_gen_logger(true, true);
+    }
+}

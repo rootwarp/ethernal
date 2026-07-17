@@ -314,3 +314,59 @@ pub(crate) fn write_file_mode(path: &str, data: &[u8], mode: u32) -> std::io::Re
         .open(path)?;
     f.write_all(data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::exit_code_for;
+    use eth_deposit_core::network::{self, Network};
+
+    /// A `Config` with the given RPC/from/gas/nonce and holesky defaults for the
+    /// rest, for driving [`require_from_for_rpc`] directly.
+    fn cfg(rpc_url: &str, from: [u8; 20], gas_limit: u64, nonce: Option<u64>) -> Config {
+        Config {
+            network: Network::Holesky,
+            network_params: network::lookup(Network::Holesky),
+            input_file: String::new(),
+            output_file: String::new(),
+            index: 0,
+            rpc_url: rpc_url.to_string(),
+            from,
+            gas_limit,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            nonce,
+        }
+    }
+
+    // Go: TestRequireFromForRPC (table).
+    #[test]
+    fn require_from_for_rpc_gate() {
+        let nonzero = {
+            let mut f = [0u8; 20];
+            f[0] = 0x01;
+            f
+        };
+
+        // offline: no --rpc-url → never required.
+        assert!(require_from_for_rpc(&cfg("", [0u8; 20], 0, None)).is_ok());
+
+        // rpc + nonce omitted + from zero → required.
+        let err = require_from_for_rpc(&cfg("http://node", [0u8; 20], 250_000, None)).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("--from"));
+
+        // rpc + gas omitted + nonce set + from zero → required.
+        let err = require_from_for_rpc(&cfg("http://node", [0u8; 20], 0, Some(5))).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+
+        // rpc + nonce set + gas set + from zero → not required.
+        assert!(require_from_for_rpc(&cfg("http://node", [0u8; 20], 250_000, Some(5))).is_ok());
+
+        // rpc + from set + nonce omitted → not required.
+        assert!(require_from_for_rpc(&cfg("http://node", nonzero, 250_000, None)).is_ok());
+
+        // rpc + from set + gas omitted + nonce set → not required.
+        assert!(require_from_for_rpc(&cfg("http://node", nonzero, 0, Some(5))).is_ok());
+    }
+}

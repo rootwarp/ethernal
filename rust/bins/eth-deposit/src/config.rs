@@ -187,3 +187,188 @@ fn parse_wei(flag: &str, s: &str) -> Result<u128, AppError> {
         ))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::exit_code_for;
+    use eth_deposit_core::network::Network;
+
+    // Go: config_test.go / from_test.go. These exercise the FLAG path only. The
+    // env-var fallback cases (EnvVarOverride/FlagBeatsEnvVar/GasLimitEnvVar/
+    // FromEnvVar) are binary-driven in tests/build.rs and tests/build_rpc.rs:
+    // clap reads process-global env at parse time, which cannot be steered from a
+    // parallel white-box test without a data race.
+
+    /// Parses `build`-subcommand args (argv[0] is the program name) into
+    /// `ArgMatches`, then `Config`.
+    fn build_config(args: &[&str]) -> Result<Config, AppError> {
+        let mut argv = vec!["build"];
+        argv.extend_from_slice(args);
+        let m = crate::build_cmd::command()
+            .try_get_matches_from(argv)
+            .expect("clap parse");
+        load_build_config(&m)
+    }
+
+    fn from_flag(args: &[&str]) -> Result<[u8; 20], AppError> {
+        let mut argv = vec!["build"];
+        argv.extend_from_slice(args);
+        let m = crate::build_cmd::command()
+            .try_get_matches_from(argv)
+            .expect("clap parse");
+        parse_from_flag(&m)
+    }
+
+    // Go: TestLoadBuildConfig_Defaults
+    #[test]
+    fn load_build_config_defaults() {
+        let cfg = build_config(&["--network", "holesky", "--input-file", "deposit.json"]).unwrap();
+        assert_eq!(cfg.network, Network::Holesky);
+        assert_eq!(cfg.network_params.chain_id, 17000);
+        assert_eq!(cfg.gas_limit, 0); // default applied later, not at config load
+        assert_eq!(cfg.max_fee_per_gas, None);
+        assert_eq!(cfg.max_priority_fee_per_gas, None);
+        assert_eq!(cfg.nonce, None);
+        assert_eq!(cfg.index, 0);
+        assert_eq!(cfg.input_file, "deposit.json");
+        assert_eq!(cfg.output_file, "");
+    }
+
+    // Go: TestLoadBuildConfig_AllFlagsSet
+    #[test]
+    fn load_build_config_all_flags_set() {
+        let cfg = build_config(&[
+            "--network",
+            "sepolia",
+            "--input-file",
+            "batch.json",
+            "--output",
+            "unsigned.hex",
+            "--index",
+            "3",
+            "--rpc-url",
+            "https://rpc.sepolia.example.com",
+            "--gas-limit",
+            "300000",
+            "--max-fee-per-gas",
+            "20000000000",
+            "--max-priority-fee-per-gas",
+            "1000000000",
+            "--nonce",
+            "42",
+        ])
+        .unwrap();
+        assert_eq!(cfg.network, Network::Sepolia);
+        assert_eq!(cfg.input_file, "batch.json");
+        assert_eq!(cfg.output_file, "unsigned.hex");
+        assert_eq!(cfg.index, 3);
+        assert_eq!(cfg.rpc_url, "https://rpc.sepolia.example.com");
+        assert_eq!(cfg.gas_limit, 300_000);
+        assert_eq!(cfg.max_fee_per_gas, Some(20_000_000_000));
+        assert_eq!(cfg.max_priority_fee_per_gas, Some(1_000_000_000));
+        assert_eq!(cfg.nonce, Some(42));
+    }
+
+    // Go: TestLoadBuildConfig_UnknownNetwork
+    #[test]
+    fn load_build_config_unknown_network() {
+        assert!(
+            build_config(&["--network", "unknownnet", "--input-file", "deposit.json"]).is_err()
+        );
+    }
+
+    // Go: TestLoadBuildConfig_InvalidMaxFeePerGas / InvalidMaxPriorityFeePerGas /
+    // InvalidNonce / GasLimitZero / NegativeMaxFeePerGas / NegativeMaxPriorityFeePerGas.
+    //
+    // Divergence: the negative cases use the `--flag=-100` form. With the
+    // space-separated form (`--flag -100`), clap treats `-100` as an unknown
+    // option and rejects it at parse time (also exit 2, a different message)
+    // before `parse_wei`'s "must be non-negative" branch runs; the `=` form
+    // delivers the negative string to the validator under test.
+    #[test]
+    fn load_build_config_invalid_numeric_values() {
+        let base = ["--network", "holesky", "--input-file", "deposit.json"];
+        let cases: &[&[&str]] = &[
+            &["--max-fee-per-gas", "not-a-number"],
+            &["--max-priority-fee-per-gas", "abc"],
+            &["--nonce", "not-a-number"],
+            &["--gas-limit", "0"],
+            &["--max-fee-per-gas=-100"],
+            &["--max-priority-fee-per-gas=-1"],
+        ];
+        for extra in cases {
+            let mut args: Vec<&str> = base.to_vec();
+            args.extend_from_slice(extra);
+            let err = build_config(&args).unwrap_err();
+            assert_eq!(exit_code_for(&err), 2, "case {extra:?}");
+        }
+    }
+
+    // Go: TestLoadBuildConfig_FromValid / FromNoPrefix / FromMixedCase.
+    #[test]
+    fn from_valid_variants() {
+        let base = ["--network", "holesky", "--input-file", "deposit.json"];
+        let cases = [
+            (
+                "0x1234567890123456789012345678901234567890",
+                "1234567890123456789012345678901234567890",
+            ),
+            (
+                "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+                "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+            ),
+            (
+                "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01",
+                "abcdef0123456789abcdef0123456789abcdef01",
+            ),
+        ];
+        for (arg, want_hex) in cases {
+            let mut args: Vec<&str> = base.to_vec();
+            args.extend_from_slice(&["--from", arg]);
+            let from = from_flag(&args).unwrap();
+            let want = hex::decode(want_hex).unwrap();
+            assert_eq!(&from[..], &want[..], "from {arg}");
+        }
+    }
+
+    // Go: TestLoadBuildConfig_FromUnset
+    #[test]
+    fn from_unset_is_zero() {
+        let from = from_flag(&["--network", "holesky", "--input-file", "deposit.json"]).unwrap();
+        assert_eq!(from, [0u8; 20]);
+    }
+
+    // Go: TestLoadBuildConfig_FromBadHex / FromWrongLength → exit 2.
+    #[test]
+    fn from_invalid_is_exit2() {
+        let base = ["--network", "holesky", "--input-file", "deposit.json"];
+        for bad in [
+            "0xZZ34567890123456789012345678901234567890", // non-hex
+            "0x1234",                                     // 2 bytes
+            "0x12345678901234567890123456789012345678901234", // 22 bytes
+        ] {
+            let mut args: Vec<&str> = base.to_vec();
+            args.extend_from_slice(&["--from", bad]);
+            let err = from_flag(&args).unwrap_err();
+            assert_eq!(exit_code_for(&err), 2, "from {bad}");
+        }
+    }
+
+    // Go: TestRun_FromUndeclaredIsHarmless — the shared parser leaves From zero
+    // for `run`, which declares no --from (reading it would otherwise panic).
+    #[test]
+    fn run_from_undeclared_is_harmless() {
+        let m = crate::run_cmd::command()
+            .try_get_matches_from([
+                "run",
+                "--network",
+                "holesky",
+                "--input-file",
+                "deposit.json",
+            ])
+            .expect("clap parse");
+        let cfg = load_build_config(&m).expect("load ok");
+        assert_eq!(cfg.from, [0u8; 20]);
+    }
+}
