@@ -61,7 +61,7 @@ extern "C" fn on_sigint(_sig: libc::c_int) {
 fn install_sigint_handler() {
     // SAFETY: installing a handler that only performs an atomic store.
     unsafe {
-        libc::signal(libc::SIGINT, on_sigint as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t);
     }
 }
 
