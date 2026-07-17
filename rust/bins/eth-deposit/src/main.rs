@@ -13,10 +13,15 @@
 //!   5 — broadcast / RPC error (dial failure, gas/nonce estimation failure,
 //!       eth_sendRawTransaction error, broadcast-side chain-ID mismatch)
 
+mod build_cmd;
+mod config;
 mod errors;
 mod gen_cli;
 mod gen_cmd;
 mod logging;
+mod run_cmd;
+mod send_cmd;
+mod sign_cmd;
 
 use std::sync::OnceLock;
 
@@ -79,6 +84,10 @@ fn root_command() -> Command {
              Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=user abort, 5=broadcast/RPC error.",
         )
         .subcommand(gen_cli::command())
+        .subcommand(build_cmd::command())
+        .subcommand(sign_cmd::command())
+        .subcommand(run_cmd::command())
+        .subcommand(send_cmd::command())
 }
 
 fn main() {
@@ -96,6 +105,10 @@ fn main() {
             let mut stderr = std::io::stderr();
             gen_cli::load_config(sub, &mut stderr).and_then(|cfg| gen_cmd::run_gen(&cfg, cancel))
         }
+        Some(("build", sub)) => build_cmd::run(sub, cancel),
+        Some(("sign", sub)) => sign_cmd::run(sub, cancel),
+        Some(("run", sub)) => run_cmd::run(sub, cancel),
+        Some(("send", sub)) => send_cmd::run(sub, cancel),
         _ => {
             // No subcommand: print help and exit 0 (urfave/cli behavior).
             let _ = root_command().print_help();

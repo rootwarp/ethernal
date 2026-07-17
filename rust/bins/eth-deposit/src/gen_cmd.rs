@@ -51,8 +51,8 @@ pub struct GenDeps<'a> {
     /// Loads and decrypts a keystore.
     pub loader: &'a (dyn KeyLoader + Sync),
     /// Constructs a BLS signer from a 32-byte secret.
-    pub new_signer:
-        &'a (dyn Fn(&[u8]) -> Result<Box<dyn bls::Signer + Send>, BlsError> + Sync),
+    #[allow(clippy::type_complexity)]
+    pub new_signer: &'a (dyn Fn(&[u8]) -> Result<Box<dyn bls::Signer + Send>, BlsError> + Sync),
     /// Self-verification for the deposit generator.
     pub verifier: &'a dyn Verifier,
     /// Persists the deposit data JSON.
@@ -148,6 +148,7 @@ pub fn run_gen_with_deps(
         for _ in 0..parallel {
             let res_tx = res_tx.clone();
             let worker_cancel = worker_cancel.clone();
+            #[allow(clippy::borrow_deref_ref)]
             let cfg = &*cfg;
             let index = &index;
             let deps_loader = deps.loader;
@@ -164,9 +165,8 @@ pub fn run_gen_with_deps(
                     break;
                 }
                 if worker_cancel.is_cancelled() {
-                    let _ = res_tx.send((i, Err(AppError::Deposit(
-                        deposit::DepositError::Cancelled,
-                    ))));
+                    let _ =
+                        res_tx.send((i, Err(AppError::Deposit(deposit::DepositError::Cancelled))));
                     continue;
                 }
                 let result = process_pubkey(
@@ -264,7 +264,7 @@ pub fn run_gen_with_deps(
 }
 
 /// One worker unit: keystore lookup → load → BLS signer → generate + verify.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn process_pubkey(
     cfg: &GenConfig,
     index: &DirectoryIndex,
@@ -358,7 +358,10 @@ fn emit_progress(progress: Progress, logger: &Logger, json_logs: bool, done: usi
 /// When path is empty (dry-run), the placeholder "<stdout>" is used.
 fn print_gen_summary(w: &mut dyn Write, path: &str, sha256hex: &str, n: usize, net: Network) {
     let display = if path.is_empty() { "<stdout>" } else { path };
-    let _ = writeln!(w, "wrote {display} (sha256={sha256hex}, n={n}, network={net})");
+    let _ = writeln!(
+        w,
+        "wrote {display} (sha256={sha256hex}, n={n}, network={net})"
+    );
 }
 
 /// The production implementation of the verify_deposit_cli dep (port of
@@ -414,7 +417,11 @@ fn look_path(name: &str) -> Result<(), String> {
 /// buildGenLogger); output goes to stderr.
 pub fn build_gen_logger(verbose: bool, json_logs: bool) -> Logger {
     let level = if verbose { Level::Debug } else { Level::Info };
-    let format = if json_logs { Format::Json } else { Format::Text };
+    let format = if json_logs {
+        Format::Json
+    } else {
+        Format::Text
+    };
     Logger::stderr(level, format)
 }
 
@@ -431,9 +438,8 @@ pub fn run_gen(cfg: &GenConfig, cancel: &CancelToken) -> Result<(), AppError> {
     let loader = Loader::new();
     let init_bls = || bls::init().map_err(|e| e.to_string());
     let scanner = |dir: &Path| scan_dir(dir);
-    let new_signer = |secret: &[u8]| {
-        bls::new_signer(secret).map(|s| Box::new(s) as Box<dyn bls::Signer + Send>)
-    };
+    let new_signer =
+        |secret: &[u8]| bls::new_signer(secret).map(|s| Box::new(s) as Box<dyn bls::Signer + Send>);
     let verifier = bls::default_verifier();
     let progress = if stderr_is_tty() {
         Progress::Tty

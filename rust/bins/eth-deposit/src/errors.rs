@@ -18,6 +18,7 @@ use eth_deposit_core::deposit::DepositError;
 use eth_deposit_core::network::NetworkError;
 use eth_deposit_core::output::OutputError;
 use eth_deposit_keystore::KeystoreError;
+use eth_deposit_signer::SignerError;
 use eth_deposit_tx::TxError;
 
 /// The bin-level error type. Every command action returns this; `main` maps
@@ -26,12 +27,18 @@ use eth_deposit_tx::TxError;
 pub enum AppError {
     /// A usage/validation error with an explicit exit code — the port of
     /// `ucli.Exit(msg, code)`.
-    Exit { msg: String, code: i32 },
+    Exit {
+        msg: String,
+        code: i32,
+    },
 
     /// A low-level error wrapped as a user/config error — the port of
     /// `WrapInputErr(what, err)`; renders "{what}: invalid input: {source}"
     /// and maps to exit code 2.
-    Input { what: String, source: Box<AppError> },
+    Input {
+        what: String,
+        source: Box<AppError>,
+    },
 
     /// SIGINT / cancellation — the port of `context.Canceled` +
     /// `ErrUserAborted`. Exit code 4.
@@ -43,6 +50,11 @@ pub enum AppError {
     Output(OutputError),
     Tx(TxError),
 
+    /// A signer/crypto error from the `signer` crate (build/sign/run paths).
+    /// Classification looks *through* the wrapped Context chain via
+    /// [`SignerError::sentinel`]; see [`exit_code_for`].
+    Signer(SignerError),
+
     /// A BLS operation failed outside the deposit pipeline (e.g. signer
     /// construction from a decrypted secret). Go leaves these unclassified —
     /// fallback exit code 1.
@@ -51,7 +63,10 @@ pub enum AppError {
     /// gen: no keystore matched a requested pubkey. Wraps
     /// `KeystoreError::KeystoreNotFound` with pubkey + dir context, mirroring
     /// gen.go's message. Exit code 2.
-    KeystoreNotFoundFor { pubkey_hex: String, dir: String },
+    KeystoreNotFoundFor {
+        pubkey_hex: String,
+        dir: String,
+    },
 
     /// gen: BLS library initialisation failed (vestigial with blst, kept for
     /// parity). Exit code 3.
@@ -62,14 +77,22 @@ pub enum AppError {
     MainnetAckRequired,
 
     /// gen: --verify-with-deposit-cli binary not found in PATH. Exit code 2.
-    DepositCliNotFound { cli_path: String, detail: String },
+    DepositCliNotFound {
+        cli_path: String,
+        detail: String,
+    },
 
     /// gen: the external staking-deposit-cli exited non-zero. Exit code 3.
-    DepositCliFailed { output: String },
+    DepositCliFailed {
+        output: String,
+    },
 
     /// A context-message wrapper that preserves the source's classification
     /// (the port of `fmt.Errorf("...: %w", err)`).
-    Context { msg: String, source: Box<AppError> },
+    Context {
+        msg: String,
+        source: Box<AppError>,
+    },
 
     /// Fallback internal error. Exit code 1.
     Internal(String),
@@ -89,6 +112,7 @@ impl fmt::Display for AppError {
             AppError::Network(e) => e.fmt(f),
             AppError::Output(e) => e.fmt(f),
             AppError::Tx(e) => e.fmt(f),
+            AppError::Signer(e) => e.fmt(f),
             AppError::Bls(e) => e.fmt(f),
             AppError::KeystoreNotFoundFor { pubkey_hex, dir } => write!(
                 f,
@@ -134,6 +158,11 @@ impl From<OutputError> for AppError {
 impl From<TxError> for AppError {
     fn from(e: TxError) -> Self {
         AppError::Tx(e)
+    }
+}
+impl From<SignerError> for AppError {
+    fn from(e: SignerError) -> Self {
+        AppError::Signer(e)
     }
 }
 
@@ -209,6 +238,26 @@ pub fn exit_code_for(err: &AppError) -> i32 {
         AppError::Deposit(DepositError::SelfVerifyFailed { .. }) => 3,
         AppError::BlsInit(_) => 3,
         AppError::DepositCliFailed { .. } => 3,
+
+        // Signer/crypto errors (build/sign/run). The order mirrors Go's
+        // exit.go: user-rejected (a device decision) and cancellation classify
+        // as user abort (4); every other signer sentinel is a crypto/signer
+        // failure (3). Walk the Context chain via `.sentinel()` — the analogue
+        // of Go's `errors.Is`. Cancelled is handled here rather than the exit-4
+        // block above because a signer error never also wraps an RPC-estimation
+        // tag, so there is no cancel-before-RPC ordering hazard.
+        AppError::Signer(e) => match e.sentinel() {
+            SignerError::UserRejected | SignerError::Cancelled => 4,
+            SignerError::SignerClosed
+            | SignerError::NoDevice
+            | SignerError::AppNotOpen
+            | SignerError::InvalidKey
+            | SignerError::InvalidChainId
+            | SignerError::ChainIdMismatch
+            | SignerError::LedgerNotSupported => 3,
+            // A plain `Msg` (Go `fmt.Errorf` without a sentinel) falls back to 1.
+            _ => 1,
+        },
 
         // Exit code 5: broadcast / RPC errors (tx).
         AppError::Tx(

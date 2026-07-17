@@ -48,6 +48,7 @@ impl Logger {
     }
 
     /// A logger that swallows everything (Go: slog with io.Discard).
+    #[allow(dead_code)]
     pub fn discard() -> Self {
         Logger::new(Level::Error, Format::Text, Box::new(std::io::sink()))
     }
@@ -158,10 +159,7 @@ fn render_text(level: Level, msg: &str, kv: &[(&str, String)]) -> String {
 
 fn render_json(level: Level, msg: &str, kv: &[(&str, String)]) -> String {
     let mut obj = serde_json::Map::new();
-    obj.insert(
-        "time".to_string(),
-        serde_json::Value::String(timestamp()),
-    );
+    obj.insert("time".to_string(), serde_json::Value::String(timestamp()));
     obj.insert(
         "level".to_string(),
         serde_json::Value::String(level.as_str().to_string()),
