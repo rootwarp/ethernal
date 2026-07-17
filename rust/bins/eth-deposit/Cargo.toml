@@ -1,0 +1,28 @@
+[package]
+name = "eth-deposit"
+version.workspace = true
+edition.workspace = true
+description = "Generate, build, sign, and broadcast Ethereum Beacon Chain deposit transactions"
+
+[[bin]]
+name = "eth-deposit"
+path = "src/main.rs"
+
+[features]
+# Forwarded to the signer crate: real Ledger HID transport.
+ledger = ["eth-deposit-signer/ledger"]
+
+[dependencies]
+eth-deposit-core = { workspace = true }
+eth-deposit-keystore = { workspace = true }
+eth-deposit-tx = { workspace = true }
+eth-deposit-signer = { workspace = true }
+clap = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
