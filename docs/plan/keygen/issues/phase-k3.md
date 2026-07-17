@@ -37,15 +37,15 @@ non-TTY guard — without runtime derivation yet. Satisfies U-3 (nested namespac
   `--output-dir` → exit 2.
 
 **Acceptance criteria**
-- [ ] `eth-deposit key new` and `eth-deposit key recover` parse under a `subcommand_required` `key` namespace;
+- [x] `eth-deposit key new` and `eth-deposit key recover` parse under a `subcommand_required` `key` namespace;
   the five existing verbs remain flat — U-3.
-- [ ] `--count` defaults to 1; `--output-dir` is validated writable (mirroring `gen`); `--start-index` exists on
+- [x] `--count` defaults to 1; `--output-dir` is validated writable (mirroring `gen`); `--start-index` exists on
   `recover` — F-8, F-11.
-- [ ] the three mnemonic-passphrase forms parse: raw `--mnemonic-passphrase VALUE`, `--mnemonic-passphrase-env
+- [x] the three mnemonic-passphrase forms parse: raw `--mnemonic-passphrase VALUE`, `--mnemonic-passphrase-env
   VAR`, and bare `--mnemonic-passphrase` (prompt); absent → empty default; precedence flag > env > prompt >
   empty — F-12 (architecture §Design note (c)).
-- [ ] `key new` exits 2 **before** generating when stdin or stdout is not a TTY — F-5, S-2.
-- [ ] a bad `--count` or unwritable `--output-dir` → exit 2 with a specific message — F-16, F-9.
+- [x] `key new` exits 2 **before** generating when stdin or stdout is not a TTY — F-5, S-2.
+- [x] a bad `--count` or unwritable `--output-dir` → exit 2 with a specific message — F-16, F-9.
 
 **Test plan**
 - clap parse tests: flag presence/defaults; the three mnemonic-passphrase forms resolve to the right variant;

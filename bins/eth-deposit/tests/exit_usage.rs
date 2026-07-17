@@ -57,3 +57,103 @@ fn build_bad_index_value() {
         "build bad --index value",
     );
 }
+
+#[test]
+fn key_missing_subcommand() {
+    assert_exit2(&["key"], "key missing subcommand");
+}
+
+#[test]
+fn key_new_missing_output_dir() {
+    assert_exit2(&["key", "new"], "key new missing --output-dir");
+}
+
+#[test]
+fn key_recover_missing_output_dir() {
+    assert_exit2(&["key", "recover"], "key recover missing --output-dir");
+}
+
+/// F-5: `key new` must exit 2 before generating when stdin/stdout are not TTYs.
+/// Integration tests drive the binary with piped stdio, so isatty fails.
+#[test]
+fn key_new_non_tty_exits_two() {
+    let dir = common::TempDir::new("key-new-nontty");
+    let out = eth_deposit()
+        .args(["key", "new", "--output-dir"])
+        .arg(dir.path())
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "key new non-TTY: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("interactive terminal") || stderr.contains("TTY") || stderr.contains("tty"),
+        "expected TTY guard message, got: {stderr}"
+    );
+    // No keystore or other output files written.
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read out dir")
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "non-TTY key new must write nothing; found {entries:?}"
+    );
+}
+
+#[test]
+fn key_new_bad_count_exits_two() {
+    // Bad --count is validated after the TTY guard; on non-TTY the guard wins
+    // first (still exit 2). Exercise clap-level rejection of a non-u32 count.
+    assert_exit2(
+        &["key", "new", "--output-dir", "/tmp", "--count", "abc"],
+        "key new bad --count value",
+    );
+}
+
+#[test]
+fn key_recover_nonexistent_output_dir_exits_two() {
+    let dir = common::TempDir::new("key-recover-missing-out");
+    let missing = dir.path().join("does-not-exist");
+    let out = eth_deposit()
+        .args(["key", "recover", "--output-dir"])
+        .arg(&missing)
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "key recover bad output-dir: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `key recover` is exempt from the TTY guard — with a valid output-dir it
+/// validates and returns success (runtime pipeline is K3-3, so no keystores yet).
+#[test]
+fn key_recover_validates_without_tty() {
+    let dir = common::TempDir::new("key-recover-ok");
+    let out = eth_deposit()
+        .args(["key", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args(["--count", "2", "--start-index", "1"])
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "key recover should validate on non-TTY; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("eth-deposit key recover:"),
+        "banner missing: {stderr}"
+    );
+    assert!(stderr.contains("start_index=1"), "banner: {stderr}");
+    assert!(stderr.contains("count=2"), "banner: {stderr}");
+}

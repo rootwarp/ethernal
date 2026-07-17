@@ -1,5 +1,5 @@
 //! Entry point for eth-deposit, ported from `cmd/eth-deposit/main.go`.
-//! Wires the gen, build, sign, run, and send subcommands.
+//! Wires the gen, build, sign, run, send, and key subcommands.
 //!
 //! Exit codes:
 //!
@@ -18,6 +18,7 @@ mod config;
 mod errors;
 mod gen_cli;
 mod gen_cmd;
+mod key_cli;
 mod logging;
 mod run_cmd;
 mod send_cmd;
@@ -74,7 +75,8 @@ fn root_command() -> Command {
         .long_about(
             "eth-deposit takes BLS validator keystores all the way through to a broadcast\n\
              Ethereum deposit transaction for the Beacon Chain deposit contract.\n\n\
-             It supports a secure, five-step workflow:\n\
+             It supports a secure workflow:\n\
+             \x20 key    - Generate or recover EIP-2335 BLS validator keystores from a BIP-39 mnemonic\n\
              \x20 gen    - Generate Launchpad-compatible deposit_data JSON from BLS validator keystores\n\
              \x20 build  - Construct an unsigned transaction (supports offline/air-gapped mode)\n\
              \x20 sign   - Sign the transaction, with Ledger hardware as the primary method\n\
@@ -83,6 +85,7 @@ fn root_command() -> Command {
              The tool produces standard hex-encoded RLP output ready for eth_sendRawTransaction.\n\n\
              Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=user abort, 5=broadcast/RPC error.",
         )
+        .subcommand(key_cli::command())
         .subcommand(gen_cli::command())
         .subcommand(build_cmd::command())
         .subcommand(sign_cmd::command())
@@ -101,6 +104,12 @@ fn main() {
     };
 
     let result: Result<(), AppError> = match matches.subcommand() {
+        Some(("key", sub)) => match sub.subcommand() {
+            Some(("new", m)) => key_cli::run_new(m),
+            Some(("recover", m)) => key_cli::run_recover(m),
+            // subcommand_required(true) on the key group; clap rejects bare `key`.
+            _ => unreachable!("key requires a subcommand"),
+        },
         Some(("gen", sub)) => {
             let mut stderr = std::io::stderr();
             gen_cli::load_config(sub, &mut stderr).and_then(|cfg| gen_cmd::run_gen(&cfg, cancel))
