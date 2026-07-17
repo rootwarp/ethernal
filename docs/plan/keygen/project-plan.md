@@ -108,4 +108,7 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 
 | Issue | Status | Commit | Gate result |
 |---|---|---|---|
-| — | not started | — | — |
+| K1-1 | done | `9ef24e5` `feat(core): add BIP-39, EIP-2333 HD, and OS entropy primitives` | Trezor english vectors (entropy→mnemonic→seed, incl. `abandon×23 art` + `TREZOR`) green |
+| K1-2 | done | same commit | four EIP-2333 vectors green; path + pubkey tests green |
+| K1-3 | done | same commit | `getrandom` only new dep; `OsEntropy` only production Entropy |
+| M-K1 | **passed** | `9ef24e5` | wordlist pin `2f5eed53…` / 13116 bytes asserted; all K1 acceptance criteria checked |

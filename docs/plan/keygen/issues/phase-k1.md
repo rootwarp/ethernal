@@ -44,19 +44,19 @@ passphrase into the seed), C-1/G4 (vector conformance), D-1 (no new crypto dep).
 - Copy the full Trezor `english` vector array (~24 entries) to `crates/core/testdata/bip39-vectors.json`.
 
 **Acceptance criteria**
-- [ ] `entropy_to_mnemonic` reproduces every Trezor `english` vector, incl. `abandon×11 about` (12w,
+- [x] `entropy_to_mnemonic` reproduces every Trezor `english` vector, incl. `abandon×11 about` (12w,
   entropy `00…00`) and the 24-word `abandon×23 art` — F-1, C-1, G4
   (research/bip39.md §"Official Trezor test vectors").
-- [ ] `validate_mnemonic` accepts 12/15/18/21/24-word mnemonics after NFKD+lowercase+ws-collapse, and
+- [x] `validate_mnemonic` accepts 12/15/18/21/24-word mnemonics after NFKD+lowercase+ws-collapse, and
   returns `UnknownWord` / `WordCount` / `Checksum` respectively for a bad word, a bad count, and a
   tampered checksum — F-11, F-16, C-1.
-- [ ] `to_seed` reproduces the 64-byte seed for every Trezor vector (all use passphrase `"TREZOR"`),
+- [x] `to_seed` reproduces the 64-byte seed for every Trezor vector (all use passphrase `"TREZOR"`),
   incl. the chain anchor `abandon×11 about` + `"TREZOR"` → `c55257c3…463b04` — F-2, F-12, C-1, G4.
-- [ ] wordlist pin test: `sha256(WORDLIST.as_bytes())` == `2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda`
+- [x] wordlist pin test: `sha256(WORDLIST.as_bytes())` == `2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda`
   and `WORDLIST.len() == 13116` — D-1, C-1 (research/bip39.md §"Wordlist source + pin"; hash is
   trailing-newline-sensitive).
-- [ ] entropy buffer, mnemonic `String`, and 64-byte seed are `Zeroizing` — S-1.
-- [ ] `cargo tree -p eth-deposit-core` shows no new dependency (pbkdf2/hmac/unicode-normalization
+- [x] entropy buffer, mnemonic `String`, and 64-byte seed are `Zeroizing` — S-1.
+- [x] `cargo tree -p eth-deposit-core` shows no new dependency (pbkdf2/hmac/unicode-normalization
   already present) — D-1.
 
 **Test plan**
@@ -98,17 +98,17 @@ tree. Satisfies F-2 (derive signing keys + pubkeys per index) and C-1/G4 (EIP-23
   v1 credentials (0x00 deferred, F-14) — say so in a code comment so it doesn't read as dead code.
 
 **Acceptance criteria**
-- [ ] `derive_master` + `derive_child` reproduce all four official EIP-2333 vectors (compare
+- [x] `derive_master` + `derive_child` reproduce all four official EIP-2333 vectors (compare
   `to_bytes()` hex), incl. case 0: seed `c55257c3…463b04` → master `0d7359d5…45070`, child(0)
   `2d18bd6c…50f8e` — F-2, C-1, G4 (research/eip-2333-2334.md §"Official EIP-2333 test vectors").
-- [ ] `KeyPath::signing(i).to_string()` == `"m/12381/3600/<i>/0/0"` and `withdrawal(i)` omits the final
+- [x] `KeyPath::signing(i).to_string()` == `"m/12381/3600/<i>/0/0"` and `withdrawal(i)` omits the final
   `/0` — F-2, C-1 (EIP-2334 structure).
-- [ ] `derive_path(case0_seed, &KeyPath::signing(0))` derives a stable SK via the folded child chain
+- [x] `derive_path(case0_seed, &KeyPath::signing(0))` derives a stable SK via the folded child chain
   `master → 12381 → 3600 → 0 → 0 → 0` — F-2.
-- [ ] `public_key()` == `core::bls::new_signer(derived.to_bytes()).public_key()` for a derived key — F-2.
-- [ ] `to_bytes()` returns `Zeroizing<[u8;32]>`; `DerivedSk` relies on blst's self-zeroizing `SecretKey`
+- [x] `public_key()` == `core::bls::new_signer(derived.to_bytes()).public_key()` for a derived key — F-2.
+- [x] `to_bytes()` returns `Zeroizing<[u8;32]>`; `DerivedSk` relies on blst's self-zeroizing `SecretKey`
   on drop — S-1.
-- [ ] `derive_master`'s `Result` is propagated (no `unwrap`), mapping to `HdError` — F-2, F-9.
+- [x] `derive_master`'s `Result` is propagated (no `unwrap`), mapping to `HdError` — F-2, F-9.
 
 **Test plan**
 - `#[cfg(test)]` over the four EIP-2333 vectors (seeds/master/child hex inline from the research table
@@ -146,12 +146,12 @@ S-4 (OS CSPRNG only; no hidden entropy flag in the release binary).
   down (keeps `keystore` free of a `→ core` edge).
 
 **Acceptance criteria**
-- [ ] `OsEntropy::fill` fills the whole buffer via `getrandom` and returns `EntropyError::Os` on backend
+- [x] `OsEntropy::fill` fills the whole buffer via `getrandom` and returns `EntropyError::Os` on backend
   failure — S-4.
-- [ ] `getrandom` is added as the **only** new dependency (workspace + `core` manifest); nothing else new
+- [x] `getrandom` is added as the **only** new dependency (workspace + `core` manifest); nothing else new
   — D-1.
-- [ ] `Entropy: Sync` so it is usable behind `&dyn Entropy` in the `KeyDeps` seam — testability.
-- [ ] No deterministic/override `Entropy` and no `--entropy-*` flag exists in `core` or the release binary
+- [x] `Entropy: Sync` so it is usable behind `&dyn Entropy` in the `KeyDeps` seam — testability.
+- [x] No deterministic/override `Entropy` and no `--entropy-*` flag exists in `core` or the release binary
   (`grep` for an entropy override comes back empty outside `#[cfg(test)]`) — S-4.
 
 **Test plan**
