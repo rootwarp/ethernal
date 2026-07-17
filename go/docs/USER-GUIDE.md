@@ -9,6 +9,8 @@ transaction:
 
 **Status:** unreleased, pending the first tag under the merged name. `eth-deposit` combines the formerly separate `eth-deposit-gen` (released as v1.0.0) and `eth-deposit-tx` (never tagged) binaries into one tool — see `CHANGELOG.md` for the merge note.
 
+**Rust port:** this Go tree has been ported to `rust/` (byte-identical outputs on the shared golden fixtures; see `rust/README.md` for build instructions and documented divergences). The Go implementation remains the reference for the `rust/scripts/diff-go.sh` byte-identity harness until retirement — see `rust/docs/plan/issues/overview.md`, open question 3.
+
 ---
 
 ## Table of contents

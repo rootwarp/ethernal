@@ -89,3 +89,24 @@ and diffs stdout/stderr/exit codes on identical inputs.
 2. **`--verify-with-deposit-cli`** (R2-3): port the shell-out as-is (recommended) or drop as vestigial?
 3. **Fate of `go/`** (R5-2): keep as reference implementation for the diff harness, or delete after M5? Recommendation: keep until one release cycle after M5, then delete.
 4. **Ledger hardware validation** (R3-4): mock-tested only in CI, same as Go; needs one manual hardware session before any real-fund use.
+
+---
+
+## Progress log (2026-07-17)
+
+| Issue | Status | Commit | Gate result |
+|---|---|---|---|
+| R1-1 | done | 2b2cd8c | workspace green, fixtures in place |
+| R1-2/3/4, R2-1/2 | done | b43dbd5 | hoodi + mainnet gen goldens byte-identical on first run |
+| R1-5 | done | e47ca69 | pbkdf2/scrypt fixtures decrypt; 25 tests |
+| core tests | done | a1e246e | 73 ported tests green |
+| R3-3/R3-4 | done | a673fc3 | signed-tx golden byte-identical on first run; 94 tests |
+| R3-1/R3-2 | done | 2624360 | unsigned-tx golden byte-identical; 44 tests; redaction invariant tested |
+| R2-3/R2-4 | done | 6d9825f | gen: Rust and Go binaries byte-identical stdout AND stderr |
+| R3-5, R4-1/2/3 | done | dbc210f | diff-go.sh 12/12 across all five subcommands |
+| R5-1 | in progress | — | bin-level Go test suites being ported |
+| R5-2 | in progress | — | README/USER-GUIDE notes done; final clippy/fmt pending R5-1 |
+
+Open question resolutions to date: (1) ws:// dropped, documented; (2)
+--verify-with-deposit-cli ported as-is; (3) go/ kept as reference — revisit
+one release after M5; (4) ledger hardware validation deferred, feature-gated.
