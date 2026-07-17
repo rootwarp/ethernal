@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## Repository
+
+### Restructured to Rust-only - 2026-07-17
+
+The multi-language layout (`go/`, `python/`, `rust/`) is retired. The Rust
+workspace — the completed port of `eth-deposit`, byte-identical on the shared
+golden fixtures — moved from `rust/` to the repository root, and the Go and
+Python trees were removed (recoverable from git history; the Go v1.0.0 tag and
+its release notes remain on GitHub).
+
+#### Removed
+
+- `go/` — the reference implementation, retired after the Rust port reached M5
+  (full command parity, ported test suites, byte-identity gates green).
+- `python/` — scaffolding only; never shipped any code.
+- `.goreleaser.yaml`, `.github/workflows/release.yml` — the CGO-based Go release
+  pipeline. A Rust release pipeline is not set up yet.
+- `.github/workflows/eth-deposit-e2e.yml` — replaced by `ci.yml` (clippy,
+  rustfmt, tests, mock E2E, ledger-feature build check).
+- `rust/scripts/diff-go.sh` and the `diff-go` make target — the Go binary they
+  compared against no longer builds from this tree.
+- `scripts/bin/eth-deposit-gen.sh`, `scripts/validate-readme-examples.sh` —
+  wrappers around the removed Go build.
+- `RELEASE_NOTES_v1.0.0.md` — Go-release document; preserved in git history.
+
+#### Changed
+
+- `Cargo.toml`, `crates/`, `bins/`, `testdata/`, `Makefile`, docs: moved from
+  `rust/` to the repository root (paths inside the workspace are unchanged).
+- `go/docs/USER-GUIDE.md` → `docs/USER-GUIDE.md`, updated for the Rust binary.
+- `scripts/devnet/` is kept as-is (language-agnostic Docker devnet).
+
+---
+
 ## eth-deposit
 
 ### eth-deposit (unreleased) - 2026-07-12

@@ -1,33 +1,9 @@
-# Build outputs — goreleaser writes to dist/, do not track generated artifacts
+# Rust build outputs
+target/
 dist/
 
-# Go
-go/go.work.sum
-go/bin/
-go/eth-deposit-gen
-go/eth-deposit-tx
-go/cover*.out
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Rust
-rust/target/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-*.egg
-.eggs/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.venv/
-venv/
+# Tool-generated
+.antigravitycli/
 
 # IDE
 .idea/
@@ -48,5 +24,5 @@ Thumbs.db
 # Devnet data (runtime generated)
 scripts/devnet/data/
 
-# Testnet E2E artifacts from e2e-testnet.sh (contain signed txs, not for source control)
-go/testdata/deposit-e2e/
+# Testnet E2E artifacts (contain signed txs, not for source control)
+testdata/deposit-e2e/

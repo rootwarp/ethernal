@@ -1,59 +1,38 @@
-.PHONY: all build build-go build-rust build-python lint test fmt clean snapshot release-dry-run version help
+.PHONY: build test test-verbose coverage lint fmt e2e-mock clean help
 
-all: build
+## build: compile the release binary to target/release/eth-deposit
+build:
+	cargo build --release --bin eth-deposit
 
-# Build
-build: build-go build-rust build-python
-
-build-go:
-	cd go && for dir in cmd/*/; do [ -d "$$dir" ] && go build -o ../dist/ ./$$dir || true; done
-
-build-rust:
-	cd rust && cargo build --release --workspace
-
-build-python:
-	cd python && pip install -e .
-
-# Lint
-lint:
-	cd go && golangci-lint run ./...
-	cd rust && cargo clippy --workspace -- -D warnings
-	cd python && ruff check .
-	shellcheck scripts/bin/*.sh 2>/dev/null || true
-
-# Test
+## test: run all tests (unit + integration)
 test:
-	cd go && CGO_ENABLED=1 go test ./...
-	cd rust && cargo test --workspace
-	cd python && pytest
+	cargo test --workspace
 
-# Format
+## test-verbose: run all tests with output shown
+test-verbose:
+	cargo test --workspace -- --nocapture
+
+## coverage: per-crate test run (install cargo-llvm-cov for real coverage)
+coverage:
+	@command -v cargo-llvm-cov >/dev/null 2>&1 && cargo llvm-cov --workspace --summary-only \
+		|| { echo "cargo-llvm-cov not installed; running plain tests"; cargo test --workspace; }
+
+## lint: clippy with warnings denied + rustfmt check
+lint:
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo fmt --all -- --check
+
+## fmt: apply rustfmt
 fmt:
-	cd go && gofmt -w .
-	cd rust && cargo fmt
-	cd python && ruff format .
+	cargo fmt --all
 
-## snapshot: build local snapshot for both binaries via goreleaser (requires goreleaser + zig)
-snapshot:
-	CC_FOR_LINUX_AMD64="zig cc -target x86_64-linux-musl" \
-	CC_FOR_LINUX_ARM64="zig cc -target aarch64-linux-musl" \
-	goreleaser release --snapshot --clean
+## e2e-mock: run E2E tests (build+sign+send via mock broadcaster, no real RPC)
+e2e-mock:
+	cargo test --workspace --test 'e2e*' -- --include-ignored
 
-## release-dry-run: dry-run goreleaser locally to validate the config (no publish)
-release-dry-run:
-	CC_FOR_LINUX_AMD64="zig cc -target x86_64-linux-musl" \
-	CC_FOR_LINUX_ARM64="zig cc -target aarch64-linux-musl" \
-	goreleaser release --snapshot --skip=publish --clean
-
-## version: print the current eth-deposit release status (see CHANGELOG.md for history)
-version:
-	@echo "unreleased (eth-deposit merges eth-deposit-gen v1.0.0 and the never-tagged eth-deposit-tx; see CHANGELOG.md)"
-
-# Clean
+## clean: remove build artifacts
 clean:
-	rm -rf dist/*
-	cd rust && cargo clean 2>/dev/null || true
-	find python -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	cargo clean
 
 ## help: list available targets
 help:
