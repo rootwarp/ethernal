@@ -1,6 +1,6 @@
 # Plan — Rename `eth-deposit` → `ethernal`
 
-**Status:** approved (ready to implement)  
+**Status:** implemented (R1–R5 on branch; R6 pending land)  
 **Date:** 2026-07-18  
 **Goal:** Rebrand the CLI, workspace crates, crate directories, env contract, and GitHub repository from the transitional `eth-deposit` / `eth-utils` names to **`ethernal`**, without changing deposit-pipeline behavior.
 
@@ -302,11 +302,11 @@ chore: point remotes and docs at rootwarp/ethernal [R6]
 | Issue | Status | Commit / note |
 |---|---|---|
 | Decisions | locked | `_TX_` kept; crate dirs renamed; repo → `ethernal` |
-| R1 | todo | |
-| R2 | todo | |
-| R3 | todo | |
-| R4 | todo | |
-| R5 | todo | |
+| R1 | done | daef963 | crates → ethernal-* dirs/packages |
+| R2 | done | aad5125 | with R3 |
+| R3 | done | aad5125 | ETHERNAL_TX_* |
+| R4 | done | 298b970 | README, USER-GUIDE, skill |
+| R5 | done | pending | CHANGELOG + grep gate |
 | R6 | todo | `rootwarp/eth-utils` → `rootwarp/ethernal` |
 | M-R | open | |
 

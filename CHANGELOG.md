@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Restructured to Rust-only - 2026-07-17
 
 The multi-language layout (`go/`, `python/`, `rust/`) is retired. The Rust
-workspace — the completed port of `eth-deposit`, byte-identical on the shared
+workspace — the completed port of `eth-deposit` (now `ethernal`), byte-identical on the shared
 golden fixtures — moved from `rust/` to the repository root, and the Go and
 Python trees were removed (recoverable from git history; the Go v1.0.0 tag and
 its release notes remain on GitHub).
@@ -39,17 +39,46 @@ its release notes remain on GitHub).
 
 ---
 
-## eth-deposit
+## ethernal
+
+> **Renamed from `eth-deposit` (2026-07-18).** The CLI binary, crates, and operator
+> env vars now use the `ethernal` product name. Sections below that still say
+> `eth-deposit` are historical (pre-rename) unless noted.
+
+### ethernal (unreleased) — rename eth-deposit → ethernal
+
+#### Breaking
+
+- **Binary:** `eth-deposit` → **`ethernal`** (`bins/ethernal`, `target/release/ethernal`).
+- **Crates / dirs:** packages `eth-deposit-{core,keystore,signer,tx}` and paths
+  `crates/{core,keystore,signer,tx}` → packages **`ethernal-*`** under
+  **`crates/ethernal-*`**.
+- **Env vars (keep `_TX_` middle segment):**
+
+  | Old | New |
+  |---|---|
+  | `ETH_DEPOSIT_TX_*` | `ETHERNAL_TX_*` |
+  | `ETH_DEPOSIT_TX_PRIVATE_KEY` | `ETHERNAL_TX_PRIVATE_KEY` |
+  | `ETH_DEPOSIT_VERSION` / `_COMMIT` / `_DATE` | `ETHERNAL_VERSION` / `_COMMIT` / `_DATE` |
+
+- **Writability probe file:** `.eth-deposit-probe-<pid>` → `.ethernal-probe-<pid>`.
+- **GitHub repository (R6):** `rootwarp/eth-utils` → **`rootwarp/ethernal`**.
+
+No dual-accept of old binary/env names (tool still unreleased).
+
+---
+
+## eth-deposit (historical section titles)
 
 ### eth-deposit (unreleased) — keygen + withdrawal credentials
 
 #### Added
 
-- **`eth-deposit key new`** — generates a fresh 24-word BIP-39 mnemonic (OS CSPRNG),
+- **`ethernal key new`** — generates a fresh 24-word BIP-39 mnemonic (OS CSPRNG),
   runs a TTY-only display-once + full re-entry ceremony, then writes EIP-2335 v4
   scrypt signing keystores (`m/12381/3600/i/0/0`) under `--output-dir`. Non-TTY
   stdin/stdout → exit 2 before any entropy is drawn.
-- **`eth-deposit key recover`** — rebuilds keystores from an existing 12–24-word
+- **`ethernal key recover`** — rebuilds keystores from an existing 12–24-word
   mnemonic (interactive TTY prompt or piped stdin). Supports `--start-index` /
   `--count` for partial ranges. No ceremony (mnemonic already exists).
 - **Three-form BIP-39 mnemonic passphrase** on both key subcommands: raw
@@ -66,7 +95,7 @@ its release notes remain on GitHub).
 
 #### Breaking
 
-- **`gen` requires an explicit withdrawal choice.** Invoking `eth-deposit gen`
+- **`gen` requires an explicit withdrawal choice.** Invoking `ethernal gen`
   without `--withdrawal-address` exits 2 with a clear message (require-choice
   gate). There is no default / placeholder credential path for operators. Update
   scripts and goldens that previously called `gen` without the flag.
@@ -115,7 +144,7 @@ its release notes remain on GitHub).
 ### eth-deposit (unreleased) - 2026-07-12
 
 **Breaking change:** `eth-deposit-gen` and `eth-deposit-tx` are merged into a single
-`eth-deposit` binary with five subcommands: `gen`, `build`, `sign`, `run`, `send`.
+`ethernal` binary with five subcommands: `gen`, `build`, `sign`, `run`, `send`.
 The two old binary names are retired — there is no compatibility shim or alias.
 This lands as unreleased (no tag cut yet); see below for why this was a cheap time
 to do it.
@@ -140,7 +169,7 @@ to do it.
 
 #### Known tradeoff
 
-- `eth-deposit` now ships as one binary carrying both the offline BLS/keystore
+- `ethernal` now ships as one binary carrying both the offline BLS/keystore
   code path (`gen`) and the online RPC-broadcast/USB code path
   (`build`/`sign`/`run`/`send`). An air-gapped keygen-only deployment now
   receives (but doesn't execute) the networking and Ledger USB code it used to
@@ -158,14 +187,14 @@ to do it.
   fallback) is a subset of tx's 0/1/2/3/4/5 scheme; both are now handled by one
   `ExitCodeFor` in `exit.go`.
 - `.goreleaser.yaml`: 8 build entries (4 gen + 4 tx) collapsed to 4; one archive
-  (`eth-deposit_<os>_<arch>.tar.gz`) instead of two. One SBOM per platform
+  (`ethernal_<os>_<arch>.tar.gz`) instead of two. One SBOM per platform
   instead of one per tool per platform.
 - CI: `eth-deposit-gen.yml` retired; the surviving e2e workflow and `release.yml`
   now test the whole module instead of per-tool subdirectories.
 - `go/Makefile`: single `build` target (`bin/eth-deposit`) replaces `build`
   (gen) + `build-tx` (tx).
 - `go/docs/USER-GUIDE.md`: updated throughout to the merged command shape
-  (`eth-deposit gen`, `eth-deposit build`, etc.).
+  (`ethernal gen`, `ethernal build`, etc.).
 
 ---
 
@@ -180,7 +209,7 @@ against real hardware are not yet refined — that refinement is tracked for v0.
 #### Added
 
 - **Subcommands:** `build`, `sign`, `run`, `send` wired via `urfave/cli/v2`. `run` is a convenience alias for `build + sign` on the same machine. `send` broadcasts a signed transaction via JSON-RPC.
-- **Local signer:** `--signer local` reads the private key from `ETH_DEPOSIT_TX_PRIVATE_KEY` (env-var only; never a CLI flag), signs an EIP-1559 transaction, and zeroizes the key on close.
+- **Local signer:** `--signer local` reads the private key from `ETHERNAL_TX_PRIVATE_KEY` (env-var only; never a CLI flag), signs an EIP-1559 transaction, and zeroizes the key on close.
 - **Ledger signer:** `--signer ledger` signs via a connected Ledger hardware wallet using the go-ethereum `usbwallet` transport. Key never leaves the device.
 - **Networks:** Holesky, Sepolia, Hoodi, and Mainnet. Mainnet safety: `send` fetches the chain ID from the RPC node and refuses broadcast if it mismatches the signed tx's chain ID, preventing accidental cross-network broadcast. Users must type the network name interactively before `eth_sendRawTransaction` is called.
 - **Static fee/gas/nonce:** all gas and nonce flags can be supplied manually for fully offline / air-gapped operation (`build` with no `--rpc-url`).
@@ -193,7 +222,7 @@ against real hardware are not yet refined — that refinement is tracked for v0.
 
 #### Security
 
-- Private key accepted only via environment variable (`ETH_DEPOSIT_TX_PRIVATE_KEY`); a POSIX-name validator rejects accidental raw-hex values passed as the flag name (exit code 2).
+- Private key accepted only via environment variable (`ETHERNAL_TX_PRIVATE_KEY`); a POSIX-name validator rejects accidental raw-hex values passed as the flag name (exit code 2).
 - Key bytes are zeroized immediately on `LocalSigner.Close()` (verified by `TestLocalSigner_Close_ZeroizesKey`).
 - Signed output files written with permissions `0o600`.
 - No key material appears in error messages, logs, or help text.

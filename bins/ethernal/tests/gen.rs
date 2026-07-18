@@ -64,10 +64,7 @@ fn gen_dry_run_real_pipeline_emits_json() {
     );
 
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("ethernal gen:"),
-        "banner missing: {stderr}"
-    );
+    assert!(stderr.contains("ethernal gen:"), "banner missing: {stderr}");
     assert!(
         stderr.contains("wrote <stdout>"),
         "dry-run summary must use <stdout>: {stderr}"

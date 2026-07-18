@@ -1,7 +1,7 @@
 //! Golden test: signing the Phase 3 Holesky fixture with the synthetic key
 //! must reproduce the committed golden file byte-for-byte.
 //!
-//! Ported from `go/cmd/eth-deposit/signed_golden_test.go`
+//! Ported from `go/cmd/eth-deposit (historical)/signed_golden_test.go`
 //! (TestPhase3_HoleskyLocalSignerGolden), inlined at the crate level: the
 //! Go test drove the `sign` CLI command, whose output framing is
 //! `json.MarshalIndent(signed, "", "  ")` plus a trailing newline —

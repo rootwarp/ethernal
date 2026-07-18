@@ -6,9 +6,7 @@
 //! dependency. The expected address is derived through the public
 //! `LocalSigner::address()` accessor instead of geth's `PubkeyToAddress`.
 
-use ethernal_signer::{
-    new_local_signer_from_env, new_local_signer_from_hex, Signer, SignerError,
-};
+use ethernal_signer::{new_local_signer_from_env, new_local_signer_from_hex, Signer, SignerError};
 use ethernal_tx::UnsignedTx;
 
 /// A valid deterministic 32-byte secp256k1 scalar (Go: validHexKey).

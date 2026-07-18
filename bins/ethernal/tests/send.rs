@@ -347,10 +347,7 @@ fn wait_for_receipt_timeout() {
 // Go: TestSendSubcommand_Help
 #[test]
 fn send_subcommand_help() {
-    let out = ethernal()
-        .args(["send", "--help"])
-        .output()
-        .expect("run");
+    let out = ethernal().args(["send", "--help"]).output().expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("rpc-url"), "send --help missing --rpc-url");
     assert!(s.contains("yes"), "send --help missing --yes");

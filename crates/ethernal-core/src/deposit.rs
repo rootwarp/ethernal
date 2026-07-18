@@ -266,7 +266,7 @@ impl<'a> Generator<'a> {
 
 /// The wire representation of a single entry in a Launchpad
 /// deposit_data-*.json file. Field names and types must match exactly what
-/// `eth-deposit gen` and the official staking-deposit-cli produce.
+/// `ethernal gen` and the official staking-deposit-cli produce.
 /// All fields default so missing keys are tolerated like Go's encoding/json.
 #[derive(Debug, Default, Deserialize)]
 struct JsonEntryIn {

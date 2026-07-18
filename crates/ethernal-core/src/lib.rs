@@ -1,4 +1,4 @@
-//! Core building blocks of the eth-deposit pipeline, ported from
+//! Core building blocks of the ethernal pipeline, ported from
 //! `go/internal/{ssz,network,bls,deposit,output}`.
 //!
 //! The driving correctness constraint is "verify-before-write": every BLS

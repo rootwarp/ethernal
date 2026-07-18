@@ -218,14 +218,7 @@ mod tests {
     // tests/sign.rs (`invalid_env_var_name_*`). `^[A-Z_][A-Z0-9_]*$`.
     #[test]
     fn posix_env_var_name_matrix() {
-        for ok in [
-            "FOO",
-            "_FOO",
-            "ETHERNAL_TX_PRIVATE_KEY",
-            "A1",
-            "_",
-            "X_2_Y",
-        ] {
+        for ok in ["FOO", "_FOO", "ETHERNAL_TX_PRIVATE_KEY", "A1", "_", "X_2_Y"] {
             assert!(is_posix_env_var_name(ok), "{ok:?} should be valid");
         }
         for bad in [

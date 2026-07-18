@@ -69,10 +69,7 @@ fn app_help() {
 // Go: TestApp_Version
 #[test]
 fn app_version() {
-    let out = ethernal()
-        .arg("--version")
-        .output()
-        .expect("run --version");
+    let out = ethernal().arg("--version").output().expect("run --version");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(
         s.contains("dev") || s.contains("ethernal"),
@@ -83,10 +80,7 @@ fn app_version() {
 // Go: TestBuildSubcommand_Help
 #[test]
 fn build_subcommand_help() {
-    let out = ethernal()
-        .args(["build", "--help"])
-        .output()
-        .expect("run");
+    let out = ethernal().args(["build", "--help"]).output().expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("input-file"), "build --help missing flag: {s}");
 }
@@ -94,10 +88,7 @@ fn build_subcommand_help() {
 // Go: TestSignSubcommand_Help
 #[test]
 fn sign_subcommand_help() {
-    let out = ethernal()
-        .args(["sign", "--help"])
-        .output()
-        .expect("run");
+    let out = ethernal().args(["sign", "--help"]).output().expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("signer"), "sign --help missing --signer: {s}");
     assert!(s.contains("ledger"), "sign --help missing ledger: {s}");
