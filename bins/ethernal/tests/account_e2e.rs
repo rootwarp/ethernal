@@ -407,6 +407,73 @@ fn account_recover_second_run_does_not_overwrite() {
     );
 }
 
+/// G4 / GHSA-c6rv-g6pj-r6qx — batch salt/IV/id must be pairwise-distinct under
+/// real OS entropy. `recover --count 3` exercises the encrypt-time CSPRNG loop
+/// without a TTY; fields are compared as raw JSON (no decrypt).
+/// EOA v3 identifier is top-level `id` (NOT `uuid` — G4-2 amended).
+///
+/// Bite-proof (local, throwaway, never commit): temporarily wire FixedEntropy /
+/// fixed bytes in place of OsEntropy in the CLI encrypt path, rebuild, run only
+/// this test and `key_recover_batch_salt_iv_uuid_pairwise_distinct` → salt/iv
+/// HashSets collapse to size 1 → both go red; revert before any commit.
+#[test]
+fn account_recover_batch_salt_iv_id_pairwise_distinct() {
+    let dir = TempDir::new("g4-account-batch");
+    let (_stdout, stderr, ok) = run_account_recover(dir.path(), 3);
+    assert!(ok, "account recover failed: stderr={stderr}");
+
+    let files = v3_files(dir.path());
+    assert_eq!(files.len(), 3, "expected 3 keystores, got {files:?}");
+
+    let mut salts = Vec::with_capacity(3);
+    let mut ivs = Vec::with_capacity(3);
+    let mut ids = Vec::with_capacity(3);
+    let mut addresses = Vec::with_capacity(3);
+
+    for f in &files {
+        let raw = std::fs::read(f).expect("read keystore");
+        let v: serde_json::Value = serde_json::from_slice(&raw).expect("keystore JSON");
+        salts.push(
+            v["crypto"]["kdfparams"]["salt"]
+                .as_str()
+                .expect("salt")
+                .to_owned(),
+        );
+        ivs.push(
+            v["crypto"]["cipherparams"]["iv"]
+                .as_str()
+                .expect("iv")
+                .to_owned(),
+        );
+        ids.push(v["id"].as_str().expect("id").to_owned());
+        addresses.push(v["address"].as_str().expect("address").to_owned());
+    }
+
+    assert_eq!(
+        salts.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "salts must be pairwise-distinct across the batch: {salts:?}"
+    );
+    assert_eq!(
+        ivs.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "ivs must be pairwise-distinct across the batch: {ivs:?}"
+    );
+    assert_eq!(
+        ids.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "ids must be pairwise-distinct across the batch: {ids:?}"
+    );
+    assert_eq!(
+        addresses
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        3,
+        "addresses must be pairwise-distinct (3 real accounts, not copies): {addresses:?}"
+    );
+}
+
 /// CLI surface has no hidden entropy/time-injection flag: determinism is the
 /// fixed mnemonic through recover (S-4).
 #[test]
