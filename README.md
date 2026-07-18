@@ -1,49 +1,76 @@
 # ethernal
 
-Ethereum utility CLIs for validator operations — generating BLS keystores,
-building, signing, and broadcasting Beacon Chain deposit transactions from
-Launchpad-compatible deposit data.
+CLI for Ethereum validator deposits: BIP-39 keystores → Launchpad deposit data →
+signed Beacon Chain deposit transaction → broadcast.
 
-## Tools
+```text
+mnemonic / keystores  →  deposit_data JSON  →  signed EIP-1559 tx  →  chain
+     key new|recover           gen              build / sign / run      send
+```
 
-| Tool | Description |
-|------|-------------|
-| `ethernal` | End-to-end deposit pipeline: `key` (new/recover keystores), `gen` (deposit data), `build`/`sign`/`run`/`send` (Ethereum tx) |
+**Status:** unreleased (`0.1.0`). Formerly the `eth-deposit` binary in the
+`eth-utils` repository — see [CHANGELOG.md](CHANGELOG.md) for the rename and
+history.
 
-The repository is a Rust workspace. `ethernal` began as a Go tool and was
-ported to Rust with behavioral parity on the deposit-tx path — same exit-code
-contract (0–5), byte-identical outputs on the shared golden fixtures — then
-extended with nested `key new` / `key recover` and a required
-`--withdrawal-address` on `gen`. The Go and Python trees have been removed; see
-[CHANGELOG.md](CHANGELOG.md) for the history and `docs/plan/` for the migration
-and keygen plans.
+Full command reference, security guidance, air-gapped recipes, and
+troubleshooting: **[User Guide](docs/USER-GUIDE.md)**.
 
-See the [User Guide](docs/USER-GUIDE.md) for installation, command reference,
-security guidance, recipes, and troubleshooting.
-
-## Quickstart
-
-Typical end-to-end flow:
+## Install
 
 ```bash
-# Step 0: create EIP-2335 validator keystores (TTY ceremony; write down the mnemonic)
-mkdir -p ./keystores ./out
-export KEYSTORE_PASS=...
-ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
-# note the BLS pubkey from the summary
+git clone https://github.com/rootwarp/ethernal.git
+cd ethernal
+make build                    # → target/release/ethernal
+# optional Ledger HID support:
+cargo build --release --features ledger
+```
 
-# Step 1: generate deposit data (withdrawal address must be EIP-55 checksummed)
+Requires a stable Rust toolchain and a C compiler (`blst`). Windows is not
+supported. On Linux, enable the `ledger` feature only after installing
+`libudev-dev` (or equivalent) and [Ledger udev rules](https://github.com/LedgerHQ/udev-rules).
+
+## Subcommands
+
+| Command | Purpose |
+|---------|---------|
+| `ethernal key new` | Fresh BIP-39 mnemonic (TTY ceremony) → EIP-2335 scrypt keystores |
+| `ethernal key recover` | Existing mnemonic (TTY or stdin) → keystores |
+| `ethernal gen` | Keystores → Launchpad `deposit_data` JSON (requires EIP-55 `--withdrawal-address`) |
+| `ethernal build` | Deposit data → unsigned EIP-1559 deposit tx (offline or `--rpc-url`) |
+| `ethernal sign` | Sign with Ledger (recommended) or local key (`ETHERNAL_TX_PRIVATE_KEY`) |
+| `ethernal run` | `build` + `sign` in one shot |
+| `ethernal send` | Broadcast signed tx (explicit network-name confirm) |
+
+Exit codes: `0` ok · `1` internal · `2` bad input/config · `3` signer/crypto ·
+`4` user abort · `5` broadcast/RPC.
+
+## Quickstart (Hoodi)
+
+```bash
+mkdir -p ./keystores ./out
+export KEYSTORE_PASS=...   # ≥ 8 bytes; prefer a dedicated shell session
+
+# 0. Create EIP-2335 validator keystores (TTY-only; write down the mnemonic)
+ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+# note the BLS pubkey from the summary on stderr
+
+# 1. Deposit data — withdrawal address must be EIP-55 checksummed
 ethernal gen --network hoodi --keystore-dir ./keystores \
   --pubkeys 0x<your-pubkey> \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out --passphrase-env KEYSTORE_PASS
 unset KEYSTORE_PASS
 
-# Step 2: build and sign the deposit transaction
+# 2. Build + sign (Ledger recommended for real funds)
 ethernal run --network hoodi --input-file ./out/deposit_data-*.json \
-  --signer local --output signed.json
+  --signer ledger --output signed.json
+# local signer (test only):
+#   export ETHERNAL_TX_PRIVATE_KEY=0x...
+#   ethernal run --network hoodi --input-file ./out/deposit_data-*.json \
+#     --signer local --output signed.json
+#   unset ETHERNAL_TX_PRIVATE_KEY
 
-# Step 3: broadcast
+# 3. Broadcast
 ethernal send --input signed.json --rpc-url https://hoodi.example/rpc
 ```
 
@@ -55,48 +82,41 @@ prompt over raw `--mnemonic-passphrase VALUE` (visible in `ps` / shell history).
 
 ```sh
 make build         # release binary at target/release/ethernal
-make test          # workspace test suite
+make test          # workspace unit + integration tests
 make lint          # clippy -D warnings + rustfmt check
-make e2e-mock      # E2E tests (build+sign+send via mock broadcaster, no real RPC)
+make e2e-mock      # build+sign+send via mock broadcaster (no real RPC)
 ```
 
-Ledger hardware support is feature-gated:
+Without `--features ledger`, `--signer ledger` exits `3` with a message pointing
+at the flag. HID/APDU is compile-verified only — validate on real hardware
+before any real-fund use.
 
-```sh
-cargo build --release --features ledger
-```
-
-Without the feature, `--signer ledger` fails with exit code 3 and a message
-pointing at the flag. The HID/APDU transport is compile-verified only —
-validate on real hardware before any real-fund use.
-
-## Documented divergences from the retired Go implementation
-
-| Area | Go (retired) | Rust |
-|---|---|---|
-| `ws://` RPC endpoints | supported via geth ethclient | not supported (http/https only); dial fails with a clear exit-5 error |
-| Wei quantities | `big.Int` (unbounded) | `u128` — values ≥ 2^128 wei rejected as invalid (≈ 3.4e20 ETH, unreachable in practice) |
-| Log timestamps | slog, local time | UTC (`Z`); log *format* otherwise slog-like |
-| RPC URL redaction | scrubbed at the log boundary (`RedactURLString`) | redacted **by construction** — no error type ever stores a raw URL |
-| Ledger gating | CGO build tag | `ledger` cargo feature |
-| `--receipt-timeout` | full Go `time.ParseDuration` | `ms`/`s`/`m`/`h` suffixes only |
-| Broadcast tx hash | recomputed locally from the decoded tx | taken from the node's `eth_sendRawTransaction` response (same value) |
-| Validator keygen | out of band (e.g. staking-deposit-cli) | nested `ethernal key new` / `key recover` (BIP-39 → EIP-2333/2335) |
-| `gen` withdrawal credentials | fixed placeholder path in the port era | **required** `--withdrawal-address` (EIP-55 checksummed) → real 0x01 creds; absent → exit 2 |
-| EIP-55 on addresses | n/a for gen withdrawal | `--withdrawal-address` is **strict** EIP-55; `build`'s `--from` remains **lenient** (any-case 20-byte hex) |
-
-## Repository structure
+## Repository layout
 
 | Path | Contents |
-|---|---|
-| `crates/ethernal-core` | SSZ hash-tree-root, network params, blst BLS, BIP-39/HD, deposit generator (verify-before-write), Launchpad JSON writers |
-| `crates/ethernal-keystore` | EIP-2335 v4 encrypt/decrypt (scrypt/pbkdf2 + AES-128-CTR), directory index, passphrase sources |
-| `crates/ethernal-tx` | deposit() ABI packing, EIP-1559 builder (offline + RPC), JSON-RPC client, URL redaction |
-| `crates/ethernal-signer` | local secp256k1 signer (hand-rolled RLP + keccak, EIP-55 encode + strict validate), Ledger signer |
-| `bins/ethernal` | the CLI: `key` + five deposit subcommands, exit-code map, logging |
-| `docs/` | [User Guide](docs/USER-GUIDE.md) and the Go→Rust / keygen plans (`docs/plan/`) |
-| `testdata/` | golden fixtures (synthetic keys only, safe to commit) |
-| `scripts/devnet/` | Dockerized local execution+consensus devnet for end-to-end testing |
+|------|----------|
+| `bins/ethernal` | CLI: subcommands, exit-code map, logging |
+| `crates/ethernal-core` | SSZ HTR, network params, BLS, BIP-39/HD, deposit generator |
+| `crates/ethernal-keystore` | EIP-2335 v4 encrypt/decrypt, directory index, passphrase sources |
+| `crates/ethernal-tx` | `deposit()` ABI, EIP-1559 builder, JSON-RPC client, URL redaction |
+| `crates/ethernal-signer` | Local secp256k1 + Ledger signers; strict EIP-55 validation |
+| `docs/` | [User Guide](docs/USER-GUIDE.md), design/plan archive (`docs/plan/`) |
+| `testdata/` | Golden fixtures (synthetic keys only) |
+| `scripts/devnet/` | Docker EL+CL devnet for end-to-end testing |
+
+## Notable details
+
+| Topic | Behavior |
+|-------|----------|
+| Withdrawal credentials | `gen` **requires** `--withdrawal-address` (strict EIP-55) → real `0x01` creds; zero address rejected |
+| `--from` (build only) | Lenient any-case 20-byte hex; `run` has no `--from` (sender from signing key) |
+| Local private key | Env only (`ETHERNAL_TX_PRIVATE_KEY` by default) — never a CLI flag |
+| RPC | `http`/`https` only (`ws://` rejected); API keys redacted from errors by construction |
+| Wei quantities | `u128` (values ≥ 2^128 wei rejected) |
+
+Documented divergences from the retired Go port (log timestamps UTC, receipt
+timeout suffixes, broadcast hash from the node response, etc.) are listed in
+[CHANGELOG.md](CHANGELOG.md) and the migration notes under `docs/plan/`.
 
 ## License
 
