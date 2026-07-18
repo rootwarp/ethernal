@@ -193,25 +193,25 @@ This is the six-way fan-in. Satisfies F-1, F-2, F-3, F-4, F-6, F-7, F-12, F-15, 
   fixed `Timestamp` live in this file's `#[cfg(test)]` only — no hidden entropy/time flag ships (S-4).
 
 **Acceptance criteria**
-- [ ] `account new` generates a fresh 24-word mnemonic from 256-bit `OsEntropy` with a valid checksum
+- [x] `account new` generates a fresh 24-word mnemonic from 256-bit `OsEntropy` with a valid checksum
   — F-1, S-4.
-- [ ] the reused ceremony displays once via `tty_writer` and requires full re-entry before **any**
+- [x] the reused ceremony displays once via `tty_writer` and requires full re-entry before **any**
   keystore is written; mismatch → retry or clean abort (exit 4); nothing on disk until re-entry
   matches — F-6, U-1, S-5.
-- [ ] per index: secret derived at `m/44'/60'/0'/0/i`, address via `secret_to_address`, encrypted v3
+- [x] per index: secret derived at `m/44'/60'/0'/0/i`, address via `secret_to_address`, encrypted v3
   (scrypt `STANDARD`, RAW passphrase), filename via `v3_filename`, written `0600` / atomic /
   refuse-overwrite — F-2, F-3, F-4, S-3.
-- [ ] `--count N` writes N v3 files whose `UTC--…` filenames parse and whose top-level `address`
+- [x] `--count N` writes N v3 files whose `UTC--…` filenames parse and whose top-level `address`
   matches the derived address; the stderr summary lists EIP-55 addresses — F-8, F-15.
-- [ ] keystore passphrase uses `NewKeystorePassphrase` (confirm, ≥8) or `--passphrase-env` +
+- [x] keystore passphrase uses `NewKeystorePassphrase` (confirm, ≥8) or `--passphrase-env` +
   `require_min_len(8)`, fed **raw** to `encrypt_v3` — F-7, C-4.
-- [ ] the mnemonic passphrase is resolved flag>env>prompt-confirm, captured before derivation, empty
+- [x] the mnemonic passphrase is resolved flag>env>prompt-confirm, captured before derivation, empty
   valid, `Zeroizing` (fully honored by `new`) — F-12.
-- [ ] the `AccountDeps` seam injects entropy/keystore_pw/mnemonic_src/tty_writer/summary_out/timestamp;
+- [x] the `AccountDeps` seam injects entropy/keystore_pw/mnemonic_src/tty_writer/summary_out/timestamp;
   `FixedEntropy` + fixed `Timestamp` are `#[cfg(test)]`-only — S-4, testability.
-- [ ] SIGINT before any write leaves zero keystores; with `--count N`, SIGINT after *k* writes leaves
+- [x] SIGINT before any write leaves zero keystores; with `--count N`, SIGINT after *k* writes leaves
   *k* complete keystores — S-5.
-- [ ] entropy, mnemonic, seed, every chain code, every `secret_bytes`, and both passphrases are
+- [x] entropy, mnemonic, seed, every chain code, every `secret_bytes`, and both passphrases are
   `Zeroizing` at every hop — S-1.
 
 **Test plan**

@@ -198,12 +198,13 @@ docs — `research/bip32-secp256k1.md`, `research/web3-v3-keystore.md`):
 | A2-1 | done | 0de013b | G3 byte-gate + C-4 raw passphrase + encrypt_v3 |
 | A2-2 | done | e5dfbc1 | v3_filename + civil_from_days fixed vector |
 | A3-1 | done | 8d9d21f | secret_to_address + abandon EIP-55 addresses |
-| A3-3 | done | (this commit) | account clap namespace + AccountConfig + TTY guard |
+| A3-3 | done | 67399d2 | account clap namespace + AccountConfig + TTY guard |
+| A3-4 | done | (this commit) | account new pipeline + AccountDeps + nanos+1 collision |
 | A1 | done | — | M-A1 closed (secrets + addresses) |
 | A2 | done | — | M-A2 closed |
 | M-A1 | done | | BIP-32 TV1 + BIP-44 secrets + addresses; R1 scalar on drop |
 | M-A2 | done | | G3 encrypt byte-gate + round-trip + v3_filename |
-| A3 | todo | — | A3-4..A3-5 remaining |
+| A3 | todo | — | A3-5 remaining |
 | M-A3 | open | | `account new` ceremony + TTY guard + 0600 v3 files + secret-hygiene |
 | A4 | todo | — | |
 | M-A4 | open | | `account recover` TTY/stdin, 12–24-word + 1-based bad word, range, mnemonic passphrase |
