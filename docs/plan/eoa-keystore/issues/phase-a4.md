@@ -88,17 +88,17 @@ passphrase actually reaches `bip39::to_seed`. Satisfies F-12 (both subcommands),
   the resolved passphrase into `to_seed`. (Guard against the parse-but-ignore trap.)
 
 **Acceptance criteria**
-- [ ] all three forms resolve on `account new`: raw `--mnemonic-passphrase VALUE`,
+- [x] all three forms resolve on `account new`: raw `--mnemonic-passphrase VALUE`,
   `--mnemonic-passphrase-env VAR`, and bare `--mnemonic-passphrase` (**confirm**); absent → empty —
   F-12.
-- [ ] all three forms resolve on `account recover`: raw / `-env` / bare (**single-entry**); absent →
+- [x] all three forms resolve on `account recover`: raw / `-env` / bare (**single-entry**); absent →
   empty — F-12.
-- [ ] the resolved passphrase changes the seed and thus the derived addresses: a **seed-derivation
+- [x] the resolved passphrase changes the seed and thus the derived addresses: a **seed-derivation
   anchor** test asserts a fixed mnemonic + a known mnemonic passphrase → a known seed feeding
   `derive_path` (proving the passphrase is not ignored on either command) — F-12, C-1.
-- [ ] an **unset** `--mnemonic-passphrase-env VAR` → exit 2; an **empty** value is accepted (empty is
+- [x] an **unset** `--mnemonic-passphrase-env VAR` → exit 2; an **empty** value is accepted (empty is
   valid for the mnemonic passphrase) — F-12.
-- [ ] the mnemonic passphrase is `Zeroizing` and never rendered (covered by the A3-5/A4-1 hygiene
+- [x] the mnemonic passphrase is `Zeroizing` and never rendered (covered by the A3-5/A4-1 hygiene
   harness extended to both passphrase forms) — S-1, S-2.
 
 **Test plan**

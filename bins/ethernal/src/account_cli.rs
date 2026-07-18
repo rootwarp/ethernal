@@ -641,4 +641,54 @@ mod tests {
         ]);
         assert!(err.is_err(), "bare and env must conflict");
     }
+
+    // --- recover: same three forms (shared args; A4-2 F-12 both commands) ---
+
+    #[test]
+    fn recover_mnemonic_passphrase_three_forms_and_empty_default() {
+        let dir = Tmp::new();
+        let (cfg, _) = load_recover(&["--output-dir", dir.str()]).unwrap();
+        assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
+
+        let (cfg, _) =
+            load_recover(&["--output-dir", dir.str(), "--mnemonic-passphrase", "TREZOR"]).unwrap();
+        assert_eq!(
+            cfg.mnemonic_passphrase,
+            MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()))
+        );
+
+        let (cfg, _) = load_recover(&["--output-dir", dir.str(), "--mnemonic-passphrase"]).unwrap();
+        assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Prompt);
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        let var = format!("ETHERNAL_TEST_ACCT_REC_MNEMONIC_PW_{}", std::process::id());
+        std::env::set_var(&var, "from-env");
+        let result = load_recover(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
+        std::env::remove_var(&var);
+        let (cfg, _) = result.expect("ok");
+        match cfg.mnemonic_passphrase {
+            MnemonicPassphraseForm::Env { var: v, value } => {
+                assert_eq!(v, var);
+                assert_eq!(value.as_str(), "from-env");
+            }
+            other => panic!("expected Env, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recover_mnemonic_passphrase_env_unset_is_exit2() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = Tmp::new();
+        let var = format!(
+            "ETHERNAL_TEST_ACCT_REC_MNEMONIC_PW_UNSET_{}",
+            std::process::id()
+        );
+        std::env::remove_var(&var);
+        let m =
+            parse_recover(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]).unwrap();
+        let mut banner = Vec::new();
+        let err = load_config(&m, AccountMode::Recover, &mut banner).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(err.to_string().contains("is not set"));
+    }
 }

@@ -527,6 +527,18 @@ mod tests {
     /// 12-word Trezor vector mnemonic (valid checksum).
     const ABANDON_12: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
+    /// BIP-39 TREZOR vector seed for ABANDON_12 + passphrase "TREZOR".
+    const TREZOR_SEED_HEX: &str = "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";
+
+    /// m/44'/60'/0'/0/0 for ABANDON_12 + TREZOR (seed-derivation anchor, A4-2).
+    const TREZOR_EOA0_ADDR: &str = "9c32f71d4db8fb9e1a58b0a80df79935e7256fa6";
+
+    /// m/44'/60'/0'/0/0 for ABANDON_12 + empty passphrase (must differ from TREZOR).
+    const EMPTY_EOA0_ADDR: &str = "9858effd232b4033e47d90003d41ec34ecaeda94";
+
+    /// 24-word zero-entropy mnemonic + TREZOR seed (bip39 unit-test vector).
+    const ZERO_TREZOR_SEED_HEX: &str = "bda85446c68413707090a52022edd26a1c9462295029f2e60cd7c4f2bbd3097170af7a4d73245cafa9c3cca8d561a7c3de6f5d4a10be8ed2a5e608d68f92fcc8";
+
     /// Frozen timestamp for deterministic `UTC--` filenames.
     const TS: Timestamp = Timestamp {
         unix_secs: 1_784_384_525,
@@ -953,8 +965,8 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_raw_honored_on_new() {
-        // Flag-form mnemonic passphrase is fully honored (F-12); seed differs
-        // from the empty-passphrase seed for the same 24-word mnemonic.
+        // Flag-form mnemonic passphrase is fully honored (F-12); seed pinned
+        // to the 24-word TREZOR vector and address differs from empty-pass.
         let dir = Tmp::new();
         let mut cfg = base_cfg(dir.str(), 1);
         cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
@@ -963,8 +975,9 @@ mod tests {
         let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
         run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
 
-        let seed_empty = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
         let seed_trezor = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR").unwrap();
+        assert_eq!(hex::encode(seed_trezor.as_slice()), ZERO_TREZOR_SEED_HEX);
+        let seed_empty = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
         assert_ne!(
             seed_empty.as_slice(),
             seed_trezor.as_slice(),
@@ -988,6 +1001,12 @@ mod tests {
         let body = std::fs::read(&files[0]).unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(val["address"], hex::encode(addr));
+
+        // Empty-passphrase address for the same mnemonic must differ.
+        let derived_empty =
+            hd_secp256k1::ExtendedPrivKey::derive_path(seed_empty.as_slice(), &path).unwrap();
+        let addr_empty = secret_to_address(&derived_empty.secret_bytes()).unwrap();
+        assert_ne!(addr, addr_empty);
     }
 
     // --- SIGINT ---
@@ -1345,7 +1364,7 @@ mod tests {
 
     #[test]
     fn recover_mnemonic_passphrase_prompt_single_entry() {
-        // Bare prompt is single-entry on recover (no confirm); wiring for A4-2.
+        // Bare prompt is single-entry on recover (no confirm) — A4-2.
         let dir = Tmp::new();
         let mut cfg = recover_cfg(dir.str(), 1, 0);
         cfg.mnemonic_passphrase = MnemonicPassphraseForm::Prompt;
@@ -1356,11 +1375,13 @@ mod tests {
         run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
 
         let seed = bip39::to_seed(ABANDON_12, b"TREZOR").unwrap();
+        assert_eq!(hex::encode(seed.as_slice()), TREZOR_SEED_HEX);
         let derived =
             hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
                 .unwrap();
         let sk = derived.secret_bytes();
         let addr = secret_to_address(&sk).unwrap();
+        assert_eq!(hex::encode(addr), TREZOR_EOA0_ADDR);
         let expected_name = v3_filename(&addr, TS.unix_secs, TS.nanos);
         let files = dir.v3_files();
         assert_eq!(files.len(), 1);
@@ -1368,13 +1389,11 @@ mod tests {
             files[0].file_name().and_then(|n| n.to_str()),
             Some(expected_name.as_str())
         );
+        let body = std::fs::read(&files[0]).unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["address"], TREZOR_EOA0_ADDR);
         // Empty-passphrase address must differ (passphrase honored).
-        let seed_empty = bip39::to_seed(ABANDON_12, b"").unwrap();
-        let derived_empty =
-            hd_secp256k1::ExtendedPrivKey::derive_path(seed_empty.as_slice(), &Bip44Path::eoa(0))
-                .unwrap();
-        let addr_empty = secret_to_address(&derived_empty.secret_bytes()).unwrap();
-        assert_ne!(addr, addr_empty);
+        assert_ne!(TREZOR_EOA0_ADDR, EMPTY_EOA0_ADDR);
     }
 
     #[test]
@@ -1410,6 +1429,224 @@ mod tests {
             a, b,
             "account new and account recover must produce identical shape"
         );
+    }
+
+    // =========================================================================
+    // A4-2 three-form mnemonic passphrase + seed-derivation anchor (F-12)
+    // =========================================================================
+
+    fn eoa0_addr_hex(mnemonic: &str, pass: &[u8]) -> String {
+        let seed = bip39::to_seed(mnemonic, pass).unwrap();
+        let derived =
+            hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
+                .unwrap();
+        hex::encode(secret_to_address(&derived.secret_bytes()).unwrap())
+    }
+
+    #[test]
+    fn seed_derivation_anchor_three_forms_resolve() {
+        // Fixed mnemonic + known passphrase → known seed (inline hex) → known
+        // first address; non-empty passphrase differs from empty (F-12, C-1).
+        // Resolves all three forms + empty; confirm vs single-entry bare prompt.
+        // Guards against parse-but-ignore: passphrase must reach to_seed.
+
+        // --- empty default ---
+        let empty = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::Empty,
+            &ScriptedLines::new(vec![]),
+            &CancelToken::new(),
+            true,
+        )
+        .unwrap();
+        assert!(empty.is_empty());
+        let seed_empty = bip39::to_seed(ABANDON_12, empty.as_slice()).unwrap();
+        assert_ne!(hex::encode(seed_empty.as_slice()), TREZOR_SEED_HEX);
+        assert_eq!(eoa0_addr_hex(ABANDON_12, b""), EMPTY_EOA0_ADDR);
+
+        // --- raw argv ---
+        let raw = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into())),
+            &ScriptedLines::new(vec![]),
+            &CancelToken::new(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(raw.as_slice(), b"TREZOR");
+        let seed = bip39::to_seed(ABANDON_12, raw.as_slice()).unwrap();
+        assert_eq!(hex::encode(seed.as_slice()), TREZOR_SEED_HEX);
+        assert_eq!(eoa0_addr_hex(ABANDON_12, b"TREZOR"), TREZOR_EOA0_ADDR);
+        assert_ne!(TREZOR_EOA0_ADDR, EMPTY_EOA0_ADDR);
+
+        // --- env form (value already resolved at clap load) ---
+        let env = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::Env {
+                var: "MNEMONIC_PW".into(),
+                value: Zeroizing::new("TREZOR".into()),
+            },
+            &ScriptedLines::new(vec![]),
+            &CancelToken::new(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(env.as_slice(), b"TREZOR");
+        assert_eq!(
+            hex::encode(
+                bip39::to_seed(ABANDON_12, env.as_slice())
+                    .unwrap()
+                    .as_slice()
+            ),
+            TREZOR_SEED_HEX
+        );
+
+        // --- bare prompt, confirm (account new): double-entry ---
+        let prompted = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::Prompt,
+            &ScriptedLines::new(vec!["TREZOR", "TREZOR"]),
+            &CancelToken::new(),
+            /* confirm */ true,
+        )
+        .unwrap();
+        assert_eq!(prompted.as_slice(), b"TREZOR");
+        assert_eq!(
+            hex::encode(
+                bip39::to_seed(ABANDON_12, prompted.as_slice())
+                    .unwrap()
+                    .as_slice()
+            ),
+            TREZOR_SEED_HEX
+        );
+
+        // --- bare prompt, single-entry (account recover): one line only ---
+        let single = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::Prompt,
+            &ScriptedLines::new(vec!["TREZOR"]),
+            &CancelToken::new(),
+            /* confirm */ false,
+        )
+        .unwrap();
+        assert_eq!(single.as_slice(), b"TREZOR");
+
+        // Empty env value is valid (no ≥8 minimum — that is the keystore passphrase).
+        let env_empty = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::Env {
+                var: "MNEMONIC_PW".into(),
+                value: Zeroizing::new(String::new()),
+            },
+            &ScriptedLines::new(vec![]),
+            &CancelToken::new(),
+            true,
+        )
+        .unwrap();
+        assert!(env_empty.is_empty());
+        assert_eq!(
+            eoa0_addr_hex(ABANDON_12, env_empty.as_slice()),
+            EMPTY_EOA0_ADDR
+        );
+    }
+
+    #[test]
+    fn three_forms_honored_on_account_new_and_recover() {
+        // Cross-command AccountDeps-seam: raw / env / bare-prompt / empty on
+        // both `new` (confirm) and `recover` (single-entry) feed to_seed.
+        // Uses ABANDON_12 recover + ZERO_MNEMONIC new; addresses match derivation.
+
+        // --- recover: raw TREZOR → known address ---
+        {
+            let dir = Tmp::new();
+            let mut cfg = recover_cfg(dir.str(), 1, 0);
+            cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+            let lines = ScriptedLines::new(vec![ABANDON_12]);
+            let entropy = FixedEntropy::new(vec![]);
+            let pw = FixedPassphrase(b"password1".to_vec());
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("raw");
+            let files = dir.v3_files();
+            assert_eq!(files.len(), 1);
+            let val: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+            assert_eq!(val["address"], TREZOR_EOA0_ADDR);
+        }
+
+        // --- recover: env TREZOR → same address ---
+        {
+            let dir = Tmp::new();
+            let mut cfg = recover_cfg(dir.str(), 1, 0);
+            cfg.mnemonic_passphrase = MnemonicPassphraseForm::Env {
+                var: "TEST_MNEMONIC_PW".into(),
+                value: Zeroizing::new("TREZOR".into()),
+            };
+            let lines = ScriptedLines::new(vec![ABANDON_12]);
+            let entropy = FixedEntropy::new(vec![]);
+            let pw = FixedPassphrase(b"password1".to_vec());
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("env");
+            let files = dir.v3_files();
+            assert_eq!(files.len(), 1);
+            let val: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+            assert_eq!(val["address"], TREZOR_EOA0_ADDR);
+        }
+
+        // --- recover: empty default → empty-pass address ---
+        {
+            let dir = Tmp::new();
+            let cfg = recover_cfg(dir.str(), 1, 0);
+            assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
+            let lines = ScriptedLines::new(vec![ABANDON_12]);
+            let entropy = FixedEntropy::new(vec![]);
+            let pw = FixedPassphrase(b"password1".to_vec());
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("empty");
+            let files = dir.v3_files();
+            assert_eq!(files.len(), 1);
+            let val: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+            assert_eq!(val["address"], EMPTY_EOA0_ADDR);
+        }
+
+        // --- new: env TREZOR (confirm bare covered by prompt mismatch + resolve) ---
+        {
+            let dir = Tmp::new();
+            let mut cfg = base_cfg(dir.str(), 1);
+            cfg.mnemonic_passphrase = MnemonicPassphraseForm::Env {
+                var: "TEST_MNEMONIC_PW".into(),
+                value: Zeroizing::new("TREZOR".into()),
+            };
+            let entropy = FixedEntropy::zero_mnemonic();
+            let pw = FixedPassphrase(b"password1".to_vec());
+            let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+            run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("new env");
+            let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR").unwrap();
+            assert_eq!(hex::encode(seed.as_slice()), ZERO_TREZOR_SEED_HEX);
+            let derived =
+                hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
+                    .unwrap();
+            let addr = secret_to_address(&derived.secret_bytes()).unwrap();
+            let files = dir.v3_files();
+            assert_eq!(files.len(), 1);
+            let val: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+            assert_eq!(val["address"], hex::encode(addr));
+        }
+
+        // --- new: bare prompt confirm success ---
+        {
+            let dir = Tmp::new();
+            let mut cfg = base_cfg(dir.str(), 1);
+            cfg.mnemonic_passphrase = MnemonicPassphraseForm::Prompt;
+            let entropy = FixedEntropy::zero_mnemonic();
+            let pw = FixedPassphrase(b"password1".to_vec());
+            // confirm: pass, confirm, then ceremony re-entry of mnemonic
+            let lines = ScriptedLines::new(vec!["TREZOR", "TREZOR", ZERO_MNEMONIC]);
+            run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("new prompt");
+            let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR").unwrap();
+            let derived =
+                hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
+                    .unwrap();
+            let addr = secret_to_address(&derived.secret_bytes()).unwrap();
+            let files = dir.v3_files();
+            assert_eq!(files.len(), 1);
+            let val: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+            assert_eq!(val["address"], hex::encode(addr));
+        }
     }
 
     // =========================================================================

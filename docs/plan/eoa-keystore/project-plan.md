@@ -208,7 +208,8 @@ docs — `research/bip32-secp256k1.md`, `research/web3-v3-keystore.md`):
 | A3 | done | — | M-A3 closed |
 | M-A3 | done | | account new ceremony + TTY + 0600 v3 + secret-hygiene |
 | A4-1 | done | (this commit) | account recover TTY/stdin + validate-first + range + recover-stdin hygiene |
-| A4 | in progress | — | A4-2 remaining (three-form + seed anchor) |
-| M-A4 | open | | `account recover` TTY/stdin, 12–24-word + 1-based bad word, range, mnemonic passphrase |
+| A4-2 | done | (this commit) | three-form mnemonic passphrase both commands + seed-derivation anchor |
+| A4 | done | — | M-A4 closed |
+| M-A4 | done | | `account recover` TTY/stdin, 12–24-word + 1-based bad word, range, mnemonic passphrase |
 | A5 | todo | — | |
 | M-A5 | open | | E2E fixture frozen + cross-recovery + docs; **manual C-2 parity session** |
