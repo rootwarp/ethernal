@@ -148,7 +148,7 @@ fn recover_command() -> Command {
 }
 
 /// Flags shared by `key new` and `key recover`.
-fn shared_args() -> Vec<Arg> {
+pub(crate) fn shared_args() -> Vec<Arg> {
     vec![
         Arg::new("count")
             .long("count")
@@ -295,7 +295,9 @@ pub fn load_config(
 /// - bare `--mnemonic-passphrase` → [`Prompt`]
 /// - `--mnemonic-passphrase-env VAR` → read env (unset → exit 2; empty OK) → [`Env`]
 /// - neither → [`Empty`]
-fn resolve_mnemonic_passphrase(m: &ArgMatches) -> Result<MnemonicPassphraseForm, AppError> {
+pub(crate) fn resolve_mnemonic_passphrase(
+    m: &ArgMatches,
+) -> Result<MnemonicPassphraseForm, AppError> {
     // Env form (mutually exclusive with the raw/prompt flag via conflicts_with).
     if let Some(var) = m.get_one::<String>("mnemonic-passphrase-env") {
         match std::env::var(var) {
@@ -327,7 +329,7 @@ fn resolve_mnemonic_passphrase(m: &ArgMatches) -> Result<MnemonicPassphraseForm,
 
 /// Checks that dir exists and the process can write to it via the shared
 /// exclusive create+remove probe ([`crate::fs_util::probe_dir_writable`]).
-fn validate_output_dir(dir: &str) -> Result<(), String> {
+pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
     let meta = match std::fs::metadata(dir) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

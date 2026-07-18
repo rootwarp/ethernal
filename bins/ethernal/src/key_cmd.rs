@@ -399,7 +399,7 @@ fn finish_from_mnemonic(
 
 /// `confirm`: when true (key new), bare Prompt requires double-entry; when
 /// false (key recover), single-entry only.
-fn resolve_mnemonic_passphrase(
+pub(crate) fn resolve_mnemonic_passphrase(
     form: &MnemonicPassphraseForm,
     src: &dyn MnemonicSource,
     cancel: &CancelToken,
@@ -429,7 +429,7 @@ fn resolve_mnemonic_passphrase(
 // Ceremony (F-6)
 // ---------------------------------------------------------------------------
 
-fn run_ceremony(
+pub(crate) fn run_ceremony(
     mnemonic: &str,
     tty: &mut dyn Write,
     src: &dyn MnemonicSource,
@@ -531,7 +531,7 @@ fn print_key_summary(w: &mut dyn Write, written: &[(String, String)]) {
 // Cancel + error mapping (call-site; typed arms polished in K3-4)
 // ---------------------------------------------------------------------------
 
-fn check_cancel(cancel: &CancelToken) -> Result<(), AppError> {
+pub(crate) fn check_cancel(cancel: &CancelToken) -> Result<(), AppError> {
     if cancel.is_cancelled() {
         Err(AppError::Aborted("interrupted".into()))
     } else {
@@ -599,9 +599,9 @@ fn map_passphrase_err(e: KeystoreError) -> AppError {
 // ---------------------------------------------------------------------------
 
 /// Wraps a [`PassphraseSource`] with [`require_min_len`] (F-7 env path).
-struct MinLenPassphrase<'a> {
-    inner: &'a dyn PassphraseSource,
-    min: usize,
+pub(crate) struct MinLenPassphrase<'a> {
+    pub(crate) inner: &'a dyn PassphraseSource,
+    pub(crate) min: usize,
 }
 
 impl PassphraseSource for MinLenPassphrase<'_> {
@@ -615,12 +615,12 @@ impl PassphraseSource for MinLenPassphrase<'_> {
 
 /// Production ceremony + prompt source: re-entry on stdin; secrets via `/dev/tty`
 /// with echo suppressed (rpassword), matching keystore passphrase practice.
-struct StdinMnemonicSource {
+pub(crate) struct StdinMnemonicSource {
     prompt_out: Mutex<Box<dyn Write + Send>>,
 }
 
 impl StdinMnemonicSource {
-    fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
+    pub(crate) fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
         Self {
             prompt_out: Mutex::new(Box::new(prompt_out)),
         }
@@ -682,7 +682,7 @@ impl MnemonicSource for StdinMnemonicSource {
 /// [`Zeroizing`]. If no trim is needed, returns `s` unchanged (single buffer).
 /// Otherwise allocates a trimmed `Zeroizing` and drops `s` so the untrimmed
 /// copy is scrubbed (S-1).
-fn zeroizing_trim(s: Zeroizing<String>) -> Zeroizing<String> {
+pub(crate) fn zeroizing_trim(s: Zeroizing<String>) -> Zeroizing<String> {
     let t = s.trim();
     if t.len() == s.len() {
         s
@@ -697,12 +697,12 @@ fn zeroizing_trim(s: Zeroizing<String>) -> Zeroizing<String> {
 /// Recover mnemonic source: interactive TTY prompt **or** piped stdin (F-10).
 /// When stdin is not a TTY, the prompt is skipped and the mnemonic is read
 /// from the pipe (one line or full stdin trimmed).
-struct RecoverMnemonicSource {
+pub(crate) struct RecoverMnemonicSource {
     prompt_out: Mutex<Box<dyn Write + Send>>,
 }
 
 impl RecoverMnemonicSource {
-    fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
+    pub(crate) fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
         Self {
             prompt_out: Mutex::new(Box::new(prompt_out)),
         }
