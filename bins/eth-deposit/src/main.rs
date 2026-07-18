@@ -56,12 +56,16 @@ fn global_cancel() -> &'static CancelToken {
 }
 
 extern "C" fn on_sigint(_sig: libc::c_int) {
-    // Async-signal-safe: cancel() is a single atomic store.
+    // Async-signal-safe: cancel() is a single atomic store. Invariant: main
+    // must call global_cancel() before install_sigint_handler() so TOKEN is
+    // already initialized — get_or_init (heap allocation) must never run
+    // inside this signal context.
     global_cancel().cancel();
 }
 
 fn install_sigint_handler() {
     // SAFETY: installing a handler that only performs an atomic store.
+    // Caller must have initialized global_cancel() first (see on_sigint).
     unsafe {
         libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t);
     }
@@ -95,8 +99,10 @@ fn root_command() -> Command {
 }
 
 fn main() {
-    install_sigint_handler();
+    // Initialize CancelToken before arming SIGINT so on_sigint never runs
+    // OnceLock::get_or_init inside a signal handler (not async-signal-safe).
     let cancel = global_cancel();
+    install_sigint_handler();
 
     let matches = match root_command().try_get_matches() {
         Ok(m) => m,

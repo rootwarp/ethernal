@@ -232,11 +232,11 @@ test) re-run green.
   cancellation-vs-real preference. Observability-only (no output is written on any error path).
 
 **Acceptance criteria**
-- [ ] `global_cancel()` is initialized before the handler is installed (code-order asserted by
+- [x] `global_cancel()` is initialized before the handler is installed (code-order asserted by
   review; add a comment stating the invariant).
-- [ ] `key new`/`key recover` with an overflowing `--start-index`/`--count` → exit 2 with **zero**
+- [x] `key new`/`key recover` with an overflowing `--start-index`/`--count` → exit 2 with **zero**
   files written (integration test asserts empty output dir).
-- [ ] With two pubkeys failing for different reasons, the reported error is the lowest-index one on
+- [x] With two pubkeys failing for different reasons, the reported error is the lowest-index one on
   every run (unit test with deterministic failure injection).
 
 **Test plan** — integration test for the overflow-before-write property; `gen_cmd` unit test
@@ -442,7 +442,7 @@ require no action and are listed here only for completeness of the traceability 
 | H1 | done | 2e7f682 | review PASS (0 findings); S-2 token hygiene fixed |
 | H2 | done | 54f2700 | review PASS (0 findings) |
 | H3 | done | fc0daab | review PASS (0 findings) |
-| H4 | todo | | |
+| H4 | done | 3b6c66f | review PASS (0 findings) |
 | H5 | todo | | |
 | H6 | todo | | |
 | H7 | todo | | |

@@ -228,8 +228,9 @@ pub fn require_tty_for_new() -> Result<(), AppError> {
 /// Builds a validated [`KeyConfig`] from parsed flags.
 ///
 /// Validation order (mirrors `gen_cli::load_config` style): count → start-index
-/// → output-dir → mnemonic-passphrase form → passphrase-env, then confirmation
-/// banner. Bad `--count` / unwritable `--output-dir` → exit 2.
+/// → index-range overflow → output-dir → mnemonic-passphrase form →
+/// passphrase-env, then confirmation banner. Bad `--count` / overflowing
+/// range / unwritable `--output-dir` → exit 2.
 pub fn load_config(
     m: &ArgMatches,
     mode: KeyMode,
@@ -238,9 +239,7 @@ pub fn load_config(
     // 1. --count: default 1; must be ≥ 1.
     let count = *m.get_one::<u32>("count").unwrap();
     if count == 0 {
-        return Err(AppError::exit2(
-            "--count: value 0 is invalid; must be >= 1",
-        ));
+        return Err(AppError::exit2("--count: value 0 is invalid; must be >= 1"));
     }
 
     // 2. --start-index: recover only (default 0); new always starts at 0.
@@ -248,6 +247,12 @@ pub fn load_config(
         KeyMode::New => 0,
         KeyMode::Recover => *m.get_one::<u32>("start-index").unwrap(),
     };
+
+    // 2b. Index range must fit u32 before any ceremony/write (K3-L2). The
+    // inclusive last index is start_index + count - 1; count ≥ 1 here.
+    if start_index.checked_add(count - 1).is_none() {
+        return Err(AppError::exit2("--start-index + --count overflows u32"));
+    }
 
     // 3. --output-dir: required existing writable directory.
     let output_dir = m
@@ -386,10 +391,7 @@ mod tests {
         fn new() -> Tmp {
             static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!(
-                "key-cli-test-{}-{n}",
-                std::process::id()
-            ));
+            let p = std::env::temp_dir().join(format!("key-cli-test-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&p).unwrap();
             Tmp(p)
         }
@@ -440,6 +442,12 @@ mod tests {
         let m = parse_new(args).expect("clap parse ok");
         let mut banner = Vec::new();
         load_config(&m, KeyMode::New, &mut banner).expect_err("load should fail")
+    }
+
+    fn load_recover_err(args: &[&str]) -> AppError {
+        let m = parse_recover(args).expect("clap parse ok");
+        let mut banner = Vec::new();
+        load_config(&m, KeyMode::Recover, &mut banner).expect_err("load should fail")
     }
 
     // --- namespace shape ---
@@ -504,9 +512,15 @@ mod tests {
         assert_eq!(cfg.mode, KeyMode::Recover);
         assert!(banner.contains("start_index=0"));
 
-        let (cfg, banner) =
-            load_recover(&["--output-dir", dir.str(), "--start-index", "5", "--count", "3"])
-                .expect("ok");
+        let (cfg, banner) = load_recover(&[
+            "--output-dir",
+            dir.str(),
+            "--start-index",
+            "5",
+            "--count",
+            "3",
+        ])
+        .expect("ok");
         assert_eq!(cfg.start_index, 5);
         assert_eq!(cfg.count, 3);
         assert!(banner.contains("start_index=5"));
@@ -530,6 +544,44 @@ mod tests {
         let err = load_new_err(&["--output-dir", dir.str(), "--count", "0"]);
         assert_eq!(exit_code_for(&err), 2);
         assert!(err.to_string().contains("--count"));
+    }
+
+    // --- index-range overflow (K3-L2 / H4) ---
+
+    #[test]
+    fn start_index_plus_count_overflow_is_exit2() {
+        let dir = Tmp::new();
+        // start=u32::MAX, count=2 → last index overflows.
+        let err = load_recover_err(&[
+            "--output-dir",
+            dir.str(),
+            "--start-index",
+            "4294967295",
+            "--count",
+            "2",
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("overflows u32"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn start_index_max_with_count_one_ok() {
+        // Inclusive last index is MAX; does not overflow.
+        let dir = Tmp::new();
+        let (cfg, _) = load_recover(&[
+            "--output-dir",
+            dir.str(),
+            "--start-index",
+            "4294967295",
+            "--count",
+            "1",
+        ])
+        .expect("ok");
+        assert_eq!(cfg.start_index, u32::MAX);
+        assert_eq!(cfg.count, 1);
     }
 
     // --- output-dir validation ---
@@ -613,13 +665,8 @@ mod tests {
     #[test]
     fn mnemonic_passphrase_raw_value() {
         let dir = Tmp::new();
-        let (cfg, _) = load_new(&[
-            "--output-dir",
-            dir.str(),
-            "--mnemonic-passphrase",
-            "TREZOR",
-        ])
-        .unwrap();
+        let (cfg, _) =
+            load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase", "TREZOR"]).unwrap();
         assert_eq!(
             cfg.mnemonic_passphrase,
             MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()))
@@ -629,8 +676,7 @@ mod tests {
     #[test]
     fn mnemonic_passphrase_bare_is_prompt() {
         let dir = Tmp::new();
-        let (cfg, _) =
-            load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase"]).unwrap();
+        let (cfg, _) = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase"]).unwrap();
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Prompt);
     }
 
@@ -640,12 +686,7 @@ mod tests {
         let dir = Tmp::new();
         let var = format!("ETH_DEPOSIT_TEST_MNEMONIC_PW_{}", std::process::id());
         std::env::set_var(&var, "from-env");
-        let result = load_new(&[
-            "--output-dir",
-            dir.str(),
-            "--mnemonic-passphrase-env",
-            &var,
-        ]);
+        let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
         std::env::remove_var(&var);
         let (cfg, _) = result.expect("ok");
         match cfg.mnemonic_passphrase {
@@ -663,12 +704,7 @@ mod tests {
         let dir = Tmp::new();
         let var = format!("ETH_DEPOSIT_TEST_MNEMONIC_PW_EMPTY_{}", std::process::id());
         std::env::set_var(&var, "");
-        let result = load_new(&[
-            "--output-dir",
-            dir.str(),
-            "--mnemonic-passphrase-env",
-            &var,
-        ]);
+        let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
         std::env::remove_var(&var);
         let (cfg, _) = result.expect("empty mnemonic passphrase is valid");
         match cfg.mnemonic_passphrase {
@@ -681,7 +717,10 @@ mod tests {
     fn mnemonic_passphrase_debug_redacts_secrets() {
         let raw = MnemonicPassphraseForm::Raw(Zeroizing::new("SUPER_SECRET".into()));
         let dbg = format!("{raw:?}");
-        assert!(!dbg.contains("SUPER_SECRET"), "Debug leaked raw secret: {dbg}");
+        assert!(
+            !dbg.contains("SUPER_SECRET"),
+            "Debug leaked raw secret: {dbg}"
+        );
         assert!(dbg.contains("REDACTED"), "{dbg}");
 
         let env = MnemonicPassphraseForm::Env {
@@ -689,7 +728,10 @@ mod tests {
             value: Zeroizing::new("env-secret-value".into()),
         };
         let dbg = format!("{env:?}");
-        assert!(!dbg.contains("env-secret-value"), "Debug leaked env secret: {dbg}");
+        assert!(
+            !dbg.contains("env-secret-value"),
+            "Debug leaked env secret: {dbg}"
+        );
         assert!(dbg.contains("MNEMONIC_PW"), "var name should remain: {dbg}");
         assert!(dbg.contains("REDACTED"), "{dbg}");
 
@@ -702,7 +744,10 @@ mod tests {
             mnemonic_passphrase: raw,
         };
         let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains("SUPER_SECRET"), "KeyConfig Debug leaked: {dbg}");
+        assert!(
+            !dbg.contains("SUPER_SECRET"),
+            "KeyConfig Debug leaked: {dbg}"
+        );
     }
 
     #[test]
@@ -711,13 +756,7 @@ mod tests {
         let dir = Tmp::new();
         let var = format!("ETH_DEPOSIT_TEST_MNEMONIC_PW_UNSET_{}", std::process::id());
         std::env::remove_var(&var);
-        let m = parse_new(&[
-            "--output-dir",
-            dir.str(),
-            "--mnemonic-passphrase-env",
-            &var,
-        ])
-        .unwrap();
+        let m = parse_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]).unwrap();
         let mut banner = Vec::new();
         let err = load_config(&m, KeyMode::New, &mut banner).unwrap_err();
         assert_eq!(exit_code_for(&err), 2);

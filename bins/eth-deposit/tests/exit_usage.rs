@@ -133,6 +133,62 @@ fn key_recover_nonexistent_output_dir_exits_two() {
     );
 }
 
+/// H4 / K3-L2: overflowing `--start-index + --count` is rejected in load_config
+/// (exit 2) before any keystore write — output dir stays empty.
+#[test]
+fn key_recover_index_overflow_exits_two_no_writes() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = common::TempDir::new("key-recover-overflow");
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
+    let pw_var = format!("ETH_DEPOSIT_TEST_OVERFLOW_PW_{}", std::process::id());
+    let mut child = eth_deposit()
+        .args(["key", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--count",
+            "2",
+            "--start-index",
+            "4294967295",
+            "--passphrase-env",
+            &pw_var,
+        ])
+        .env(&pw_var, "password1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin
+            .write_all(mnemonic.as_bytes())
+            .expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "overflow: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("overflows u32") || stderr.contains("overflow"),
+        "expected overflow message, got: {stderr}"
+    );
+    // Config error must not leave any files on disk.
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read out dir")
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "overflow must write nothing; found {entries:?}"
+    );
+}
+
 /// `key recover` is exempt from the TTY guard: piped mnemonic on non-TTY stdin
 /// is accepted (F-10). Uses --passphrase-env so no interactive keystore prompt.
 #[test]
@@ -162,7 +218,9 @@ fn key_recover_validates_without_tty() {
         .expect("spawn");
     {
         let mut stdin = child.stdin.take().expect("stdin");
-        stdin.write_all(mnemonic.as_bytes()).expect("write mnemonic");
+        stdin
+            .write_all(mnemonic.as_bytes())
+            .expect("write mnemonic");
     }
     let out = child.wait_with_output().expect("wait");
     assert!(
@@ -187,5 +245,9 @@ fn key_recover_validates_without_tty() {
                 .starts_with("keystore-m_12381_3600_1_")
         })
         .collect();
-    assert_eq!(entries.len(), 1, "expected one keystore at index 1: {entries:?}");
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected one keystore at index 1: {entries:?}"
+    );
 }

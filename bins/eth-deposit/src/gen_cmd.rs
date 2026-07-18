@@ -163,7 +163,10 @@ pub fn run_gen_with_deps(
     let (res_tx, res_rx) = mpsc::channel::<(usize, Result<Entry, AppError>)>();
 
     let mut entries: Vec<Option<Entry>> = vec![None; n];
-    let mut first_err: Option<AppError> = None;
+    // (index, error): keep the lowest-index non-cancellation error so the
+    // reported exit code is stable under worker scheduling. Prefer a real
+    // error over cascading cancellation (same preference as before).
+    let mut selected_err: Option<(usize, AppError)> = None;
     let mut done = 0usize;
 
     std::thread::scope(|s| {
@@ -210,9 +213,7 @@ pub fn run_gen_with_deps(
         }
         drop(res_tx);
 
-        // Collect results, preserving input order via the index. Prefer the
-        // first non-cancellation error so the returned error reflects the
-        // root cause rather than the cascading cancellation.
+        // Collect results, preserving input order via the index.
         for (idx, res) in res_rx {
             match res {
                 Ok(entry) => {
@@ -223,12 +224,24 @@ pub fn run_gen_with_deps(
                     }
                 }
                 Err(e) => {
-                    let replace = match &first_err {
+                    let replace = match &selected_err {
                         None => true,
-                        Some(cur) => is_cancelled_err(cur) && !is_cancelled_err(&e),
+                        Some((cur_idx, cur_err)) => {
+                            let cur_cancel = is_cancelled_err(cur_err);
+                            let new_cancel = is_cancelled_err(&e);
+                            if cur_cancel && !new_cancel {
+                                // Prefer a real failure over cascading cancel.
+                                true
+                            } else if !cur_cancel && new_cancel {
+                                false
+                            } else {
+                                // Same class: lowest index wins (stable under scheduling).
+                                idx < *cur_idx
+                            }
+                        }
                     };
                     if replace {
-                        first_err = Some(e);
+                        selected_err = Some((idx, e));
                     }
                     worker_cancel.cancel();
                 }
@@ -236,7 +249,7 @@ pub fn run_gen_with_deps(
         }
     });
 
-    if let Some(e) = first_err {
+    if let Some((_, e)) = selected_err {
         return Err(e);
     }
     let entries: Vec<Entry> = entries.into_iter().map(|e| e.unwrap()).collect();
@@ -1338,6 +1351,91 @@ mod tests {
         let err = run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).unwrap_err();
         // The propagated error is the keystore-missing (exit 2), not a cancellation.
         assert_eq!(exit_code_for(&err), 2);
+    }
+
+    // H4 / K5-L3: heterogeneous per-pubkey failures report the lowest-index
+    // non-cancellation error stably (not first-received under scheduling).
+    #[test]
+    fn heterogeneous_failures_report_lowest_index() {
+        let pks = multi_pks(3);
+        // Index 0 → WrongPassphrase (exit 3); index 2 → KeystoreMissing (exit 2).
+        // Index 1 succeeds. Lowest real error must win regardless of arrival order.
+        let loader = FakeLoader {
+            f: Box::new(|path: &Path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                if name == "0.json" {
+                    return Err(KeystoreError::WrongPassphrase {
+                        detail: "bad checksum".into(),
+                    });
+                }
+                if name == "2.json" {
+                    return Err(KeystoreError::KeystoreMissing {
+                        path: path.display().to_string(),
+                    });
+                }
+                let raw = std::fs::read(path).unwrap();
+                let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+                let pkhex = v["pubkey"].as_str().unwrap().to_string();
+                let first = u8::from_str_radix(&pkhex[..2], 16).unwrap();
+                let mut secret = vec![0u8; 32];
+                secret[0] = first;
+                Ok(Key {
+                    secret,
+                    pubkey_hex: pkhex,
+                })
+            }),
+        };
+        let signers = signer_map(&pks);
+        let verifier = FakeVerifier { ok: true };
+        let init_bls = || Ok(());
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let logger = discard_logger();
+
+        // Repeat under max parallelism so first-received selection would flake.
+        for _ in 0..20 {
+            let (_dir, idx) = index_over(&pks);
+            let scanner = move |_: &Path| Ok(idx.clone());
+            let mut writer = FakeWriter {
+                path: "/out".into(),
+                sha: "x".into(),
+                err: false,
+            };
+            let mut summary = Vec::<u8>::new();
+            let mut cfg = base_cfg(pks.clone());
+            cfg.parallel = 3;
+            let mut deps = GenDeps {
+                init_bls: &init_bls,
+                scanner: &scanner,
+                loader: &loader,
+                new_signer: &new_signer,
+                verifier: &verifier,
+                writer: &mut writer,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                verify_deposit_cli: &verify,
+            };
+            let err = run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).unwrap_err();
+            assert_eq!(
+                exit_code_for(&err),
+                3,
+                "lowest-index real error is WrongPassphrase (exit 3); got {err}"
+            );
+            assert!(
+                matches!(
+                    err,
+                    AppError::Keystore(KeystoreError::WrongPassphrase { .. })
+                ),
+                "expected WrongPassphrase from index 0, got {err}"
+            );
+        }
     }
 
     // --- progress (Go: TestProgress_*) — adapted: the non-TTY path logs via the
