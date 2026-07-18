@@ -13,7 +13,7 @@ use eth_deposit_core::bip39::{self, Bip39Error};
 use eth_deposit_core::cancel::CancelToken;
 use eth_deposit_core::entropy::{Entropy, EntropyError, OsEntropy};
 use eth_deposit_core::hd::{self, KeyPath};
-use eth_deposit_core::output::write_new_0600;
+use eth_deposit_core::output::{write_new_0600, OutputError};
 use eth_deposit_keystore::encrypt::{encrypt, keystore_filename, EncryptInput};
 use eth_deposit_keystore::{
     require_min_len, EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource,
@@ -363,9 +363,14 @@ fn finish_from_mnemonic(
 
         check_cancel(cancel)?;
 
-        let filename = keystore_filename(&path_str, deps.now_unix);
-        let final_path = out_dir.join(&filename);
-        write_new_0600(&final_path, &json).map_err(map_write_err)?;
+        // Filename is HD-path + whole-second timestamp (staking-deposit-cli
+        // convention). On same-second collision, retry once at now_unix+1
+        // before propagating AlreadyExists / exit 3 (K3-L5 / H5). Never
+        // overwrites: write_new_0600 stays create_new-exclusive.
+        let final_path = match write_keystore_at(out_dir, &path_str, deps.now_unix, &json) {
+            Ok(p) => p,
+            Err(e) => return Err(map_write_err(e)),
+        };
 
         let path_display = final_path.display().to_string();
         emit_key_progress(
@@ -551,11 +556,36 @@ fn map_encrypt_err(e: KeystoreError) -> AppError {
     AppError::Keystore(e)
 }
 
-fn map_write_err(e: eth_deposit_core::output::OutputError) -> AppError {
+fn map_write_err(e: OutputError) -> AppError {
     // Call-site Exit{3}: gen's AppError::Output must stay → 1 (architecture fork a).
     AppError::Exit {
         msg: e.to_string(),
         code: 3,
+    }
+}
+
+/// Write `json` to the timestamped keystore path for `path_str`.
+///
+/// On [`OutputError::AlreadyExists`] for `now_unix`, retries once at
+/// `now_unix + 1`. A collision at both timestamps propagates `AlreadyExists`.
+fn write_keystore_at(
+    out_dir: &Path,
+    path_str: &str,
+    now_unix: i64,
+    json: &[u8],
+) -> Result<std::path::PathBuf, OutputError> {
+    let filename = keystore_filename(path_str, now_unix);
+    let final_path = out_dir.join(&filename);
+    match write_new_0600(&final_path, json) {
+        Ok(()) => Ok(final_path),
+        Err(OutputError::AlreadyExists) => {
+            let retry_ts = now_unix + 1;
+            let filename = keystore_filename(path_str, retry_ts);
+            let final_path = out_dir.join(&filename);
+            write_new_0600(&final_path, json)?;
+            Ok(final_path)
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -613,7 +643,7 @@ impl MnemonicSource for StdinMnemonicSource {
         self.write_prompt(prompt)?;
         let mut line = Zeroizing::new(String::new());
         io::stdin()
-            .read_line(&mut *line)
+            .read_line(&mut line)
             .map_err(|e| AppError::exit2(format!("read input: {e}")))?;
         while line.ends_with('\n') || line.ends_with('\r') {
             line.pop();
@@ -694,7 +724,7 @@ impl MnemonicSource for RecoverMnemonicSource {
             // Zeroizing from the first allocation (S-1).
             let mut line = Zeroizing::new(String::new());
             io::stdin()
-                .read_line(&mut *line)
+                .read_line(&mut line)
                 .map_err(|e| AppError::exit2(format!("read mnemonic: {e}")))?;
             while line.ends_with('\n') || line.ends_with('\r') {
                 line.pop();
@@ -705,7 +735,7 @@ impl MnemonicSource for RecoverMnemonicSource {
             // plain uncleared buffer (S-1 / architecture lifecycle).
             let mut buf = Zeroizing::new(String::new());
             io::stdin()
-                .read_to_string(&mut *buf)
+                .read_to_string(&mut buf)
                 .map_err(|e| AppError::exit2(format!("read mnemonic from stdin: {e}")))?;
             let mnemonic = zeroizing_trim(buf);
             if mnemonic.is_empty() {
@@ -1344,10 +1374,10 @@ mod tests {
         assert!(dir.keystore_files().is_empty());
     }
 
-    // --- overwrite refuse ---
+    // --- overwrite refuse / same-second collision (H5 / K3-L5) ---
 
     #[test]
-    fn refuse_overwrite_exit3() {
+    fn same_second_collision_retries_ts_plus_1() {
         let dir = Tmp::new();
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
@@ -1355,15 +1385,58 @@ mod tests {
         let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
         run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap();
 
-        // Same FixedEntropy + same now_unix → same filename → AlreadyExists.
+        let files = dir.keystore_files();
+        assert_eq!(files.len(), 1);
+        let name0 = files[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name0.ends_with("-1700000000.json"),
+            "first write at frozen now_unix: {name0}"
+        );
+
+        // Same FixedEntropy + same now_unix → collision at ts; H5 retries ts+1.
         let entropy2 = FixedEntropy::zero_mnemonic();
         let lines2 = ScriptedLines::new(vec![ZERO_MNEMONIC]);
-        let err = run_with(&cfg, &entropy2, &pw, &lines2, &CancelToken::new()).unwrap_err();
+        run_with(&cfg, &entropy2, &pw, &lines2, &CancelToken::new()).unwrap();
+
+        let mut names: Vec<String> = dir
+            .keystore_files()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 2, "names={names:?}");
+        assert!(
+            names.iter().any(|n| n.ends_with("-1700000000.json")),
+            "ts preserved: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.ends_with("-1700000001.json")),
+            "retry at ts+1: {names:?}"
+        );
+    }
+
+    #[test]
+    fn double_timestamp_collision_exit3() {
+        let dir = Tmp::new();
+        let cfg = base_cfg(dir.str(), 1);
+        // Pre-plant both ts and ts+1 so the one-bump retry still collides.
+        let at_ts = dir.0.join("keystore-m_12381_3600_0_0_0-1700000000.json");
+        let at_ts1 = dir.0.join("keystore-m_12381_3600_0_0_0-1700000001.json");
+        std::fs::write(&at_ts, b"existing-ts").unwrap();
+        std::fs::write(&at_ts1, b"existing-ts1").unwrap();
+
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let err = run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap_err();
         assert_eq!(exit_code_for(&err), 3, "err={err}");
         assert!(
             err.to_string().contains("already exists") || err.to_string().contains("exists"),
             "err={err}"
         );
+        // Never overwrites.
+        assert_eq!(std::fs::read(&at_ts).unwrap(), b"existing-ts");
+        assert_eq!(std::fs::read(&at_ts1).unwrap(), b"existing-ts1");
     }
 
     // --- path shape ---

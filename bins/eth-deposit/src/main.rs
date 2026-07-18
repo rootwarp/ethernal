@@ -16,6 +16,7 @@
 mod build_cmd;
 mod config;
 mod errors;
+mod fs_util;
 mod gen_cli;
 mod gen_cmd;
 mod key_cli;

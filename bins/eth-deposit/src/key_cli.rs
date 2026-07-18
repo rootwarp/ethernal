@@ -325,9 +325,8 @@ fn resolve_mnemonic_passphrase(m: &ArgMatches) -> Result<MnemonicPassphraseForm,
     Ok(MnemonicPassphraseForm::Empty)
 }
 
-/// Checks that dir exists and the process can write to it, probing writability
-/// by creating and immediately removing a temporary file. Mirrors
-/// `gen_cli::validate_output_dir`.
+/// Checks that dir exists and the process can write to it via the shared
+/// exclusive create+remove probe ([`crate::fs_util::probe_dir_writable`]).
 fn validate_output_dir(dir: &str) -> Result<(), String> {
     let meta = match std::fs::metadata(dir) {
         Ok(m) => m,
@@ -340,15 +339,8 @@ fn validate_output_dir(dir: &str) -> Result<(), String> {
         return Err(format!("\"{dir}\" is not a directory"));
     }
 
-    let probe = Path::new(dir).join(format!(".eth-deposit-probe-{}", std::process::id()));
-    match std::fs::File::create(&probe) {
-        Ok(f) => {
-            drop(f);
-            let _ = std::fs::remove_file(&probe);
-            Ok(())
-        }
-        Err(e) => Err(format!("directory \"{dir}\" is not writable: {e}")),
-    }
+    crate::fs_util::probe_dir_writable(Path::new(dir))
+        .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
 }
 
 /// Confirmation banner to stderr before the (future) pipeline runs.
@@ -635,7 +627,7 @@ mod tests {
         let dir = Tmp::new();
         let locked = dir.0.join("locked");
         std::fs::create_dir(&locked).unwrap();
-        // Drop write bit for owner/group/other; probe File::create must fail.
+        // Drop write bit for owner/group/other; exclusive probe create must fail.
         let mut perms = std::fs::metadata(&locked).unwrap().permissions();
         perms.set_mode(0o555);
         std::fs::set_permissions(&locked, perms).unwrap();

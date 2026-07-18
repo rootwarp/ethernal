@@ -357,8 +357,8 @@ fn validate_keystore_dir(dir: &str) -> Result<(), String> {
         .map_err(|e| format!("cannot read keystore directory \"{dir}\": {e}"))
 }
 
-/// Checks that dir exists and the process can write to it, probing
-/// writability by creating and immediately removing a temporary file.
+/// Checks that dir exists and the process can write to it via the shared
+/// exclusive create+remove probe ([`crate::fs_util::probe_dir_writable`]).
 fn validate_output_dir(dir: &str) -> Result<(), String> {
     let meta = match std::fs::metadata(dir) {
         Ok(m) => m,
@@ -371,16 +371,8 @@ fn validate_output_dir(dir: &str) -> Result<(), String> {
         return Err(format!("\"{dir}\" is not a directory"));
     }
 
-    // Probe writability: create a temp file then remove it immediately.
-    let probe = Path::new(dir).join(format!(".eth-deposit-probe-{}", std::process::id()));
-    match std::fs::File::create(&probe) {
-        Ok(f) => {
-            drop(f);
-            let _ = std::fs::remove_file(&probe);
-            Ok(())
-        }
-        Err(e) => Err(format!("directory \"{dir}\" is not writable: {e}")),
-    }
+    crate::fs_util::probe_dir_writable(Path::new(dir))
+        .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
 }
 
 /// The network name for display in the banner. Mainnet is shown in uppercase

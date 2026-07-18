@@ -266,12 +266,12 @@ injecting per-index failures and asserting stable selection; full suite green.
   `deps.now_unix`.
 
 **Acceptance criteria**
-- [ ] Probe path: a symlink pre-planted at the probe name causes a clean "not writable"-class
+- [x] Probe path: a symlink pre-planted at the probe name causes a clean "not writable"-class
   error (exit 2) and the symlink **target is untouched** — asserted by a test with a symlink to a
   canary file.
-- [ ] Probe failure to remove surfaces as an error, not silence.
-- [ ] One shared probe helper used by both `key` and `gen` CLIs.
-- [ ] With a pre-existing keystore at the exact timestamped path, the write lands at `ts+1`
+- [x] Probe failure to remove surfaces as an error, not silence.
+- [x] One shared probe helper used by both `key` and `gen` CLIs.
+- [x] With a pre-existing keystore at the exact timestamped path, the write lands at `ts+1`
   instead of failing; a collision at both `ts` and `ts+1` → exit 3 (`AlreadyExists`), matching the
   current refuse-overwrite contract.
 
@@ -443,7 +443,7 @@ require no action and are listed here only for completeness of the traceability 
 | H2 | done | 54f2700 | review PASS (0 findings) |
 | H3 | done | fc0daab | review PASS (0 findings) |
 | H4 | done | 3b6c66f | review PASS (0 findings) |
-| H5 | todo | | |
+| H5 | done | 1997b5e | review PASS (0 blocking) |
 | H6 | todo | | |
 | H7 | todo | | |
 | H8 | todo | | |
