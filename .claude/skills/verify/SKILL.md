@@ -1,11 +1,11 @@
 ---
 name: verify
-description: Verify the eth-deposit CLI end-to-end (gen → build → sign → send) using repo fixtures and a local anvil node.
+description: Verify the ethernal CLI end-to-end (gen → build → sign → send) using repo fixtures and a local anvil node.
 ---
 
-# Verify eth-deposit
+# Verify ethernal
 
-Build: `make build` (repo root) → `target/release/eth-deposit`. Ledger hardware support needs `cargo build --release --features ledger`; without the feature `--signer ledger` exits 3.
+Build: `make build` (repo root) → `target/release/ethernal`. Ledger hardware support needs `cargo build --release --features ledger`; without the feature `--signer ledger` exits 3.
 
 ## Fixtures (all synthetic, committed)
 
@@ -15,9 +15,9 @@ Build: `make build` (repo root) → `target/release/eth-deposit`. Ledger hardwar
 
 ## Golden checks
 
-- gen: `KEYSTORE_PASSPHRASE=$(cat testdata/hoodi/passphrase.txt) target/release/eth-deposit gen --network hoodi --keystore-dir testdata/hoodi/keystores --pubkeys $(cat testdata/hoodi/pubkeys.txt) --output-dir <tmp> --passphrase-env KEYSTORE_PASSPHRASE` → diff vs `deposit_data-expected.json`
-- build: `target/release/eth-deposit build --network holesky --input-file testdata/phase2/holesky/deposit_data_single.json` → diff vs `unsigned_tx_golden.json`
-- sign: `ETH_DEPOSIT_TX_PRIVATE_KEY=$(cat testdata/phase3/holesky/private_key.txt) target/release/eth-deposit sign --signer local --input testdata/phase3/holesky/unsigned_tx.json` → diff vs `signed_tx_golden.json`
+- gen: `KEYSTORE_PASSPHRASE=$(cat testdata/hoodi/passphrase.txt) target/release/ethernal gen --network hoodi --keystore-dir testdata/hoodi/keystores --pubkeys $(cat testdata/hoodi/pubkeys.txt) --output-dir <tmp> --passphrase-env KEYSTORE_PASSPHRASE` → diff vs `deposit_data-expected.json`
+- build: `target/release/ethernal build --network holesky --input-file testdata/phase2/holesky/deposit_data_single.json` → diff vs `unsigned_tx_golden.json`
+- sign: `ETHERNAL_TX_PRIVATE_KEY=$(cat testdata/phase3/holesky/private_key.txt) target/release/ethernal sign --signer local --input testdata/phase3/holesky/unsigned_tx.json` → diff vs `signed_tx_golden.json`
 
 ## Live broadcast (anvil)
 
@@ -29,11 +29,11 @@ cast rpc --rpc-url http://127.0.0.1:8599 anvil_setBalance 0x1a642f0E3c3aF545E7Ac
 Full pipe chain (all four stages, stdin/stdout):
 
 ```sh
-target/release/eth-deposit gen --network hoodi --keystore-dir testdata/hoodi/keystores \
+target/release/ethernal gen --network hoodi --keystore-dir testdata/hoodi/keystores \
   --pubkeys $(cat testdata/hoodi/pubkeys.txt) --output-dir <tmp> --dry-run --passphrase-env KEYSTORE_PASSPHRASE \
- | target/release/eth-deposit build --network hoodi --input-file - --nonce <N> \
- | target/release/eth-deposit sign --signer local --input - \
- | target/release/eth-deposit send --yes --input - --rpc-url http://127.0.0.1:8599 --wait-for-receipt
+ | target/release/ethernal build --network hoodi --input-file - --nonce <N> \
+ | target/release/ethernal sign --signer local --input - \
+ | target/release/ethernal send --yes --input - --rpc-url http://127.0.0.1:8599 --wait-for-receipt
 ```
 
 Verify on-chain: `cast tx --rpc-url http://127.0.0.1:8599 <hash>`; deposit contract balance grows 32 ETH per send.
