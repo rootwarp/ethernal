@@ -127,12 +127,14 @@ without pulling `chrono`/`time` into the workspace. Satisfies F-4 (geth-recogniz
   only for the `encrypt_v3` module scaffold + `sha3`/manifest already registered.
 
 **Acceptance criteria**
-- [ ] `v3_filename(addr, 1_752_849_725, 123_456_789)` (2026-07-18T14:22:05.123456789Z) ==
+- [x] `v3_filename(addr, 1_784_384_525, 123_456_789)` (2026-07-18T14:22:05.123456789Z) ==
   `UTC--2026-07-18T14-22-05.123456789Z--<40-hex-addr-no-0x>` — F-4 (architecture §"Filename +
-  collision policy"; research/web3-v3-keystore.md §"Filename convention").
-- [ ] colons are dashes, nanos are 9 digits (zero-padded), the address is lowercase without `0x`, and
+  collision policy"; research/web3-v3-keystore.md §"Filename convention"). Note: plan originally
+  listed `1_752_849_725` which is 2025-07-18T14:42:05Z; correct secs for the intended civil time are
+  `1_784_384_525`.
+- [x] colons are dashes, nanos are 9 digits (zero-padded), the address is lowercase without `0x`, and
   the literal `Z` is present — F-4.
-- [ ] `civil_from_days` is a pure function with no `unsafe` and no `chrono`/`time`/`libc` dependency;
+- [x] `civil_from_days` is a pure function with no `unsafe` and no `chrono`/`time`/`libc` dependency;
   `cargo tree -p ethernal-keystore` gains no calendar crate — R6, D-1.
 
 **Test plan**

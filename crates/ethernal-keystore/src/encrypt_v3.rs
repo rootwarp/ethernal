@@ -187,6 +187,39 @@ pub fn encrypt_v3(input: &EncryptV3Input<'_>) -> Result<Vec<u8>, KeystoreError> 
     serde_json::to_vec(&out).map_err(|err| encrypt_err(format!("serialize: {err}")))
 }
 
+/// geth keystore filename: `UTC--YYYY-MM-DDTHH-MM-SS.<9-nanos>Z--<40-hex-addr>`.
+///
+/// Colons are rendered as dashes (filesystem-safe). Address is lowercase hex
+/// with no `0x`. Pure: calendar conversion is hand-rolled
+/// ([`civil_from_days`]); no `chrono`/`time`/`libc`.
+pub fn v3_filename(address: &[u8; 20], unix_secs: i64, nanos: u32) -> String {
+    let days = unix_secs.div_euclid(86_400);
+    let tod = unix_secs.rem_euclid(86_400) as u32;
+    let h = tod / 3600;
+    let m = (tod % 3600) / 60;
+    let s = tod % 60;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "UTC--{year:04}-{month:02}-{day:02}T{h:02}-{m:02}-{s:02}.{nanos:09}Z--{}",
+        hex::encode(address)
+    )
+}
+
+/// Converts days since the Unix epoch (1970-01-01) to `(year, month, day)`.
+/// Howard Hinnant's `civil_from_days` algorithm (~15 lines, no `unsafe`).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,5 +478,83 @@ mod tests {
         assert_eq!(ScryptParams::STANDARD.r, 8);
         assert_eq!(ScryptParams::STANDARD.p, 1);
         assert_eq!(ScryptParams::STANDARD.dklen, 32);
+    }
+
+    /// Fixed vector: 2026-07-18T14:22:05.123456789Z → geth UTC-- filename (F-4).
+    ///
+    /// Plan docs quoted unix `1_752_849_725` for this civil time; that value is
+    /// actually 2025-07-18T14:42:05Z. The vector below uses the correct unix
+    /// seconds for the intended civil timestamp.
+    #[test]
+    fn v3_filename_fixed_vector() {
+        let addr: [u8; 20] = [
+            0x98, 0x58, 0xef, 0xfd, 0x23, 0x2b, 0x40, 0x33, 0xe4, 0x7d, 0x90, 0x00, 0x3d, 0x41,
+            0xec, 0x34, 0xec, 0xae, 0xda, 0x94,
+        ];
+        // 2026-07-18T14:22:05Z
+        let name = v3_filename(&addr, 1_784_384_525, 123_456_789);
+        assert_eq!(
+            name,
+            "UTC--2026-07-18T14-22-05.123456789Z--9858effd232b4033e47d90003d41ec34ecaeda94"
+        );
+        // Format guards (F-4).
+        assert!(!name.contains(':'));
+        assert!(name.contains('Z'));
+        assert!(!name.contains("0x"));
+        assert_eq!(
+            &name[name.len() - 40..],
+            name[name.len() - 40..].to_ascii_lowercase()
+        );
+        // Plan-quoted unix secs: document actual civil time for that value.
+        let plan_ts = v3_filename(&addr, 1_752_849_725, 123_456_789);
+        assert_eq!(
+            plan_ts,
+            "UTC--2025-07-18T14-42-05.123456789Z--9858effd232b4033e47d90003d41ec34ecaeda94"
+        );
+    }
+
+    /// Leap day and month-boundary coverage for [`civil_from_days`].
+    #[test]
+    fn v3_filename_leap_year_and_month_boundary() {
+        let addr = [0xabu8; 20];
+        let addr_hex = "abababababababababababababababababababab";
+
+        // 2024-02-29T00:00:00Z (leap day)
+        let leap = v3_filename(&addr, 1_709_164_800, 0);
+        assert_eq!(
+            leap,
+            format!("UTC--2024-02-29T00-00-00.000000000Z--{addr_hex}")
+        );
+
+        // 2024-03-01T00:00:00Z (day after leap day)
+        let after_leap = v3_filename(&addr, 1_709_251_200, 1);
+        assert_eq!(
+            after_leap,
+            format!("UTC--2024-03-01T00-00-00.000000001Z--{addr_hex}")
+        );
+
+        // 2023-12-31T23:59:59Z (year/month boundary)
+        let nye = v3_filename(&addr, 1_704_067_199, 999_999_999);
+        assert_eq!(
+            nye,
+            format!("UTC--2023-12-31T23-59-59.999999999Z--{addr_hex}")
+        );
+
+        // 2024-01-01T00:00:00Z
+        let new_year = v3_filename(&addr, 1_704_067_200, 0);
+        assert_eq!(
+            new_year,
+            format!("UTC--2024-01-01T00-00-00.000000000Z--{addr_hex}")
+        );
+    }
+
+    #[test]
+    fn civil_from_days_known_points() {
+        // 1970-01-01
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        // 2000-02-29 (leap)
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        // 2026-07-18
+        assert_eq!(civil_from_days(20_652), (2026, 7, 18));
     }
 }
