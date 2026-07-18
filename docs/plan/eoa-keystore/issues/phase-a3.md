@@ -253,14 +253,14 @@ secret-hygiene test proving no secret reaches stdout/stderr/logs. Satisfies F-9 
   display to `tty_writer`, and assert the secrets never appear in captured stdout/stderr/logger.
 
 **Acceptance criteria**
-- [ ] exit map holds: `Bip32Error` (derive master/child) → 3; `encrypt_v3` failure → 3;
+- [x] exit map holds: `Bip32Error` (derive master/child) → 3; `encrypt_v3` failure → 3;
   `secret_to_address` `InvalidKey` → 3; keystore write (incl. overwrite-refusal) → 3 at the call site;
   bad `--count`/non-TTY `new`/passphrase `<8`/bad range → 2; ceremony mismatch/abort + SIGINT → 4;
   unexpected-internal stays 1 — F-9 (architecture §"Exit-code mapping").
-- [ ] the secret-hygiene test asserts the mnemonic, seed, **chain codes**, **scalar/secret bytes**,
+- [x] the secret-hygiene test asserts the mnemonic, seed, **chain codes**, **scalar/secret bytes**,
   and **both** passphrases (raw + hex) never appear in stdout/stderr/logger buffers; the one-time
   mnemonic display goes **only** to `tty_writer`; the **address is present** (public) — S-2, G5.
-- [ ] `gen`'s `OutputError → 1` contract is unchanged (its writer-error test still passes) —
+- [x] `gen`'s `OutputError → 1` contract is unchanged (its writer-error test still passes) —
   regression (architecture §"Exit-code mapping").
 
 **Test plan**

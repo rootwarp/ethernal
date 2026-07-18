@@ -354,7 +354,7 @@ fn print_account_summary(w: &mut dyn Write, written: &[(String, String)]) {
 }
 
 // ---------------------------------------------------------------------------
-// Error mapping (call-site; AppError::Bip32 arm lands in A3-5)
+// Error mapping
 // ---------------------------------------------------------------------------
 
 fn map_entropy_err(e: EntropyError) -> AppError {
@@ -365,12 +365,9 @@ fn map_bip39_err(e: Bip39Error) -> AppError {
     AppError::Bip39(e)
 }
 
-/// Minimal mapping until A3-5 wires `AppError::Bip32` → exit 3.
+/// BIP-32 derive failure → `AppError::Bip32` → exit 3 (A3-5).
 fn map_bip32_err(e: Bip32Error) -> AppError {
-    AppError::Exit {
-        msg: e.to_string(),
-        code: 3,
-    }
+    AppError::from(e)
 }
 
 fn map_signer_err(e: SignerError) -> AppError {
@@ -433,7 +430,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// All-zero 32-byte entropy → `abandon` × 23 + `art` (24 words).
     const ZERO_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
@@ -1021,5 +1018,208 @@ mod tests {
         // Never overwrites.
         assert_eq!(std::fs::read(&at_ts).unwrap(), b"existing-ts");
         assert_eq!(std::fs::read(&at_ts1).unwrap(), b"existing-ts1");
+    }
+
+    // =========================================================================
+    // A3-5 secret hygiene (S-2 / G5)
+    // =========================================================================
+
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+    impl Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Secrets (mnemonic, seed, chain codes, scalar, both passphrases — raw +
+    /// hex) must never appear in summary/logger; mnemonic display is only on
+    /// `tty_writer`. Public address must still appear in the summary.
+    #[test]
+    fn secret_hygiene_account_new_buffers() {
+        let dir = Tmp::new();
+        let mut cfg = base_cfg(dir.str(), 1);
+        // Distinct mnemonic passphrase so we can grep for it.
+        cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+
+        let keystore_pw_plain = "password1";
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(keystore_pw_plain.as_bytes().to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(
+            Level::Debug,
+            Format::Text,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        {
+            let mut deps = AccountDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::Tty,
+                logger: &logger,
+                timestamp: TS,
+            };
+            run_account_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+
+        let tty_s = String::from_utf8(tty).expect("tty utf8");
+        let summary_s = String::from_utf8(summary).expect("summary utf8");
+        let logs = logbuf.lock().unwrap().clone();
+        let logs_s = String::from_utf8_lossy(&logs).into_owned();
+
+        // Mnemonic display: only on tty_writer (S-2).
+        assert!(
+            tty_s.contains(ZERO_MNEMONIC),
+            "ceremony must display mnemonic on tty_writer"
+        );
+        assert!(
+            !summary_s.contains(ZERO_MNEMONIC),
+            "mnemonic leaked to summary/stderr: {summary_s}"
+        );
+        assert!(
+            !logs_s.contains(ZERO_MNEMONIC),
+            "mnemonic leaked to logger: {logs_s}"
+        );
+
+        // Seed (24-word abandon…art + TREZOR).
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR").unwrap();
+        let seed_hex = hex::encode(seed.as_slice());
+        assert_absent_hex_and_raw(&summary_s, &logs_s, &logs, "seed", seed.as_slice());
+
+        // Leaf secret scalar for index 0 + EIP-55 address (public — must appear).
+        let derived =
+            hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
+                .unwrap();
+        let sk = derived.secret_bytes();
+        let sk_hex = hex::encode(sk.as_slice());
+        assert_absent_hex_and_raw(&summary_s, &logs_s, &logs, "scalar", sk.as_slice());
+
+        let addr = secret_to_address(&sk).unwrap();
+        let eip55 = eip55_checksum(&addr);
+        assert!(
+            summary_s.contains(&eip55),
+            "public address must appear in summary: {summary_s}"
+        );
+
+        // Chain codes along m → m/44'/60'/0'/0/0 (secret-equivalent; S-2).
+        // Hardcoded from independent BIP-32 CKD over the TREZOR seed above.
+        const CHAIN_CODES: &[&str] = &[
+            "61ccb2bbe7d2a4fccd5f418ee931db7cbac9a153ec43b0ae3759ff991e4d23d1", // m
+            "906df52af7348b60add660bee8a0f1833c24a552d9010d36bd08221d94bf05b0", // 44'
+            "be9a124c99b5a419339ed182dea99f7b2c4245afd3e760dd1c5f2f04a964870d", // 60'
+            "16b22c7161859d083b0c4a524cc66a5c7d273ceda6ef3b85860b7767af74a2fe", // 0'
+            "381c02c65b5ae52d0ff0f345b3a1222cb793dabaf115ebbe06f211bcbf126f9b", // 0
+            "e899041cd74c949dd565feda4d833d547944a73d33c0202070ed0f48bb63ee78", // 0 (leaf)
+        ];
+        for (i, cc_hex) in CHAIN_CODES.iter().enumerate() {
+            assert!(
+                !summary_s.contains(cc_hex) && !logs_s.contains(cc_hex),
+                "chain code {i} hex leaked"
+            );
+            let cc = hex::decode(cc_hex).expect("chain code hex");
+            assert!(
+                !summary_s
+                    .as_bytes()
+                    .windows(cc.len())
+                    .any(|w| w == cc.as_slice())
+                    && !logs.windows(cc.len()).any(|w| w == cc.as_slice()),
+                "chain code {i} raw leaked"
+            );
+        }
+
+        // Intermediate path secrets (also never on buffers).
+        const PATH_SKS: &[&str] = &[
+            "c8b4073ccfcc63475c3d5202c6594484ee4e77b867cde3c3b46432fd71b467ae", // m
+            "06d0aff0cc6d9b921d324b218e27f9bc3eddda207265751a5798eb62bf8ff20e",
+            "45b1b541e0474b02dd9d4709f9d3dd3f853ea6b54275fbb4ea281f52a4d46e21",
+            "a64c6c8885fe7f18d9c8d054ed747c6d56f37400852d80acadc49bbc8d61924e",
+            "18150dbeb529fdb3d678fcb75e77256d846b253d9071a04aba125aa6a82747e6",
+        ];
+        for (i, skh) in PATH_SKS.iter().enumerate() {
+            assert!(
+                !summary_s.contains(skh) && !logs_s.contains(skh),
+                "path secret {i} hex leaked"
+            );
+        }
+        assert_eq!(
+            sk_hex,
+            "f9399e5d4ddb63856a95268e2806def3ea55c1fcac22f90a5de3a72667a9408c"
+        );
+
+        // Keystore passphrase (raw + hex).
+        assert!(
+            !summary_s.contains(keystore_pw_plain) && !logs_s.contains(keystore_pw_plain),
+            "keystore passphrase leaked"
+        );
+        let ks_hex = hex::encode(keystore_pw_plain.as_bytes());
+        assert!(
+            !summary_s.contains(&ks_hex) && !logs_s.contains(&ks_hex),
+            "keystore passphrase hex leaked"
+        );
+
+        // Mnemonic passphrase (raw + hex).
+        assert!(
+            !summary_s.contains("TREZOR") && !logs_s.contains("TREZOR"),
+            "mnemonic passphrase leaked"
+        );
+        let mp_hex = hex::encode(b"TREZOR");
+        assert!(
+            !summary_s.contains(&mp_hex) && !logs_s.contains(&mp_hex),
+            "mnemonic passphrase hex leaked"
+        );
+
+        // tty_writer must not contain seed/SK/passphrases either (only mnemonic).
+        assert!(!tty_s.contains(&seed_hex), "seed hex on tty");
+        assert!(!tty_s.contains(&sk_hex), "sk hex on tty");
+        assert!(!tty_s.contains(keystore_pw_plain), "keystore pw on tty");
+        assert!(!tty_s.contains("TREZOR"), "mnemonic passphrase on tty");
+        for cc_hex in CHAIN_CODES {
+            assert!(!tty_s.contains(cc_hex), "chain code on tty");
+        }
+
+        // Progress/summary should still be non-empty (paths + addresses only).
+        assert!(summary_s.contains("wrote 1 keystore"), "{summary_s}");
+        assert!(!logs.is_empty(), "debug logger should emit events");
+    }
+
+    fn assert_absent_hex_and_raw(
+        summary_s: &str,
+        logs_s: &str,
+        logs: &[u8],
+        label: &str,
+        raw: &[u8],
+    ) {
+        let hex_s = hex::encode(raw);
+        assert!(
+            !summary_s.contains(&hex_s) && !logs_s.contains(&hex_s),
+            "{label} hex leaked"
+        );
+        assert!(
+            !summary_s.as_bytes().windows(raw.len()).any(|w| w == raw)
+                && !logs.windows(raw.len()).any(|w| w == raw),
+            "{label} raw leaked"
+        );
+    }
+
+    // --- exit-map smoke for Bip32 From path ---
+
+    #[test]
+    fn bip32_map_is_exit3() {
+        let e = map_bip32_err(Bip32Error::Master("I_L is zero or ≥ n".into()));
+        assert!(matches!(e, AppError::Bip32(_)), "got {e:?}");
+        assert_eq!(exit_code_for(&e), 3);
+        let e = map_bip32_err(Bip32Error::InvalidChildKey(0));
+        assert_eq!(exit_code_for(&e), 3);
     }
 }
