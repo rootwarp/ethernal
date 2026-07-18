@@ -73,6 +73,24 @@ fn key_recover_missing_output_dir() {
     assert_exit2(&["key", "recover"], "key recover missing --output-dir");
 }
 
+#[test]
+fn account_missing_subcommand() {
+    assert_exit2(&["account"], "account missing subcommand");
+}
+
+#[test]
+fn account_new_missing_output_dir() {
+    assert_exit2(&["account", "new"], "account new missing --output-dir");
+}
+
+#[test]
+fn account_recover_missing_output_dir() {
+    assert_exit2(
+        &["account", "recover"],
+        "account recover missing --output-dir",
+    );
+}
+
 /// F-5: `key new` must exit 2 before generating when stdin/stdout are not TTYs.
 /// Integration tests drive the binary with piped stdio, so isatty fails.
 #[test]
@@ -112,6 +130,66 @@ fn key_new_bad_count_exits_two() {
     assert_exit2(
         &["key", "new", "--output-dir", "/tmp", "--count", "abc"],
         "key new bad --count value",
+    );
+}
+
+/// F-5: `account new` must exit 2 before generating when stdin/stdout are not TTYs.
+/// Integration tests drive the binary with piped stdio, so isatty fails.
+#[test]
+fn account_new_non_tty_exits_two() {
+    let dir = common::TempDir::new("account-new-nontty");
+    let out = ethernal()
+        .args(["account", "new", "--output-dir"])
+        .arg(dir.path())
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "account new non-TTY: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("interactive terminal") || stderr.contains("TTY") || stderr.contains("tty"),
+        "expected TTY guard message, got: {stderr}"
+    );
+    // No keystore or other output files written.
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read out dir")
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "non-TTY account new must write nothing; found {entries:?}"
+    );
+}
+
+#[test]
+fn account_new_bad_count_exits_two() {
+    // Bad --count is validated after the TTY guard; on non-TTY the guard wins
+    // first (still exit 2). Exercise clap-level rejection of a non-u32 count.
+    assert_exit2(
+        &["account", "new", "--output-dir", "/tmp", "--count", "abc"],
+        "account new bad --count value",
+    );
+}
+
+#[test]
+fn account_recover_nonexistent_output_dir_exits_two() {
+    let dir = common::TempDir::new("account-recover-missing-out");
+    let missing = dir.path().join("does-not-exist");
+    let out = ethernal()
+        .args(["account", "recover", "--output-dir"])
+        .arg(&missing)
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "account recover bad output-dir: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

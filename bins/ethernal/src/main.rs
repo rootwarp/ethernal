@@ -1,5 +1,5 @@
 //! Entry point for ethernal, ported from `cmd/ethernal/main.go`.
-//! Wires the gen, build, sign, run, send, and key subcommands.
+//! Wires the gen, build, sign, run, send, key, and account subcommands.
 //!
 //! Exit codes:
 //!
@@ -13,6 +13,8 @@
 //!   5 — broadcast / RPC error (dial failure, gas/nonce estimation failure,
 //!       eth_sendRawTransaction error, broadcast-side chain-ID mismatch)
 
+mod account_cli;
+mod account_cmd;
 mod build_cmd;
 mod config;
 mod errors;
@@ -92,6 +94,7 @@ fn root_command() -> Command {
              Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=user abort, 5=broadcast/RPC error.",
         )
         .subcommand(key_cli::command())
+        .subcommand(account_cli::command())
         .subcommand(gen_cli::command())
         .subcommand(build_cmd::command())
         .subcommand(sign_cmd::command())
@@ -117,6 +120,12 @@ fn main() {
             Some(("recover", m)) => key_cli::run_recover(m, cancel),
             // subcommand_required(true) on the key group; clap rejects bare `key`.
             _ => unreachable!("key requires a subcommand"),
+        },
+        Some(("account", sub)) => match sub.subcommand() {
+            Some(("new", m)) => account_cli::run_new(m, cancel),
+            Some(("recover", m)) => account_cli::run_recover(m, cancel),
+            // subcommand_required(true) on the account group; clap rejects bare `account`.
+            _ => unreachable!("account requires a subcommand"),
         },
         Some(("gen", sub)) => {
             let mut stderr = std::io::stderr();

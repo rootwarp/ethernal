@@ -128,16 +128,16 @@ without runtime derivation yet. Satisfies U-3 (namespace), F-5 (TTY guard), F-8/
   raw and env `conflicts_with`; empty default — the reused clap mechanics from keygen).
 
 **Acceptance criteria**
-- [ ] `ethernal account new` and `ethernal account recover` parse under a `subcommand_required`
+- [x] `ethernal account new` and `ethernal account recover` parse under a `subcommand_required`
   `account` group; the existing `key`/`gen`/… verbs are unchanged and the `key` help does not mention
   EOA — U-3 (architecture §"bin — `account_cli`").
-- [ ] `--count` defaults to 1; `--output-dir` is validated writable (reused `validate_output_dir`);
+- [x] `--count` defaults to 1; `--output-dir` is validated writable (reused `validate_output_dir`);
   `--start-index` exists on `recover` only — F-8, F-11.
-- [ ] the three `--mnemonic-passphrase` forms parse (raw / `-env` / bare-prompt); absent → empty
+- [x] the three `--mnemonic-passphrase` forms parse (raw / `-env` / bare-prompt); absent → empty
   default; raw and env are mutually exclusive — F-12.
-- [ ] `account new` exits **2 before any generation** when stdin or stdout is not a TTY (reused
+- [x] `account new` exits **2 before any generation** when stdin or stdout is not a TTY (reused
   `require_tty_for_new`); `account recover` is exempt — F-5, S-2.
-- [ ] a bad `--count` or unwritable `--output-dir` → exit 2 with a specific message — F-16, F-9.
+- [x] a bad `--count` or unwritable `--output-dir` → exit 2 with a specific message — F-16, F-9.
 
 **Test plan**
 - clap parse tests: flag presence/defaults; the three mnemonic-passphrase forms resolve to the right
