@@ -1,7 +1,7 @@
 //! The `build` subcommand, ported from `buildCommand` + `requireFromForRPC` +
-//! `buildUnsignedTx` + the `newEthRPC` seam in `cmd/eth-deposit/main.go`.
+//! `buildUnsignedTx` + the `newEthRPC` seam in `cmd/ethernal/main.go`.
 //!
-//! `build` reads a deposit_data JSON file (from `eth-deposit gen` or the
+//! `build` reads a deposit_data JSON file (from `ethernal gen` or the
 //! Ethereum Launchpad) and produces an unsigned EIP-1559 transaction for the
 //! Beacon Chain deposit contract. It supports offline/air-gapped mode (no
 //! `--rpc-url`, all gas/nonce flags explicit) and hybrid mode (with `--rpc-url`,
@@ -26,9 +26,9 @@ use crate::logging::{Format, Level, Logger};
 pub fn command() -> Command {
     Command::new("build")
         .about("Construct an unsigned deposit transaction from deposit data")
-        .override_usage("eth-deposit build --input-file FILE --network NET [options]")
+        .override_usage("ethernal build --input-file FILE --network NET [options]")
         .long_about(
-            "Reads a deposit_data JSON file (produced by \"eth-deposit gen\" or the Ethereum Launchpad)\n\
+            "Reads a deposit_data JSON file (produced by \"ethernal gen\" or the Ethereum Launchpad)\n\
              and produces an unsigned EIP-1559 transaction for the Beacon Chain deposit contract.\n\n\
              Supports offline/air-gapped mode (no --rpc-url required) when all gas and nonce\n\
              flags are supplied explicitly, and hybrid mode: with --rpc-url, any gas, fee, or\n\
@@ -74,51 +74,51 @@ pub fn build_flags(with_from: bool) -> Vec<Arg> {
             .short('i')
             .value_name("FILE")
             .required(true)
-            .env("ETH_DEPOSIT_TX_INPUT_FILE")
+            .env("ETHERNAL_TX_INPUT_FILE")
             .help("Path to deposit_data-*.json file (or '-' for stdin); --input is accepted as a shorter alias"),
         Arg::new("network")
             .long("network")
             .short('n')
             .value_name("NET")
             .default_value("hoodi")
-            .env("ETH_DEPOSIT_TX_NETWORK")
+            .env("ETHERNAL_TX_NETWORK")
             .help("Target network (mainnet, hoodi, sepolia, holesky)"),
         Arg::new("output")
             .long("output")
             .value_name("FILE")
-            .env("ETH_DEPOSIT_TX_OUTPUT")
+            .env("ETHERNAL_TX_OUTPUT")
             .help(output_help),
         Arg::new("index")
             .long("index")
             .value_name("N")
             .value_parser(clap::value_parser!(i64))
             .default_value("0")
-            .env("ETH_DEPOSIT_TX_INDEX")
+            .env("ETHERNAL_TX_INDEX")
             .help("Index of the deposit entry to use when the JSON contains multiple validators (default: 0)"),
         Arg::new("rpc-url")
             .long("rpc-url")
             .value_name("URL")
-            .env("ETH_DEPOSIT_TX_RPC_URL")
+            .env("ETHERNAL_TX_RPC_URL")
             .help(rpc_url_help),
         Arg::new("gas-limit")
             .long("gas-limit")
             .value_name("N")
-            .env("ETH_DEPOSIT_TX_GAS_LIMIT")
+            .env("ETHERNAL_TX_GAS_LIMIT")
             .help(format!("Gas limit for the deposit transaction (default: {DEFAULT_GAS_LIMIT})")),
         Arg::new("max-fee-per-gas")
             .long("max-fee-per-gas")
             .value_name("WEI")
-            .env("ETH_DEPOSIT_TX_MAX_FEE_PER_GAS")
+            .env("ETHERNAL_TX_MAX_FEE_PER_GAS")
             .help("EIP-1559 maximum fee per gas in wei (decimal integer, e.g. 20000000000 for 20 Gwei)"),
         Arg::new("max-priority-fee-per-gas")
             .long("max-priority-fee-per-gas")
             .value_name("WEI")
-            .env("ETH_DEPOSIT_TX_MAX_PRIORITY_FEE_PER_GAS")
+            .env("ETHERNAL_TX_MAX_PRIORITY_FEE_PER_GAS")
             .help("EIP-1559 maximum priority fee per gas in wei (decimal integer, e.g. 1000000000 for 1 Gwei)"),
         Arg::new("nonce")
             .long("nonce")
             .value_name("N")
-            .env("ETH_DEPOSIT_TX_NONCE")
+            .env("ETHERNAL_TX_NONCE")
             .help("Override the sender account nonce (non-negative integer; omit to fetch from RPC or set later)"),
     ];
     if with_from {
@@ -126,7 +126,7 @@ pub fn build_flags(with_from: bool) -> Vec<Arg> {
             Arg::new("from")
                 .long("from")
                 .value_name("ADDR")
-                .env("ETH_DEPOSIT_TX_FROM")
+                .env("ETHERNAL_TX_FROM")
                 .help("Sender address (0x-prefixed, 20-byte hex). Required with --rpc-url when --nonce or --gas-limit is omitted, to fetch the pending nonce and estimate gas."),
         );
     }

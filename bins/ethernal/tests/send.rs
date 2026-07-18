@@ -1,4 +1,4 @@
-//! Binary-driven port of `cmd/eth-deposit/send_test.go`. Go injected a
+//! Binary-driven port of `cmd/ethernal/send_test.go`. Go injected a
 //! `mockBroadcaster` via the `newBroadcaster` seam; here `--rpc-url` points at a
 //! JSON-RPC stub answering `eth_chainId`, `eth_sendRawTransaction`, and
 //! `eth_getTransactionReceipt`. The signed input is the phase-3 signed golden
@@ -10,7 +10,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 
-use common::{eth_deposit, write_temp_signed_tx, Reply, Stub, TempDir, PHASE3_TX_HASH};
+use common::{ethernal, write_temp_signed_tx, Reply, Stub, TempDir, PHASE3_TX_HASH};
 
 const HOLESKY_CHAIN_ID: u64 = 17000;
 
@@ -31,7 +31,7 @@ fn happy_path() {
     let stub = send_ok_stub();
     let (_dir, signed) = write_temp_signed_tx();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes"])
@@ -65,7 +65,7 @@ fn confirm_prompt_accept() {
     let stub = send_ok_stub();
     let (_dir, signed) = write_temp_signed_tx();
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
@@ -90,7 +90,7 @@ fn confirm_prompt_case_insensitive() {
     let stub = send_ok_stub();
     let (_dir, signed) = write_temp_signed_tx();
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
@@ -114,7 +114,7 @@ fn confirm_prompt_reject() {
     let stub = send_ok_stub();
     let (_dir, signed) = write_temp_signed_tx();
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
@@ -138,7 +138,7 @@ fn confirm_prompt_eof() {
     let stub = send_ok_stub();
     let (_dir, signed) = write_temp_signed_tx();
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
@@ -169,7 +169,7 @@ fn chain_id_mismatch() {
     });
     let (_dir, signed) = write_temp_signed_tx();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes"])
@@ -197,7 +197,7 @@ fn rpc_failure() {
     });
     let (_dir, signed) = write_temp_signed_tx();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes"])
@@ -212,7 +212,7 @@ fn rpc_failure() {
 fn rpc_dial_failure() {
     let (_dir, signed) = write_temp_signed_tx();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", "http://127.0.0.1:1", "--yes"])
@@ -231,7 +231,7 @@ fn rpc_dial_failure() {
 fn missing_rpc() {
     let (_dir, signed) = write_temp_signed_tx();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--yes"])
@@ -243,7 +243,7 @@ fn missing_rpc() {
 // Go: TestSendCommand_MissingInput → exit 2.
 #[test]
 fn missing_input() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--rpc-url", "http://localhost:8545", "--yes"])
         .output()
         .expect("run");
@@ -257,7 +257,7 @@ fn invalid_input() {
     let dir = TempDir::new("send-badinput");
     let bad = dir.write("bad.json", b"not json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&bad)
         .args(["--rpc-url", &stub.url, "--yes"])
@@ -287,7 +287,7 @@ fn broadcast_receipt_write() {
     let rec_dir = TempDir::new("send-receipt");
     let rec_file = rec_dir.join("receipt.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes", "--receipt-output"])
@@ -323,7 +323,7 @@ fn wait_for_receipt_timeout() {
     });
     let (_dir, signed) = write_temp_signed_tx();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args([
@@ -347,7 +347,7 @@ fn wait_for_receipt_timeout() {
 // Go: TestSendSubcommand_Help
 #[test]
 fn send_subcommand_help() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--help"])
         .output()
         .expect("run");

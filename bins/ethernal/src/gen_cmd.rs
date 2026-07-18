@@ -1,4 +1,4 @@
-//! The `gen` subcommand pipeline, ported from `cmd/eth-deposit/gen.go`: it
+//! The `gen` subcommand pipeline, ported from `cmd/ethernal/gen.go`: it
 //! composes the keystore/bls/deposit/output crates into the deposit_data
 //! generator. Dependencies are injectable via [`GenDeps`] so tests can drive
 //! the pipeline with fakes.
@@ -518,7 +518,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    // Port of `cmd/eth-deposit/gen_test.go` `runGenWithDeps` tests: the gen
+    // Port of `cmd/ethernal/gen_test.go` `runGenWithDeps` tests: the gen
     // pipeline driven with fakes through the `GenDeps` seam. Since the Rust
     // `DirectoryIndex` has no public constructor, the "scanner" is either a
     // closure returning `DirectoryIndex::default()` / `scan_dir` over a temp dir

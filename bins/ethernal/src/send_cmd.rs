@@ -1,4 +1,4 @@
-//! The `send` subcommand, ported from `cmd/eth-deposit/send.go`.
+//! The `send` subcommand, ported from `cmd/ethernal/send.go`.
 //!
 //! `send` broadcasts a signed transaction (from `sign` or `run`) to the network
 //! via `eth_sendRawTransaction`, after an explicit network-name confirmation.
@@ -47,7 +47,7 @@ pub fn command() -> Command {
     Command::new("send")
         .about("Broadcast a signed deposit transaction via JSON-RPC")
         .override_usage(
-            "eth-deposit send --input FILE --rpc-url URL [--yes] [--wait-for-receipt] [--receipt-output FILE]",
+            "ethernal send --input FILE --rpc-url URL [--yes] [--wait-for-receipt] [--receipt-output FILE]",
         )
         .long_about(
             "Submits a signed transaction (produced by sign or run) to the Ethereum network\n\
@@ -72,7 +72,7 @@ pub fn command() -> Command {
             Arg::new("rpc-url")
                 .long("rpc-url")
                 .value_name("URL")
-                .env("ETH_DEPOSIT_TX_RPC_URL")
+                .env("ETHERNAL_TX_RPC_URL")
                 .help("JSON-RPC endpoint URL for broadcast"),
         )
         .arg(

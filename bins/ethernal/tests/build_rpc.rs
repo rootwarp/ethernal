@@ -1,4 +1,4 @@
-//! Binary-driven port of `cmd/eth-deposit/buildrpc_test.go`. Go injected a fake
+//! Binary-driven port of `cmd/ethernal/buildrpc_test.go`. Go injected a fake
 //! `EthRPC` via the `newEthRPC` seam; the Rust binary is a separate process, so
 //! each test points `--rpc-url` at a local JSON-RPC stub (`common::Stub`) and
 //! drives the REAL client. The RPC-mode env-var fallbacks (`FromEnvVar`,
@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{deposit_fixture, eth_deposit, hex_u128, hex_u64, Reply, Stub};
+use common::{deposit_fixture, ethernal, hex_u128, hex_u64, Reply, Stub};
 
 const HOLESKY_CHAIN_ID: u64 = 17000;
 // Go: `testFrom = [20]byte{0x11, 0x22, 0x33}`.
@@ -26,7 +26,7 @@ fn build_json(out: &std::process::Output) -> serde_json::Value {
 // air-gapped defaults and never dials.
 #[test]
 fn offline_defaults() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
@@ -51,7 +51,7 @@ fn rpc_resolves_unset_fields() {
 
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, tip, base_fee, fake_nonce, estimate);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
@@ -77,7 +77,7 @@ fn rpc_resolves_unset_fields() {
 fn rpc_explicit_flags_win() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 0, 0, 0, 0);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
@@ -115,7 +115,7 @@ fn rpc_explicit_flags_win() {
 // the tx crate.)
 #[test]
 fn rpc_unreachable_exit5() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // Port 1 is reserved/closed; connect fails fast.
@@ -145,7 +145,7 @@ fn rpc_estimation_fails_exit5() {
         other => Reply::Err(format!("unexpected {other}")),
     });
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
@@ -165,7 +165,7 @@ fn rpc_estimation_fails_exit5() {
 fn rpc_chain_id_mismatch_exit2() {
     let stub = Stub::build_ok(1, 1_000_000_000, 10_000_000_000, 5, 200_000); // mainnet != holesky
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
@@ -194,7 +194,7 @@ fn rpc_chain_id_call_error_warn_and_continue() {
         other => Reply::Err(format!("unexpected {other}")),
     });
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
@@ -213,8 +213,8 @@ fn rpc_chain_id_call_error_warn_and_continue() {
 fn rpc_url_env_var_override() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 1_000_000_000, 10_000_000_000, 5, 200_000);
 
-    let out = eth_deposit()
-        .env("ETH_DEPOSIT_TX_RPC_URL", &stub.url)
+    let out = ethernal()
+        .env("ETHERNAL_TX_RPC_URL", &stub.url)
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // explicit nonce+gas+fees so only ChainID is contacted; no --from needed.
@@ -249,8 +249,8 @@ fn rpc_url_flag_beats_env_var() {
     let env_stub = Stub::build_ok(1, 1, 1, 1, 1); // mismatch → would exit 2 if used
     let flag_stub = Stub::build_ok(HOLESKY_CHAIN_ID, 1_000_000_000, 10_000_000_000, 5, 200_000);
 
-    let out = eth_deposit()
-        .env("ETH_DEPOSIT_TX_RPC_URL", &env_stub.url)
+    let out = ethernal()
+        .env("ETHERNAL_TX_RPC_URL", &env_stub.url)
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &flag_stub.url])
@@ -286,7 +286,7 @@ fn rpc_url_flag_beats_env_var() {
 // and --nonce are both omitted.
 #[test]
 fn rpc_requires_from_when_nonce_omitted() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // port 0 is never dialed: the gate fires first.
@@ -312,7 +312,7 @@ fn rpc_requires_from_when_nonce_omitted() {
 fn from_not_required_with_nonce_and_gas() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 1_000_000_000, 10_000_000_000, 0, 0);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
@@ -351,8 +351,8 @@ fn from_not_required_with_nonce_and_gas() {
 fn from_env_var() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 1_000_000_000, 10_000_000_000, 5, 200_000);
 
-    let out = eth_deposit()
-        .env("ETH_DEPOSIT_TX_FROM", TEST_FROM)
+    let out = ethernal()
+        .env("ETHERNAL_TX_FROM", TEST_FROM)
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // nonce+gas omitted → both PendingNonceAt and EstimateGas run with From.

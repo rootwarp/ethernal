@@ -1,11 +1,11 @@
-//! Shared test scaffolding for the `eth-deposit` integration tests.
+//! Shared test scaffolding for the `ethernal` integration tests.
 //!
 //! Because each integration test file (`tests/*.rs`) compiles `mod common;` into
 //! its own test binary, a given file uses only a subset of these helpers — hence
 //! the crate-wide `dead_code` allow. The three pieces are:
 //!
-//!   1. `eth_deposit()` — a `Command` for the built binary with every
-//!      `ETH_DEPOSIT_TX_*` env-var scrubbed, so the flags' `.env(...)` fallbacks
+//!   1. `ethernal()` — a `Command` for the built binary with every
+//!      `ETHERNAL_TX_*` env-var scrubbed, so the flags' `.env(...)` fallbacks
 //!      never leak the runner's environment into a negative test.
 //!   2. Fixture-path accessors (workspace `rust/testdata/**` read-only, plus the
 //!      in-crate `tests/testdata/**` pair copied from the Go tree).
@@ -36,26 +36,26 @@ pub const PHASE3_TX_HASH: &str =
 
 /// Every env var that a build/send flag falls back to. Scrubbed from every test
 /// Command so a set variable in the runner cannot mask a missing-flag error.
-const ETH_DEPOSIT_ENV_VARS: &[&str] = &[
-    "ETH_DEPOSIT_TX_INPUT_FILE",
-    "ETH_DEPOSIT_TX_NETWORK",
-    "ETH_DEPOSIT_TX_OUTPUT",
-    "ETH_DEPOSIT_TX_INDEX",
-    "ETH_DEPOSIT_TX_RPC_URL",
-    "ETH_DEPOSIT_TX_GAS_LIMIT",
-    "ETH_DEPOSIT_TX_MAX_FEE_PER_GAS",
-    "ETH_DEPOSIT_TX_MAX_PRIORITY_FEE_PER_GAS",
-    "ETH_DEPOSIT_TX_NONCE",
-    "ETH_DEPOSIT_TX_FROM",
-    "ETH_DEPOSIT_TX_PRIVATE_KEY",
+const ETHERNAL_ENV_VARS: &[&str] = &[
+    "ETHERNAL_TX_INPUT_FILE",
+    "ETHERNAL_TX_NETWORK",
+    "ETHERNAL_TX_OUTPUT",
+    "ETHERNAL_TX_INDEX",
+    "ETHERNAL_TX_RPC_URL",
+    "ETHERNAL_TX_GAS_LIMIT",
+    "ETHERNAL_TX_MAX_FEE_PER_GAS",
+    "ETHERNAL_TX_MAX_PRIORITY_FEE_PER_GAS",
+    "ETHERNAL_TX_NONCE",
+    "ETHERNAL_TX_FROM",
+    "ETHERNAL_TX_PRIVATE_KEY",
 ];
 
-/// Returns a `Command` for the built `eth-deposit` binary, with all
-/// `ETH_DEPOSIT_TX_*` env vars removed (PATH and friends are preserved so the
+/// Returns a `Command` for the built `ethernal` binary, with all
+/// `ETHERNAL_TX_*` env vars removed (PATH and friends are preserved so the
 /// fake-`deposit`-script test still works).
-pub fn eth_deposit() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_eth-deposit"));
-    for v in ETH_DEPOSIT_ENV_VARS {
+pub fn ethernal() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_ethernal"));
+    for v in ETHERNAL_ENV_VARS {
         c.env_remove(v);
     }
     c
@@ -132,7 +132,7 @@ impl TempDir {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let path = std::env::temp_dir().join(format!(
-            "eth-deposit-test-{label}-{}-{nanos}-{n}",
+            "ethernal-test-{label}-{}-{nanos}-{n}",
             std::process::id()
         ));
         std::fs::create_dir_all(&path).expect("create temp dir");

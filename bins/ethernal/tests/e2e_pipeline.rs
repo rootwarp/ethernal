@@ -1,4 +1,4 @@
-//! Port of `cmd/eth-deposit/deposit_e2e_test.go` (Go: `//go:build e2e`) — the
+//! Port of `cmd/ethernal/deposit_e2e_test.go` (Go: `//go:build e2e`) — the
 //! full build → sign → send pipeline. Go injected a mock broadcaster; here send
 //! runs against a JSON-RPC stub that records the broadcast RLP, which must equal
 //! the signed golden's `rawRLP` (the phase-3 fixtures align).
@@ -8,12 +8,12 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 
 use common::{
-    deposit_fixture, eth_deposit, phase3_signed_golden, phase3_unsigned, Reply, Stub, TempDir,
+    deposit_fixture, ethernal, phase3_signed_golden, phase3_unsigned, Reply, Stub, TempDir,
     PHASE3_KEY,
 };
 
 const HOLESKY_CHAIN_ID: u64 = 17000;
-const KEY_ENV: &str = "TEST_ETH_DEPOSIT_KEY";
+const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 const MOCK_TX_HASH: &str = "0xdeadbeef00000000000000000000000000000000000000000000000000000001";
 
 // Go: TestE2E_LocalSigner_FullPipeline_NoRPC — `run` (build + sign) with no RPC.
@@ -22,7 +22,7 @@ fn local_signer_full_pipeline_no_rpc() {
     let dir = TempDir::new("e2e-pipeline");
     let out_file = dir.join("signed.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -63,7 +63,7 @@ fn local_signer_build_sign_send_mock() {
     let signed_file = dir.join("signed.json");
 
     // Step 1: sign the phase-3 unsigned tx.
-    let sign_out = eth_deposit()
+    let sign_out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(phase3_unsigned())
@@ -85,7 +85,7 @@ fn local_signer_build_sign_send_mock() {
         other => Reply::Err(format!("unexpected {other}")),
     });
 
-    let send_out = eth_deposit()
+    let send_out = ethernal()
         .args(["send", "--input"])
         .arg(&signed_file)
         .args(["--rpc-url", &stub.url, "--yes"])
@@ -151,7 +151,7 @@ fn send_mock_receipt_polling() {
     let rec_dir = TempDir::new("e2e-receipt");
     let rec_file = rec_dir.join("receipt.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes", "--receipt-output"])

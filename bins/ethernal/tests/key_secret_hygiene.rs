@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::eth_deposit;
+use common::ethernal;
 use std::io::Write;
 use std::process::Stdio;
 
@@ -22,10 +22,10 @@ const MNEMONIC_PW: &str = "TREZOR";
 #[test]
 fn key_recover_secrets_absent_from_stderr() {
     let dir = common::TempDir::new("key-hygiene");
-    let ks_var = format!("ETH_DEPOSIT_HYGIENE_KS_{}", std::process::id());
-    let mp_var = format!("ETH_DEPOSIT_HYGIENE_MP_{}", std::process::id());
+    let ks_var = format!("ETHERNAL_HYGIENE_KS_{}", std::process::id());
+    let mp_var = format!("ETHERNAL_HYGIENE_MP_{}", std::process::id());
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["key", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
@@ -85,7 +85,7 @@ fn key_recover_secrets_absent_from_stderr() {
 
     // Banner / progress should still be present on stderr (non-secret).
     assert!(
-        stderr.contains("eth-deposit key recover:"),
+        stderr.contains("ethernal key recover:"),
         "expected banner on stderr: {stderr}"
     );
     assert!(
@@ -105,9 +105,9 @@ fn key_recover_unknown_word_token_absent_from_all_channels() {
     let mnemonic = format!(
         "abandon abandon abandon abandon abandon abandon {BAD_TOKEN} abandon abandon abandon abandon about"
     );
-    let ks_var = format!("ETH_DEPOSIT_HYGIENE_BAD_KS_{}", std::process::id());
+    let ks_var = format!("ETHERNAL_HYGIENE_BAD_KS_{}", std::process::id());
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["key", "recover", "--output-dir"])
         .arg(dir.path())
         .args(["--count", "1", "--passphrase-env", &ks_var])

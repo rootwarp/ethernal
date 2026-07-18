@@ -1,13 +1,13 @@
-//! Binary-driven port of `cmd/eth-deposit/run_test.go` (offline `run` = build +
+//! Binary-driven port of `cmd/ethernal/run_test.go` (offline `run` = build +
 //! sign in one step). RPC-mode `run` cases live in `run_rpc.rs`.
 
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
 
-use common::{deposit_fixture, eth_deposit, TempDir, PHASE3_KEY};
+use common::{deposit_fixture, ethernal, TempDir, PHASE3_KEY};
 
-const KEY_ENV: &str = "TEST_ETH_DEPOSIT_KEY";
+const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 
 // Go: TestRunCommand_LocalSigner_HappyPath
 #[test]
@@ -15,7 +15,7 @@ fn local_signer_happy_path() {
     let dir = TempDir::new("run-ok");
     let out_file = dir.join("signed.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -47,7 +47,7 @@ fn local_signer_happy_path() {
 // Go: TestRunCommand_LocalSigner_StdoutOutput
 #[test]
 fn local_signer_stdout_output() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -69,7 +69,7 @@ fn local_signer_keep_unsigned() {
     let dir = TempDir::new("run-keepu");
     let out_file = dir.join("signed.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -102,7 +102,7 @@ fn local_signer_raw_output() {
     let out_file = dir.join("signed.json");
     let raw_file = dir.join("custom.raw");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -131,7 +131,7 @@ fn local_signer_raw_output() {
 // Go: TestRunCommand_MissingSignerFlag → exit 2.
 #[test]
 fn missing_signer_flag() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
@@ -142,7 +142,7 @@ fn missing_signer_flag() {
 // Go: TestRunCommand_LedgerNoDevice → exit 3.
 #[test]
 fn ledger_no_device() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "ledger"])
@@ -162,7 +162,7 @@ fn invalid_input() {
     let dir = TempDir::new("run-badinput");
     let bad = dir.write("bad.json", b"not json at all");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(&bad)
@@ -175,7 +175,7 @@ fn invalid_input() {
 // Go: TestRunCommand_BadKey → exit 3.
 #[test]
 fn bad_key() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, "0xdeadbeefnotahexkey")
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -193,7 +193,7 @@ fn atomic_write_on_rename_failure() {
     let out_dir = dir.join("signed.json");
     std::fs::create_dir(&out_dir).expect("mkdir output path");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -213,7 +213,7 @@ fn atomic_write_on_rename_failure() {
         .filter(|e| {
             e.file_name()
                 .to_string_lossy()
-                .starts_with(".tmp-eth-deposit-")
+                .starts_with(".tmp-ethernal-")
         })
         .collect();
     assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
@@ -222,7 +222,7 @@ fn atomic_write_on_rename_failure() {
 // Go: TestRunCommand_KeepUnsigned_RequiresOutputFile → exit 2.
 #[test]
 fn keep_unsigned_requires_output_file() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -244,7 +244,7 @@ fn output_file_permissions() {
     let dir = TempDir::new("run-perm");
     let out_file = dir.join("signed.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -265,7 +265,7 @@ fn output_file_permissions() {
 fn output_dash_is_stdout() {
     let dir = TempDir::new("run-dash");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .current_dir(dir.path())
         .args(["run", "--network", "holesky", "--input-file"])
@@ -297,7 +297,7 @@ fn output_dash_is_stdout() {
 // Go: TestRunSubcommand_Help
 #[test]
 fn run_subcommand_help() {
-    let out = eth_deposit().args(["run", "--help"]).output().expect("run");
+    let out = ethernal().args(["run", "--help"]).output().expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("signer"), "run --help missing --signer");
     assert!(

@@ -1,4 +1,4 @@
-//! Adapted port of `cmd/eth-deposit/redact_boundary_test.go`.
+//! Adapted port of `cmd/ethernal/redact_boundary_test.go`.
 //!
 //! Go scrubbed the URL at the log boundary (`internaltx.RedactURLString(err)` in
 //! main.go) and the test drove `buildUnsignedTx` directly to inspect the boundary
@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{deposit_fixture, eth_deposit, write_temp_signed_tx};
+use common::{deposit_fixture, ethernal, write_temp_signed_tx};
 
 const TEST_FROM: &str = "0x1122330000000000000000000000000000000000";
 
@@ -21,7 +21,7 @@ fn build_rpc_error_url_redacted_path_key() {
     const SECRET: &str = "INTEGRATIONSECRET";
     let url = format!("http://127.0.0.1:1/v3/{SECRET}");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &url, "--from", TEST_FROM])
@@ -50,7 +50,7 @@ fn build_rpc_error_url_redacted_query_key() {
     const SECRET: &str = "QUERYSECRET";
     let url = format!("http://127.0.0.1:1/?apikey={SECRET}");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &url, "--from", TEST_FROM])
@@ -73,7 +73,7 @@ fn send_rpc_error_url_redacted() {
     let url = format!("http://127.0.0.1:1/v3/{SECRET}");
     let (_dir, signed) = write_temp_signed_tx();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &url, "--yes"])

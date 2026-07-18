@@ -1,5 +1,5 @@
 //! The `build`/`run` shared configuration, ported from
-//! `cmd/eth-deposit/config.go`. Raw CLI flags (with env-var fallbacks) are
+//! `cmd/ethernal/config.go`. Raw CLI flags (with env-var fallbacks) are
 //! resolved flag > env > default into a typed [`Config`]; numeric flags are
 //! declared as strings so the Go validation messages render verbatim.
 
@@ -20,7 +20,7 @@ pub const DEFAULT_MAX_FEE_PER_GAS: u128 = 20_000_000_000;
 /// The fallback EIP-1559 tip: 1 Gwei.
 pub const DEFAULT_MAX_PRIORITY_FEE_PER_GAS: u128 = 1_000_000_000;
 
-/// Holds the validated, parsed inputs for `eth-deposit build`.
+/// Holds the validated, parsed inputs for `ethernal build`.
 /// Port of `main.Config`.
 #[derive(Debug, Clone)]
 pub struct Config {

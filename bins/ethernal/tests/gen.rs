@@ -16,7 +16,7 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 
-use common::{eth_deposit, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, TempDir};
+use common::{ethernal, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, TempDir};
 
 const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
 
@@ -30,7 +30,7 @@ const WITHDRAWAL_CREDS_HEX: &str =
 // the committed hoodi fixtures emits the deposit JSON to stdout in dry-run mode.
 #[test]
 fn gen_dry_run_real_pipeline_emits_json() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
@@ -65,7 +65,7 @@ fn gen_dry_run_real_pipeline_emits_json() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("eth-deposit gen:"),
+        stderr.contains("ethernal gen:"),
         "banner missing: {stderr}"
     );
     assert!(
@@ -78,7 +78,7 @@ fn gen_dry_run_real_pipeline_emits_json() {
 #[test]
 fn gen_writes_output_file() {
     let out_dir = TempDir::new("gen-out");
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
@@ -151,7 +151,7 @@ fn verify_with_deposit_cli_passes() {
     let cli_dir = fake_deposit_cli(0);
     let out_dir = TempDir::new("gen-verify-ok");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .env("PATH", path_with(cli_dir.path()))
         .args(["gen", "--keystore-dir"])
@@ -187,7 +187,7 @@ fn verify_with_deposit_cli_fails_exit3() {
     let cli_dir = fake_deposit_cli(1);
     let out_dir = TempDir::new("gen-verify-fail");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .env("PATH", path_with(cli_dir.path()))
         .args(["gen", "--keystore-dir"])
@@ -225,7 +225,7 @@ fn verify_with_deposit_cli_not_found_exit2() {
     // Point --deposit-cli-path at a path that does not exist.
     let missing = out_dir.join("no-such-deposit-binary");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
@@ -261,7 +261,7 @@ fn verify_with_deposit_cli_not_found_exit2() {
 fn verify_with_deposit_cli_skipped_in_dry_run() {
     let cli_dir = fake_deposit_cli(1); // would fail if it ran
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .env("PATH", path_with(cli_dir.path()))
         .args(["gen", "--keystore-dir"])
@@ -290,7 +290,7 @@ fn verify_with_deposit_cli_skipped_in_dry_run() {
 // K5-2: absent --withdrawal-address → exit 2 (require-choice gate).
 #[test]
 fn gen_without_withdrawal_address_exit2() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
@@ -320,7 +320,7 @@ fn gen_without_withdrawal_address_exit2() {
 #[test]
 fn gen_withdrawal_address_lowercase_exit2() {
     let lower = WITHDRAWAL_ADDR.to_ascii_lowercase();
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
@@ -360,7 +360,7 @@ fn gen_withdrawal_address_checksum_mismatch_exit2() {
     chars[9] = 'e';
     let flipped: String = chars.into_iter().collect();
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
@@ -394,7 +394,7 @@ fn gen_withdrawal_address_checksum_mismatch_exit2() {
 // H2 / K5-L1: zero address self-checksums under EIP-55 but is refused → exit 2, no deposit output.
 #[test]
 fn gen_withdrawal_address_zero_exit2() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
@@ -432,7 +432,7 @@ fn gen_withdrawal_address_zero_exit2() {
 // H2 / K5-L2: pre-signing banner echoes EIP-55 withdrawal address + full creds hex.
 #[test]
 fn gen_banner_echoes_withdrawal_address_and_credentials() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())

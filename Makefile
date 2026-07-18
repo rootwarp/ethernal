@@ -1,8 +1,8 @@
 .PHONY: build test test-verbose coverage lint fmt e2e-mock clean help
 
-## build: compile the release binary to target/release/eth-deposit
+## build: compile the release binary to target/release/ethernal
 build:
-	cargo build --release --bin eth-deposit
+	cargo build --release --bin ethernal
 
 ## test: run all tests (unit + integration)
 test:

@@ -1,11 +1,11 @@
 [package]
-name = "eth-deposit"
+name = "ethernal"
 version.workspace = true
 edition.workspace = true
 description = "Generate, build, sign, and broadcast Ethereum Beacon Chain deposit transactions"
 
 [[bin]]
-name = "eth-deposit"
+name = "ethernal"
 path = "src/main.rs"
 
 [features]

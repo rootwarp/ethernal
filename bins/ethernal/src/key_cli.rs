@@ -107,7 +107,7 @@ pub fn command() -> Command {
 fn new_command() -> Command {
     Command::new("new")
         .about("Generate a fresh 24-word mnemonic and write EIP-2335 signing keystores (TTY only)")
-        .override_usage("eth-deposit key new --output-dir DIR [--count N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
+        .override_usage("ethernal key new --output-dir DIR [--count N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
         .long_about(
             "Generates a fresh 24-word English BIP-39 mnemonic from OS CSPRNG entropy, runs a\n\
              display-once + full re-entry ceremony on the controlling terminal, then derives\n\
@@ -115,9 +115,9 @@ fn new_command() -> Command {
              TTY-only: stdin and stdout must both be terminals; otherwise the command exits 2\n\
              before generating anything (a mnemonic must never land on a pipe or log).\n\n\
              Examples:\n\n\
-             \x20 eth-deposit key new --output-dir ./keys --count 1\n\
-             \x20 eth-deposit key new --output-dir ./keys --passphrase-env KEYSTORE_PW\n\
-             \x20 eth-deposit key new --output-dir ./keys --mnemonic-passphrase-env MNEMONIC_PW",
+             \x20 ethernal key new --output-dir ./keys --count 1\n\
+             \x20 ethernal key new --output-dir ./keys --passphrase-env KEYSTORE_PW\n\
+             \x20 ethernal key new --output-dir ./keys --mnemonic-passphrase-env MNEMONIC_PW",
         )
         .args(shared_args())
 }
@@ -125,7 +125,7 @@ fn new_command() -> Command {
 fn recover_command() -> Command {
     Command::new("recover")
         .about("Recover EIP-2335 signing keystores from an existing BIP-39 mnemonic")
-        .override_usage("eth-deposit key recover --output-dir DIR [--count N] [--start-index N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
+        .override_usage("ethernal key recover --output-dir DIR [--count N] [--start-index N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
         .long_about(
             "Reads an existing BIP-39 mnemonic from an interactive TTY prompt or piped stdin,\n\
              validates word membership and checksum (12/15/18/21/24 words), then derives and\n\
@@ -133,8 +133,8 @@ fn recover_command() -> Command {
              Unlike `key new`, there is no display/re-entry ceremony — the mnemonic already exists\n\
              and the exposure decision was the caller's.\n\n\
              Examples:\n\n\
-             \x20 eth-deposit key recover --output-dir ./keys --count 3 --start-index 0\n\
-             \x20 echo \"$MNEMONIC\" | eth-deposit key recover --output-dir ./keys",
+             \x20 ethernal key recover --output-dir ./keys --count 3 --start-index 0\n\
+             \x20 echo \"$MNEMONIC\" | ethernal key recover --output-dir ./keys",
         )
         .args(shared_args())
         .arg(
@@ -353,14 +353,14 @@ fn print_banner(w: &mut dyn Write, cfg: &KeyConfig) {
         KeyMode::New => {
             let _ = writeln!(
                 w,
-                "eth-deposit key {verb}: count={} output_dir={}",
+                "ethernal key {verb}: count={} output_dir={}",
                 cfg.count, cfg.output_dir
             );
         }
         KeyMode::Recover => {
             let _ = writeln!(
                 w,
-                "eth-deposit key {verb}: count={} start_index={} output_dir={}",
+                "ethernal key {verb}: count={} start_index={} output_dir={}",
                 cfg.count, cfg.start_index, cfg.output_dir
             );
         }
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(cfg.output_dir, dir.str());
         assert_eq!(cfg.passphrase_env, "");
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
-        assert!(banner.contains("eth-deposit key new:"));
+        assert!(banner.contains("ethernal key new:"));
         assert!(banner.contains("count=1"));
     }
 
@@ -676,7 +676,7 @@ mod tests {
     fn mnemonic_passphrase_env_reads_value() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = Tmp::new();
-        let var = format!("ETH_DEPOSIT_TEST_MNEMONIC_PW_{}", std::process::id());
+        let var = format!("ETHERNAL_TEST_MNEMONIC_PW_{}", std::process::id());
         std::env::set_var(&var, "from-env");
         let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
         std::env::remove_var(&var);
@@ -694,7 +694,7 @@ mod tests {
     fn mnemonic_passphrase_env_empty_value_accepted() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = Tmp::new();
-        let var = format!("ETH_DEPOSIT_TEST_MNEMONIC_PW_EMPTY_{}", std::process::id());
+        let var = format!("ETHERNAL_TEST_MNEMONIC_PW_EMPTY_{}", std::process::id());
         std::env::set_var(&var, "");
         let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
         std::env::remove_var(&var);
@@ -746,7 +746,7 @@ mod tests {
     fn mnemonic_passphrase_env_unset_is_exit2() {
         let _guard = ENV_LOCK.lock().unwrap();
         let dir = Tmp::new();
-        let var = format!("ETH_DEPOSIT_TEST_MNEMONIC_PW_UNSET_{}", std::process::id());
+        let var = format!("ETHERNAL_TEST_MNEMONIC_PW_UNSET_{}", std::process::id());
         std::env::remove_var(&var);
         let m = parse_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]).unwrap();
         let mut banner = Vec::new();

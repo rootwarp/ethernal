@@ -1,4 +1,4 @@
-//! Binary-driven port of `cmd/eth-deposit/{main_test.go,golden_test.go}` build
+//! Binary-driven port of `cmd/ethernal/{main_test.go,golden_test.go}` build
 //! cases plus the offline `GasLimitEnvVar` config fallback. RPC-mode build cases
 //! live in `build_rpc.rs`; white-box `LoadBuildConfig` cases live in the
 //! `config.rs` `#[cfg(test)]` module.
@@ -9,14 +9,14 @@ use std::io::Write;
 use std::process::Stdio;
 
 use common::{
-    deposit_fixture, eth_deposit, phase2_fixture, phase2_golden, unsigned_tx_golden, TempDir,
+    deposit_fixture, ethernal, phase2_fixture, phase2_golden, unsigned_tx_golden, TempDir,
 };
 
 // Go: TestBuild_GoldenOutput — build output must equal the committed golden
 // byte-for-byte.
 #[test]
 fn build_golden_output() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
@@ -37,7 +37,7 @@ fn build_golden_output() {
 // Go: TestPhase2_HoleskyGolden — phase-2 synthetic fixture builds to its golden.
 #[test]
 fn phase2_holesky_golden() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(phase2_fixture())
         .output()
@@ -58,9 +58,9 @@ fn phase2_holesky_golden() {
 // Go: TestApp_Help
 #[test]
 fn app_help() {
-    let out = eth_deposit().arg("--help").output().expect("run --help");
+    let out = ethernal().arg("--help").output().expect("run --help");
     let s = String::from_utf8_lossy(&out.stdout);
-    assert!(s.contains("eth-deposit"), "help missing app name: {s}");
+    assert!(s.contains("ethernal"), "help missing app name: {s}");
     for sub in ["build", "sign", "run"] {
         assert!(s.contains(sub), "help missing subcommand {sub}: {s}");
     }
@@ -69,13 +69,13 @@ fn app_help() {
 // Go: TestApp_Version
 #[test]
 fn app_version() {
-    let out = eth_deposit()
+    let out = ethernal()
         .arg("--version")
         .output()
         .expect("run --version");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(
-        s.contains("dev") || s.contains("eth-deposit"),
+        s.contains("dev") || s.contains("ethernal"),
         "version output unexpected: {s}"
     );
 }
@@ -83,7 +83,7 @@ fn app_version() {
 // Go: TestBuildSubcommand_Help
 #[test]
 fn build_subcommand_help() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--help"])
         .output()
         .expect("run");
@@ -94,7 +94,7 @@ fn build_subcommand_help() {
 // Go: TestSignSubcommand_Help
 #[test]
 fn sign_subcommand_help() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["sign", "--help"])
         .output()
         .expect("run");
@@ -106,7 +106,7 @@ fn sign_subcommand_help() {
 // Go: TestBuildSubcommand_Action_Success
 #[test]
 fn build_action_success() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
@@ -138,7 +138,7 @@ fn build_action_success() {
 #[test]
 fn build_action_stdin_input() {
     let raw = std::fs::read(deposit_fixture()).expect("read fixture");
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["build", "--network", "holesky", "--input-file", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -158,7 +158,7 @@ fn build_action_stdin_input() {
 // Go: TestBuildSubcommand_Action_StdoutDefault
 #[test]
 fn build_action_stdout_default() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
@@ -172,7 +172,7 @@ fn build_action_stdout_default() {
 fn build_action_output_to_file() {
     let dir = TempDir::new("build-out");
     let out_file = dir.join("unsigned.json");
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .arg("--output")
@@ -191,7 +191,7 @@ fn build_action_output_to_file() {
 // Go: TestBuildSubcommand_Action_OutputDash_IsStdout
 #[test]
 fn build_action_output_dash_is_stdout() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--output", "-"])
@@ -204,7 +204,7 @@ fn build_action_output_dash_is_stdout() {
 // Go: TestBuildSubcommand_InputAlias — `--input` aliases `--input-file`.
 #[test]
 fn build_input_alias() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input"])
         .arg(deposit_fixture())
         .output()
@@ -220,7 +220,7 @@ fn build_input_alias() {
 // Go: TestBuildSubcommand_Action_MissingInputFile → exit 2.
 #[test]
 fn build_action_missing_input_file() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args([
             "build",
             "--network",
@@ -243,7 +243,7 @@ fn build_action_missing_input_file() {
 fn build_action_invalid_json() {
     let dir = TempDir::new("build-badjson");
     let bad = dir.write("bad.json", b"not json at all");
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(&bad)
         .output()
@@ -254,7 +254,7 @@ fn build_action_invalid_json() {
 // Go: TestBuildSubcommand_Action_IndexOutOfBounds → exit 2.
 #[test]
 fn build_action_index_out_of_bounds() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--index", "5"])
@@ -266,7 +266,7 @@ fn build_action_index_out_of_bounds() {
 // Go: TestBuildSubcommand_Action_BadNetwork → exit 2.
 #[test]
 fn build_action_bad_network() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args([
             "build",
             "--network",
@@ -284,8 +284,8 @@ fn build_action_bad_network() {
 // reads process env at parse time.)
 #[test]
 fn build_gas_limit_env_var() {
-    let out = eth_deposit()
-        .env("ETH_DEPOSIT_TX_GAS_LIMIT", "500000")
+    let out = ethernal()
+        .env("ETHERNAL_TX_GAS_LIMIT", "500000")
         .args(["build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()

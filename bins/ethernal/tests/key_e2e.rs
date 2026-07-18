@@ -18,7 +18,7 @@ use ethernal_core::bip39;
 use ethernal_core::hd::{self, KeyPath};
 use ethernal_keystore::{KeyLoader, Loader, PassphraseSource};
 
-use common::{crate_testdata, eth_deposit, TempDir};
+use common::{crate_testdata, ethernal, TempDir};
 
 // --- chain anchor: BIP-39 abandon×11 about + "TREZOR" = EIP-2333 case-0 seed ---
 
@@ -77,10 +77,10 @@ fn load_pubkeys_fixture() -> PubkeysFixture {
 
 /// Run `key recover` with the fixed mnemonic over stdin; return the output dir.
 fn run_key_recover(out_dir: &Path, count: u32) {
-    let ks_var = format!("ETH_DEPOSIT_K4_KS_{}", std::process::id());
-    let mp_var = format!("ETH_DEPOSIT_K4_MP_{}", std::process::id());
+    let ks_var = format!("ETHERNAL_K4_KS_{}", std::process::id());
+    let mp_var = format!("ETHERNAL_K4_MP_{}", std::process::id());
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .args(["key", "recover", "--output-dir"])
         .arg(out_dir)
         .args([
@@ -115,7 +115,7 @@ fn run_key_recover(out_dir: &Path, count: u32) {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("eth-deposit key recover:"),
+        stderr.contains("ethernal key recover:"),
         "banner missing: {stderr}"
     );
     // S-4: no entropy-injection flag on the recover surface.
@@ -265,8 +265,8 @@ fn key_recover_then_gen_deposit_data_byte_stable() {
         .collect::<Vec<_>>()
         .join(",");
 
-    let ks_var = format!("ETH_DEPOSIT_K4_GEN_KS_{}", std::process::id());
-    let out = eth_deposit()
+    let ks_var = format!("ETHERNAL_K4_GEN_KS_{}", std::process::id());
+    let out = ethernal()
         .env(&ks_var, KEYSTORE_PW)
         .args(["gen", "--keystore-dir"])
         .arg(dir.path())
@@ -292,7 +292,7 @@ fn key_recover_then_gen_deposit_data_byte_stable() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("eth-deposit gen:"),
+        stderr.contains("ethernal gen:"),
         "gen banner missing: {stderr}"
     );
     assert!(
@@ -336,7 +336,7 @@ fn key_recover_then_gen_deposit_data_byte_stable() {
 /// mnemonic through recover (S-4).
 #[test]
 fn key_recover_help_has_no_entropy_flag() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["key", "recover", "--help"])
         .output()
         .expect("help");

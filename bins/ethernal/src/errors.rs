@@ -1,4 +1,4 @@
-//! Exit code conventions for eth-deposit (port of `cmd/eth-deposit/exit.go`):
+//! Exit code conventions for ethernal (port of `cmd/ethernal/exit.go`):
 //!
 //!   0 — success
 //!   2 — user / configuration errors (bad input, validation, unknown network,
@@ -224,7 +224,7 @@ impl AppError {
     }
 }
 
-/// Maps `err` to an exit code per the eth-deposit convention. The match arms
+/// Maps `err` to an exit code per the ethernal convention. The match arms
 /// preserve the ORDER of checks in Go's `ExitCodeFor` — in particular the
 /// user-abort check precedes the RPC block, so a SIGINT that surfaces through
 /// an estimation call is classified as an abort (4), not an RPC failure (5).

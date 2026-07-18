@@ -1,6 +1,6 @@
-//! The `sign` subcommand, ported from `cmd/eth-deposit/sign.go`.
+//! The `sign` subcommand, ported from `cmd/ethernal/sign.go`.
 //!
-//! Signs an unsigned transaction produced by `eth-deposit build`, using either a
+//! Signs an unsigned transaction produced by `ethernal build`, using either a
 //! local raw secp256k1 key (development/CI) or a Ledger hardware wallet.
 
 use std::io::Write;
@@ -16,7 +16,7 @@ use crate::errors::AppError;
 use crate::logging::{Format, Level, Logger};
 
 /// The default env var holding the hex private key for the local signer.
-pub const DEFAULT_PRIV_KEY_ENV: &str = "ETH_DEPOSIT_TX_PRIVATE_KEY";
+pub const DEFAULT_PRIV_KEY_ENV: &str = "ETHERNAL_TX_PRIVATE_KEY";
 
 /// Parsed, validated inputs for the sign subcommand. Port of `main.SignConfig`.
 /// The `Signer`/`PrivateKeyEnvVar` fields are reused by `run`'s in-process sign.
@@ -37,14 +37,14 @@ pub fn command() -> Command {
     Command::new("sign")
         .about("Sign a previously built unsigned deposit transaction")
         .override_usage(
-            "eth-deposit sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]",
+            "ethernal sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]",
         )
         .long_about(
-            "Signs an unsigned transaction produced by \"eth-deposit build\".\n\n\
+            "Signs an unsigned transaction produced by \"ethernal build\".\n\n\
              Two signing methods are supported:\n\n\
              \x20 --signer local\n\
              \x20   Reads a secp256k1 private key from the environment variable named by\n\
-             \x20   --private-key-env (default: ETH_DEPOSIT_TX_PRIVATE_KEY).\n\n\
+             \x20   --private-key-env (default: ETHERNAL_TX_PRIVATE_KEY).\n\n\
              \x20   WARNING: The local signer is FOR DEVELOPMENT ONLY. Never use it with\n\
              \x20   real-fund keys. The key must never appear in CLI arguments or shell history.\n\n\
              \x20 --signer ledger\n\
@@ -221,7 +221,7 @@ mod tests {
         for ok in [
             "FOO",
             "_FOO",
-            "ETH_DEPOSIT_TX_PRIVATE_KEY",
+            "ETHERNAL_TX_PRIVATE_KEY",
             "A1",
             "_",
             "X_2_Y",

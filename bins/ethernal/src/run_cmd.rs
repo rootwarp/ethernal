@@ -1,4 +1,4 @@
-//! The `run` subcommand, ported from `cmd/eth-deposit/run.go`.
+//! The `run` subcommand, ported from `cmd/ethernal/run.go`.
 //!
 //! `run` performs build → sign in-process (no intermediate unsigned tx on disk),
 //! for workflows where both phases happen on the same machine. It also owns the
@@ -43,7 +43,7 @@ pub struct RunConfig {
 pub fn command() -> Command {
     Command::new("run")
         .about("Build and sign a deposit transaction in one step (convenience command)")
-        .override_usage("eth-deposit run --input-file FILE --network NET --signer local|ledger [options]")
+        .override_usage("ethernal run --input-file FILE --network NET --signer local|ledger [options]")
         .long_about(
             "Runs build and sign in-process without writing an intermediate unsigned tx to disk.\n\n\
              Use this when both phases happen on the same machine. For air-gapped workflows\n\
@@ -294,7 +294,7 @@ fn create_temp(dir: &str) -> std::io::Result<(String, std::fs::File)> {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let name = format!("{base}/.tmp-eth-deposit-{}-{nanos}-{n}", std::process::id());
+        let name = format!("{base}/.tmp-ethernal-{}-{nanos}-{n}", std::process::id());
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

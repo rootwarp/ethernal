@@ -1,4 +1,4 @@
-//! Binary-driven port of `cmd/eth-deposit/sign_test.go`. Go swapped `app.Reader`
+//! Binary-driven port of `cmd/ethernal/sign_test.go`. Go swapped `app.Reader`
 //! for stdin and generated fresh keys; here the binary reads the key from an env
 //! var and stdin is piped. A fixed synthetic key (`PHASE3_KEY`) stands in for
 //! Go's `generateTestPrivKey` — the assertions only check field presence and
@@ -10,9 +10,9 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 
-use common::{eth_deposit, unsigned_tx_golden, TempDir, PHASE3_KEY};
+use common::{ethernal, unsigned_tx_golden, TempDir, PHASE3_KEY};
 
-const KEY_ENV: &str = "TEST_ETH_DEPOSIT_KEY";
+const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 
 fn unsigned_input(dir: &TempDir) -> std::path::PathBuf {
     let bytes = std::fs::read(unsigned_tx_golden()).expect("read unsigned golden");
@@ -26,7 +26,7 @@ fn local_signer_success() {
     let in_file = unsigned_input(&dir);
     let out_file = dir.join("signed.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
@@ -54,7 +54,7 @@ fn local_signer_missing_env_key() {
     let dir = TempDir::new("sign-missingkey");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         // KEY_ENV intentionally not set.
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
@@ -79,7 +79,7 @@ fn local_signer_bad_key() {
     let dir = TempDir::new("sign-badkey");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, "0xdeadbeefnotahexkey")
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
@@ -99,7 +99,7 @@ fn invalid_signer() {
     let dir = TempDir::new("sign-badsigner");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["sign", "--signer", "foo", "--input"])
         .arg(&in_file)
         .output()
@@ -110,7 +110,7 @@ fn invalid_signer() {
 // Go: TestSignCommand_MissingInput → exit 2.
 #[test]
 fn missing_input() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["sign", "--signer", "local"])
         .output()
         .expect("run");
@@ -123,7 +123,7 @@ fn invalid_input_json() {
     let dir = TempDir::new("sign-badinput");
     let bad = dir.write("garbage.json", b"this is not json at all");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(&bad)
@@ -140,7 +140,7 @@ fn local_signer_stdin_input() {
     let out_file = dir.join("signed.json");
     let raw = std::fs::read(unsigned_tx_golden()).expect("read golden");
 
-    let mut child = eth_deposit()
+    let mut child = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input", "-", "--output"])
         .arg(&out_file)
@@ -167,7 +167,7 @@ fn local_signer_stdout_output() {
     let dir = TempDir::new("sign-stdout");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
@@ -189,7 +189,7 @@ fn ledger_not_supported_exit3() {
     let dir = TempDir::new("sign-ledger");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["sign", "--signer", "ledger", "--input"])
         .arg(&in_file)
         .output()
@@ -208,7 +208,7 @@ fn invalid_env_var_name_lowercase() {
     let dir = TempDir::new("sign-lower");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--private-key-env", "my_lowercase_var"])
@@ -223,7 +223,7 @@ fn invalid_env_var_name_key_passed_directly() {
     let dir = TempDir::new("sign-keyname");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--private-key-env", PHASE3_KEY]) // a hex key passed as the var NAME
@@ -246,7 +246,7 @@ fn output_write_error_exit2() {
     std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
     let out_file = ro_dir.join("signed.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
@@ -272,7 +272,7 @@ fn output_file_permissions() {
     let in_file = unsigned_input(&dir);
     let out_file = dir.join("signed.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
@@ -292,7 +292,7 @@ fn output_dash_is_stdout() {
     let dir = TempDir::new("sign-dash");
     let in_file = unsigned_input(&dir);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(&in_file)
@@ -311,7 +311,7 @@ fn phase3_local_signer_golden() {
     let dir = TempDir::new("sign-golden");
     let out_file = dir.join("signed_tx.json");
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["sign", "--signer", "local", "--input"])
         .arg(common::phase3_unsigned())

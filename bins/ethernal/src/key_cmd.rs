@@ -1464,7 +1464,7 @@ mod tests {
 
     #[test]
     fn min_len_passphrase_wrapper() {
-        let env_name = format!("ETH_DEPOSIT_TEST_KS_PW_{}", std::process::id());
+        let env_name = format!("ETHERNAL_TEST_KS_PW_{}", std::process::id());
         // Short value.
         std::env::set_var(&env_name, "short7c");
         let env = EnvSource::new(&env_name);

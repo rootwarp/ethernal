@@ -10,7 +10,7 @@ use std::path::Path;
 
 /// Returns the probe path used under `dir` for the current process.
 pub(crate) fn probe_path(dir: &Path) -> std::path::PathBuf {
-    dir.join(format!(".eth-deposit-probe-{}", std::process::id()))
+    dir.join(format!(".ethernal-probe-{}", std::process::id()))
 }
 
 /// Exclusive create of `path` with mode `0600` on Unix.
@@ -57,7 +57,7 @@ mod tests {
             static N: AtomicU64 = AtomicU64::new(0);
             let n = N.fetch_add(1, Ordering::Relaxed);
             let p = std::env::temp_dir().join(format!(
-                "eth-deposit-fs-util-{}-{}-{n}",
+                "ethernal-fs-util-{}-{}-{n}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

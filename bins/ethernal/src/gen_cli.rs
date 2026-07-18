@@ -67,7 +67,7 @@ pub fn command() -> Command {
     Command::new("gen")
         .about("Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys")
         .override_usage(
-            "eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]",
+            "ethernal gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]",
         )
         .long_about(
             "Produces deposit_data-<ts>.json for one or more BLS validator public keys by\n\
@@ -75,14 +75,14 @@ pub fn command() -> Command {
              Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.\n\n\
              Examples:\n\n\
              \x20 # Hoodi testnet, two pubkeys (keystores directory contains one .json per validator)\n\
-             \x20 eth-deposit gen \\\n\
+             \x20 ethernal gen \\\n\
              \x20   --network hoodi \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\
              \x20   --pubkeys 0x93247f2209abcafd...,0xa1b2c3d4e5f6... \\\n\
              \x20   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \\\n\
              \x20   --output-dir ./out\n\n\
              \x20 # Mainnet, single pubkey (requires explicit acknowledgement)\n\
-             \x20 eth-deposit gen \\\n\
+             \x20 ethernal gen \\\n\
              \x20   --network mainnet \\\n\
              \x20   --i-understand-this-is-mainnet \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\
@@ -186,7 +186,7 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
         .map_err(|e| AppError::exit2(format!("--network: {e}")))?;
     if net != Network::Mainnet && net != Network::Hoodi {
         return Err(AppError::exit2(format!(
-            r#"--network: "{net}" is not supported by "eth-deposit gen"; must be "mainnet" or "hoodi""#
+            r#"--network: "{net}" is not supported by "ethernal gen"; must be "mainnet" or "hoodi""#
         )));
     }
 
@@ -386,7 +386,7 @@ fn network_display(n: Network) -> String {
 }
 
 /// Writes the confirmation banner to `w` (stderr in production).
-/// Format: eth-deposit gen: network=<net> first_pubkey=<hex> last_pubkey=<hex>
+/// Format: ethernal gen: network=<net> first_pubkey=<hex> last_pubkey=<hex>
 /// count=<n> withdrawal_address=0x<EIP-55> withdrawal_credentials=0x<64hex>
 fn print_banner(w: &mut dyn Write, cfg: &GenConfig) {
     if cfg.pubkeys.is_empty() {
@@ -399,7 +399,7 @@ fn print_banner(w: &mut dyn Write, cfg: &GenConfig) {
     let wd_addr = eip55_checksum(&addr20);
     let _ = writeln!(
         w,
-        "eth-deposit gen: network={} first_pubkey=0x{} last_pubkey=0x{} count={} withdrawal_address={} withdrawal_credentials=0x{}",
+        "ethernal gen: network={} first_pubkey=0x{} last_pubkey=0x{} count={} withdrawal_address={} withdrawal_credentials=0x{}",
         network_display(cfg.network),
         hex::encode(first),
         hex::encode(last),
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(cfg.output_dir, dir.str());
         assert_eq!(cfg.pubkeys.len(), 1);
         assert_eq!(cfg.withdrawal_credentials, TEST_WITHDRAWAL_CREDS);
-        assert!(banner.contains("eth-deposit gen:"));
+        assert!(banner.contains("ethernal gen:"));
         assert!(banner.contains("network=hoodi"));
         assert!(banner.contains("count=1"));
     }
@@ -599,7 +599,7 @@ mod tests {
         .expect("should succeed");
         assert_eq!(cfg.pubkeys.len(), 2);
         let want = format!(
-            "eth-deposit gen: network=hoodi first_pubkey=0x{pk} last_pubkey=0x{pk2} count=2 \
+            "ethernal gen: network=hoodi first_pubkey=0x{pk} last_pubkey=0x{pk2} count=2 \
              withdrawal_address={TEST_WITHDRAWAL_ADDR} \
              withdrawal_credentials=0x{}",
             hex::encode(TEST_WITHDRAWAL_CREDS)

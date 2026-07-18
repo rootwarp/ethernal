@@ -1,14 +1,14 @@
-//! Binary-driven port of `cmd/eth-deposit/usage_error_test.go`. Every subcommand
+//! Binary-driven port of `cmd/ethernal/usage_error_test.go`. Every subcommand
 //! must map a usage error (a missing required flag, or a bad flag value) to exit
 //! code 2 rather than the exit-1 fallback. In Rust, clap's parse errors call
 //! `e.exit()`, which exits with status 2 for usage errors.
 
 mod common;
 
-use common::eth_deposit;
+use common::ethernal;
 
 fn assert_exit2(args: &[&str], name: &str) {
-    let out = eth_deposit().args(args).output().expect("run");
+    let out = ethernal().args(args).output().expect("run");
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -78,7 +78,7 @@ fn key_recover_missing_output_dir() {
 #[test]
 fn key_new_non_tty_exits_two() {
     let dir = common::TempDir::new("key-new-nontty");
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["key", "new", "--output-dir"])
         .arg(dir.path())
         .output()
@@ -119,7 +119,7 @@ fn key_new_bad_count_exits_two() {
 fn key_recover_nonexistent_output_dir_exits_two() {
     let dir = common::TempDir::new("key-recover-missing-out");
     let missing = dir.path().join("does-not-exist");
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["key", "recover", "--output-dir"])
         .arg(&missing)
         .output()
@@ -142,8 +142,8 @@ fn key_recover_index_overflow_exits_two_no_writes() {
 
     let dir = common::TempDir::new("key-recover-overflow");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
-    let pw_var = format!("ETH_DEPOSIT_TEST_OVERFLOW_PW_{}", std::process::id());
-    let mut child = eth_deposit()
+    let pw_var = format!("ETHERNAL_TEST_OVERFLOW_PW_{}", std::process::id());
+    let mut child = ethernal()
         .args(["key", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
@@ -198,8 +198,8 @@ fn key_recover_validates_without_tty() {
 
     let dir = common::TempDir::new("key-recover-ok");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
-    let pw_var = format!("ETH_DEPOSIT_TEST_RECOVER_PW_{}", std::process::id());
-    let mut child = eth_deposit()
+    let pw_var = format!("ETHERNAL_TEST_RECOVER_PW_{}", std::process::id());
+    let mut child = ethernal()
         .args(["key", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
@@ -230,7 +230,7 @@ fn key_recover_validates_without_tty() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("eth-deposit key recover:"),
+        stderr.contains("ethernal key recover:"),
         "banner missing: {stderr}"
     );
     assert!(stderr.contains("start_index=1"), "banner: {stderr}");

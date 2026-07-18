@@ -1,4 +1,4 @@
-//! Binary-driven port of `cmd/eth-deposit/run_rpc_test.go`: `run` in RPC mode.
+//! Binary-driven port of `cmd/ethernal/run_rpc_test.go`: `run` in RPC mode.
 //! The local signer derives `From` from its key so the node can resolve
 //! nonce/gas; the ledger signer cannot, so the config-time gate rejects it. The
 //! address derived from `PHASE3_KEY` is the `from` field of the phase-3 signed
@@ -6,12 +6,12 @@
 
 mod common;
 
-use common::{deposit_fixture, eth_deposit, Stub, PHASE3_KEY};
+use common::{deposit_fixture, ethernal, Stub, PHASE3_KEY};
 
 const HOLESKY_CHAIN_ID: u64 = 17000;
 /// The Ethereum address derived from `PHASE3_KEY` (checksum form from the golden).
 const DERIVED_FROM: &str = "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1";
-const KEY_ENV: &str = "TEST_ETH_DEPOSIT_KEY";
+const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 
 fn eq_addr(got: &str, want: &str) -> bool {
     got.to_lowercase() == want.to_lowercase()
@@ -23,7 +23,7 @@ fn eq_addr(got: &str, want: &str) -> bool {
 fn local_signer_rpc_derives_from() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 1_000_000_000, 10_000_000_000, 3, 200_000);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -77,7 +77,7 @@ fn local_signer_rpc_derives_from_for_gas_with_explicit_nonce() {
         other => common::Reply::Err(format!("unexpected {other}")),
     });
 
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -113,7 +113,7 @@ fn local_signer_rpc_derives_from_for_gas_with_explicit_nonce() {
 // (exit 3) before any dial.
 #[test]
 fn local_signer_rpc_bad_key_exit3() {
-    let out = eth_deposit()
+    let out = ethernal()
         .env(KEY_ENV, "0xdeadbeefnotahexkey")
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
@@ -139,7 +139,7 @@ fn local_signer_rpc_bad_key_exit3() {
 // + rpc with nonce omitted, naming both flags, before any dial.
 #[test]
 fn ledger_signer_rpc_nonce_omitted_exit2() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", "http://node.example", "--signer", "ledger"])
@@ -157,7 +157,7 @@ fn ledger_signer_rpc_nonce_omitted_exit2() {
 // omitted still fails the gate.
 #[test]
 fn ledger_signer_rpc_gas_omitted_exit2() {
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
@@ -183,7 +183,7 @@ fn ledger_signer_rpc_gas_omitted_exit2() {
 fn ledger_signer_rpc_both_flags_passes_gate() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 0, 0, 0, 0);
 
-    let out = eth_deposit()
+    let out = ethernal()
         .args(["run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([

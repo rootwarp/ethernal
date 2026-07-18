@@ -1,4 +1,4 @@
-//! Entry point for eth-deposit, ported from `cmd/eth-deposit/main.go`.
+//! Entry point for ethernal, ported from `cmd/ethernal/main.go`.
 //! Wires the gen, build, sign, run, send, and key subcommands.
 //!
 //! Exit codes:
@@ -37,15 +37,15 @@ use crate::logging::{Format, Level, Logger};
 
 /// version/commit/date are baked at build time via environment variables
 /// (mirroring Go's -ldflags injection). Defaults are used for local builds.
-const VERSION: &str = match option_env!("ETH_DEPOSIT_VERSION") {
+const VERSION: &str = match option_env!("ETHERNAL_VERSION") {
     Some(v) => v,
     None => "dev",
 };
-const COMMIT: &str = match option_env!("ETH_DEPOSIT_COMMIT") {
+const COMMIT: &str = match option_env!("ETHERNAL_COMMIT") {
     Some(v) => v,
     None => "none",
 };
-const DATE: &str = match option_env!("ETH_DEPOSIT_DATE") {
+const DATE: &str = match option_env!("ETHERNAL_DATE") {
     Some(v) => v,
     None => "unknown",
 };
@@ -73,13 +73,13 @@ fn install_sigint_handler() {
 }
 
 fn root_command() -> Command {
-    Command::new("eth-deposit")
+    Command::new("ethernal")
         .about("Generate, build, sign, and broadcast Ethereum Beacon Chain deposit transactions")
         .version(&**Box::leak(Box::new(format!(
             "{VERSION} (commit={COMMIT}, built={DATE})"
         ))))
         .long_about(
-            "eth-deposit takes BLS validator keystores all the way through to a broadcast\n\
+            "ethernal takes BLS validator keystores all the way through to a broadcast\n\
              Ethereum deposit transaction for the Beacon Chain deposit contract.\n\n\
              It supports a secure workflow:\n\
              \x20 key    - Generate or recover EIP-2335 BLS validator keystores from a BIP-39 mnemonic\n\
