@@ -67,24 +67,24 @@ enable `k256`'s `zeroize` feature and test whether `k256 0.13.4` `Scalar: Zeroiz
   Whichever branch is taken is **written down**, not papered over.
 
 **Acceptance criteria**
-- [ ] `master` + `derive_child` reproduce **BIP-32 Test Vector 1** — `m`, hardened `m/0'`, and
+- [x] `master` + `derive_child` reproduce **BIP-32 Test Vector 1** — `m`, hardened `m/0'`, and
   non-hardened `m/0'/1`, comparing **both private keys and chain codes** (`m` key `e8f32e72…`, cc
   `873dff81…`; `m/0'` key `edb2e14f…`, cc `47fdacbd…`; `m/0'/1` key `3c6cb8d0…`, cc `2a785763…`) —
   F-2, C-1, G4 (research/bip32-secp256k1.md §"Which published vectors exercise what").
-- [ ] `master` rejects `I_L ≥ n` and `I_L == 0`; `derive_child` returns `InvalidChildKey(i)` on
+- [x] `master` rejects `I_L ≥ n` and `I_L == 0`; `derive_child` returns `InvalidChildKey(i)` on
   `I_L ≥ n` or `k_i == 0` (the skip rule is a `Result` rejection, not a silent wrong key) — C-1
   (research §"Q2" corner case 3).
-- [ ] the non-hardened branch uses the **33-byte compressed** parent pubkey as HMAC data and the
+- [x] the non-hardened branch uses the **33-byte compressed** parent pubkey as HMAC data and the
   hardened branch uses `0x00 ‖ ser256(k_par)`; `m/0'/1` (non-hardened) passing proves the compressed
   -pubkey path — F-2, C-1 (research §"Q2" corner case 2; both branches load-bearing for our path).
-- [ ] `Bip32Error` messages embed **no** key/chain-code bytes — S-2.
-- [ ] every chain code and `secret_bytes()` is `Zeroizing`; the HMAC output `I` is scrubbed after the
+- [x] `Bip32Error` messages embed **no** key/chain-code bytes — S-2.
+- [x] every chain code and `secret_bytes()` is `Zeroizing`; the HMAC output `I` is scrubbed after the
   split — S-1.
-- [ ] **R1 decision recorded:** either `ExtendedPrivKey::drop` scrubs the scalar under the enabled
+- [x] **R1 decision recorded:** either `ExtendedPrivKey::drop` scrubs the scalar under the enabled
   `k256` `zeroize` feature (branch A), **or** a module comment documents the byte-form/chain-code
   `Zeroizing` floor as the guarantee with the feature left off (branch B) — S-1, M-A1
   (architecture §"S-1 caveat"; project-plan R1).
-- [ ] `cargo tree -p ethernal-core` shows `k256` added and **no** new third-party crate beyond it —
+- [x] `cargo tree -p ethernal-core` shows `k256` added and **no** new third-party crate beyond it —
   D-1.
 
 **Test plan**

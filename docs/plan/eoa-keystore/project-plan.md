@@ -192,6 +192,7 @@ docs — `research/bip32-secp256k1.md`, `research/web3-v3-keystore.md`):
 
 | Issue | Status | Commit | Gate result |
 |---|---|---|---|
+| A1-1 | done | (this commit) | BIP-32 TV1 keys+cc; R1 scalar scrubbed on drop |
 | A1 | todo | — | |
 | A2 | todo | — | |
 | M-A1 | open | | BIP-32 TV1 + Ethereum BIP-44 vectors; `k256` zeroize-feature decision recorded |

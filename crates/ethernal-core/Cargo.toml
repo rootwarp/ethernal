@@ -19,5 +19,6 @@ pbkdf2 = { workspace = true }
 hmac = { workspace = true }
 unicode-normalization = { workspace = true }
 getrandom = { workspace = true }
+k256 = { workspace = true }
 
 [dev-dependencies]

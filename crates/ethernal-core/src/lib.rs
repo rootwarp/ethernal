@@ -11,6 +11,7 @@ pub mod cancel;
 pub mod deposit;
 pub mod entropy;
 pub mod hd;
+pub mod hd_secp256k1;
 pub mod network;
 pub mod output;
 pub mod ssz;
