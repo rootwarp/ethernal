@@ -64,26 +64,26 @@ passphrase), D-1 (`sha3` already vendored — no new crate). This is A2's struct
 - `KeystoreError` reuses/gains an encrypt-failure variant (`Encrypt` already maps → 3).
 
 **Acceptance criteria**
-- [ ] G3 byte-gate: `encrypt_v3` fed the fixture's `secret 7a28b5ba…`, `password="testpassword"`
+- [x] G3 byte-gate: `encrypt_v3` fed the fixture's `secret 7a28b5ba…`, `password="testpassword"`
   (raw), `salt d64e482e…`, `iv fdf4d6e4…`, and `ScryptParams{n:8192,r:8,p:1,dklen:32}` produces
   `ciphertext == a5ae5118b012fe13…296ba611` and `mac == 8163019b12c28075…e0ba5d6b` **byte-for-byte** —
   F-3, C-1, C-3, G3, G4 (research/web3-v3-keystore.md §"CI byte-reproduction fixture"; fixture
   `testdata/web3-v3-cast-fixture.json`).
-- [ ] **C-4 raw-passphrase guard:** for a **non-ASCII / NFKD-unstable** passphrase (e.g. a fullwidth
+- [x] **C-4 raw-passphrase guard:** for a **non-ASCII / NFKD-unstable** passphrase (e.g. a fullwidth
   or combining-mark string), the `dk` `encrypt_v3` derives equals `derive_scrypt(RAW utf8_bytes, …)`
   and **differs** from `derive_scrypt(normalize_passphrase(pw), …)` — proving `encrypt_v3` never
   normalizes (the ASCII byte-gate alone cannot catch this, as `testpassword` is NFKD-stable) — C-4, R2
   (research §"the passphrase-normalization trap").
-- [ ] `v3_mac(dk, ct)` = `keccak256(dk[16..32] ‖ ct)` over `sha3::Keccak256`, and it is a **new**
+- [x] `v3_mac(dk, ct)` = `keccak256(dk[16..32] ‖ ct)` over `sha3::Keccak256`, and it is a **new**
   function beside `checksum_message` (SHA-256), which is unchanged — F-3 (architecture §"`crypto::v3_mac`").
-- [ ] a self encrypt round-trip decrypts `ciphertext` back to the input secret using
+- [x] a self encrypt round-trip decrypts `ciphertext` back to the input secret using
   `dk[0..16]`/`iv` (encrypt-side symmetry check — v1 ships no in-binary v3 reader, so this is the
   automated decrypt-direction anchor) — F-3, C-3.
-- [ ] `secret.len() != 32` → `KeystoreError::Encrypt` (→ exit 3) — F-3, F-9.
-- [ ] the emitted JSON has `version: 3`, `crypto.cipher: "aes-128-ctr"`, `crypto.kdf: "scrypt"`,
+- [x] `secret.len() != 32` → `KeystoreError::Encrypt` (→ exit 3) — F-3, F-9.
+- [x] the emitted JSON has `version: 3`, `crypto.cipher: "aes-128-ctr"`, `crypto.kdf: "scrypt"`,
   top-level `address` (lowercase, no `0x`) and `id` (uuid v4 from `uuid_bytes`); the plaintext secret
   is never serialized (only `ciphertext`) — F-3, S-1, S-2.
-- [ ] `encrypt_v3` draws no RNG and does no filesystem I/O (salt/iv/uuid are inputs); `keystore` gains
+- [x] `encrypt_v3` draws no RNG and does no filesystem I/O (salt/iv/uuid are inputs); `keystore` gains
   no `→ core` / `→ signer` edge; `cargo tree -p ethernal-keystore` shows `sha3` added, no new crate —
   D-1 (architecture §"design force 1").
 

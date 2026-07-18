@@ -4,6 +4,7 @@
 //! one place is what makes encrypt and decrypt agree (the round-trip gate).
 
 use sha2::{Digest, Sha256};
+use sha3::Keccak256;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
@@ -122,6 +123,27 @@ pub(crate) fn checksum_message(dk: &[u8], ciphertext: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// Computes the Web3 Secret Storage v3 MAC: `keccak256(dk[16..32] ‖ ciphertext)`.
+///
+/// Same derived-key split as EIP-2335 (`dk[0..16]` cipher key, `dk[16..32]` MAC
+/// key) but **Keccak-256**, not SHA-256. geth:
+/// `mac := crypto.Keccak256(derivedKey[16:32], cipherText)`. Sits beside
+/// [`checksum_message`] — do **not** reuse the EIP-2335 checksum for v3.
+///
+/// `dk` must be at least 32 bytes. Fails closed with an assert in **all** build
+/// profiles if a future caller skips the length guard.
+pub(crate) fn v3_mac(dk: &[u8], ciphertext: &[u8]) -> [u8; 32] {
+    assert!(
+        dk.len() >= 32,
+        "v3_mac requires dk.len() >= 32, got {}",
+        dk.len()
+    );
+    let mut hasher = Keccak256::new();
+    hasher.update(&dk[16..32]);
+    hasher.update(ciphertext);
+    hasher.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +234,32 @@ mod tests {
     fn checksum_message_fails_closed_on_short_dk() {
         let short = [0u8; 16];
         let _ = checksum_message(&short, b"ct");
+    }
+
+    /// v3 MAC is Keccak-256 of `dk[16..32] ‖ ct` — distinct from the SHA-256
+    /// EIP-2335 checksum (same dk split, different hash).
+    #[test]
+    fn v3_mac_is_keccak_and_differs_from_checksum_message() {
+        let dk = [0xabu8; 32];
+        let ct = b"ciphertext";
+        let mac = v3_mac(&dk, ct);
+        let checksum = checksum_message(&dk, ct);
+        assert_ne!(
+            mac, checksum,
+            "keccak MAC and sha256 checksum must differ on this input"
+        );
+        // Independent recompute over sha3::Keccak256 (not via v3_mac).
+        let mut h = Keccak256::new();
+        h.update(&dk[16..32]);
+        h.update(ct);
+        let expected: [u8; 32] = h.finalize().into();
+        assert_eq!(mac, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "v3_mac requires dk.len() >= 32")]
+    fn v3_mac_fails_closed_on_short_dk() {
+        let short = [0u8; 16];
+        let _ = v3_mac(&short, b"ct");
     }
 }

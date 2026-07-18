@@ -9,6 +9,7 @@
 
 mod crypto;
 pub mod encrypt;
+pub mod encrypt_v3;
 mod error;
 mod keystore;
 mod passphrase;
