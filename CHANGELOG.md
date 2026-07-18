@@ -61,8 +61,8 @@ its release notes remain on GitHub).
 - **`gen --withdrawal-address ADDR`** — emits real 0x01 execution-address
   withdrawal credentials (`0x01 ‖ 11 zero bytes ‖ addr20`). Address must be a
   correctly mixed-case **EIP-55** checksum; lowercase or checksum mismatch →
-  exit 2. Intentional asymmetry vs `build`/`run` `--from`, which remains
-  lenient (any-case 20-byte hex).
+  exit 2. Intentional asymmetry vs `build`'s `--from`, which remains
+  lenient (any-case 20-byte hex; `run` has no `--from`).
 
 #### Breaking
 
@@ -71,11 +71,42 @@ its release notes remain on GitHub).
   gate). There is no default / placeholder credential path for operators. Update
   scripts and goldens that previously called `gen` without the flag.
 
+#### Changed (hardening)
+
+- **Invalid mnemonic word reporting (`key recover`):** unknown BIP-39 word errors
+  now report the **1-based word position** only; the failing token is never
+  echoed to stderr or logs (secret-hygiene / S-2).
+- **`gen` zero-address reject:** the all-zero withdrawal address is rejected
+  (exit 2). Success banners echo the withdrawal address and derived credentials
+  for operator confirmation.
+- **Non-UTF-8 mnemonic passphrase:** invalid UTF-8 in a mnemonic passphrase now
+  fails closed with exit 2 instead of lossy-decoding into a different seed.
+- **Same-second keystore filename collision:** concurrent writes that would
+  collide on the same-second timestamp suffix retry with a unique name rather
+  than failing.
+- **Hostile keystore scrypt ceiling:** decrypt/load enforces an upper bound on
+  scrypt parameters so a malicious keystore cannot force unbounded CPU/memory
+  during passphrase verification.
+- **Index-range overflow (`key new` / `key recover`):** `--start-index` +
+  `--count` that would overflow is rejected up front (exit 2) with **zero**
+  keystore files written (no partial write-then-fail).
+- **`PassphraseTooShort` wording:** the minimum-length error reports **bytes**
+  (UTF-8 length after EIP-2335 normalization), not "characters".
+
+#### Security / hardening (operator-facing notes)
+
+- SIGINT cancel-token init order and atomic keystore write (parent-dir fsync /
+  no 0-byte stub window) tightened on the write path; no CLI flag or message
+  changes.
+
 #### Documentation
 
 - `docs/USER-GUIDE.md`: new "Step 0 — create validator keys" covering `key new` /
   `key recover`, passphrase flows, the raw-mnemonic-passphrase `ps`/history note,
-  and the EIP-55 strict-vs-lenient asymmetry.
+  env-var lifetime (`--passphrase-env` / `--mnemonic-passphrase-env` persist for
+  the shell session; `export VAR=secret` can also land in shell history — prefer
+  a dedicated session), and the EIP-55 strict-vs-lenient asymmetry
+  (`--withdrawal-address` vs `build`'s `--from`).
 - `README.md`: command list, quickstart, and divergence table updated for `key`
   and required `--withdrawal-address`.
 

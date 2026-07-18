@@ -102,7 +102,7 @@ Each milestone is gated by the spec vectors that prove the boundary beneath it:
 | R2 | **K5 breaking `gen` change** — a `gen` that rejects every invocation, or a flag with no gate | Gate + `--withdrawal-address` ship in **one issue (K5-2), one merge, one release**; `default_withdrawal_creds()` stays as documented-but-unreachable placeholder |
 | R3 | **Fixture freeze order** — K4-1 could freeze placeholder-cred deposit data that K5 invalidates | K4-1 **depends on K5-2**; freeze the E2E deposit-data fixture **once**, post-K5, with real 0x01 creds. Per-index pubkey fixtures (K1/K3) and the wordlist sha256 pin (trailing-newline-sensitive) are K5-independent and freeze earlier |
 | R4 | **Cross-tool drift** — a tool/client version bump shifts filename/format expectations | Target ethstaker-deposit-cli (not the deprecated staking-deposit-cli); pin versions in the M-K4 session note |
-| R5 | **EIP-55 UX gap** — `--withdrawal-address` is strict (reject lowercase) while `gen`'s `--from` is lenient | Intentional (ethstaker parity); documented in K4-2 so operators aren't surprised by the asymmetry |
+| R5 | **EIP-55 UX gap** — `--withdrawal-address` is strict (reject lowercase) while `build`'s `--from` is lenient | Intentional (ethstaker parity); documented in K4-2 so operators aren't surprised by the asymmetry |
 
 ## Progress log
 

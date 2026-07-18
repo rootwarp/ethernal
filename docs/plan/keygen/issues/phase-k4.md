@@ -69,7 +69,7 @@ Satisfies U-1, U-3, and the documentation half of C-2/R5.
 - Carry the architecture §Design note (c) **security note**: a raw `--mnemonic-passphrase VALUE` is visible in the
   process table (`ps`) and shell history; recommend the env/prompt forms; document the raw form as a scripting
   convenience, **not** for high-value mnemonics.
-- Document the EIP-55 asymmetry (risk R5): `--withdrawal-address` is strict (rejects lowercase), while `gen`'s
+- Document the EIP-55 asymmetry (risk R5): `--withdrawal-address` is strict (rejects lowercase), while `build`'s
   `--from` is lenient.
 - `README.md`: update the command list / divergence table (cross-note with the existing Rust README divergence
   table). `CHANGELOG.md`: record the **breaking** `gen` change (now requires `--withdrawal-address`; exit 2 without).

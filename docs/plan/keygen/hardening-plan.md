@@ -390,9 +390,9 @@ memory by construction); existing keystore suite as regression oracle.
   scrypt ceiling on load).
 
 **Acceptance criteria**
-- [ ] No doc in the repo attributes `--from` to `run` or `gen` (`grep` sweep clean).
-- [ ] USER-GUIDE carries the env-persistence note; CHANGELOG lists each behavior change above.
-- [ ] `make lint` (incl. any doc checks) green.
+- [x] No doc in the repo attributes `--from` to `run` or `gen` (`grep` sweep clean).
+- [x] USER-GUIDE carries the env-persistence note; CHANGELOG lists each behavior change above.
+- [x] `make lint` (incl. any doc checks) green.
 
 ---
 
@@ -446,6 +446,6 @@ require no action and are listed here only for completeness of the traceability 
 | H5 | done | 1997b5e | review PASS (0 blocking) |
 | H6 | done | 57174d6 | review PASS; inject race fixed |
 | H7 | done | 1c847ec | review PASS (0 blockers) |
-| H8 | todo | | |
+| H8 | done | 8e85f2f | review PASS; history note applied |
 | H9 | todo (manual) | — | M-K4 G1/G2 session — versions to be pinned here |
 | M-H | open | | all findings fixed or dispositioned; parity session recorded |

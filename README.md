@@ -83,7 +83,7 @@ validate on real hardware before any real-fund use.
 | Broadcast tx hash | recomputed locally from the decoded tx | taken from the node's `eth_sendRawTransaction` response (same value) |
 | Validator keygen | out of band (e.g. staking-deposit-cli) | nested `eth-deposit key new` / `key recover` (BIP-39 → EIP-2333/2335) |
 | `gen` withdrawal credentials | fixed placeholder path in the port era | **required** `--withdrawal-address` (EIP-55 checksummed) → real 0x01 creds; absent → exit 2 |
-| EIP-55 on addresses | n/a for gen withdrawal | `--withdrawal-address` is **strict** EIP-55; `build`/`run` `--from` remains **lenient** (any-case 20-byte hex) |
+| EIP-55 on addresses | n/a for gen withdrawal | `--withdrawal-address` is **strict** EIP-55; `build`'s `--from` remains **lenient** (any-case 20-byte hex) |
 
 ## Repository structure
 

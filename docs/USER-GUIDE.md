@@ -144,7 +144,7 @@ Both write one `keystore-m_12381_3600_<i>_0_0-<unix>.json` (mode `0o600`) per in
 |---|---|---|
 | `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON files | — |
 | `--count N` | Number of validator keys to produce (must be ≥ 1) | `1` |
-| `--passphrase-env VAR` | Env var holding the **keystore** encryption passphrase (min 8 chars after EIP-2335 normalization). Omit for a TTY prompt-with-confirm | TTY prompt |
+| `--passphrase-env VAR` | Env var holding the **keystore** encryption passphrase (min 8 bytes after EIP-2335 normalization). Omit for a TTY prompt-with-confirm | TTY prompt |
 | `--mnemonic-passphrase [VALUE]` | Optional BIP-39 mnemonic passphrase ("25th word"). Bare flag → interactive prompt; with `VALUE` → raw argv value; omit → empty (default) | empty |
 | `--mnemonic-passphrase-env VAR` | Env var holding the BIP-39 mnemonic passphrase (empty string is valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
 
@@ -156,7 +156,9 @@ Both write one `keystore-m_12381_3600_<i>_0_0-<unix>.json` (mode `0o600`) per in
 
 `key new` always starts at index `0` (no `--start-index`).
 
-**Two different passphrases.** The keystore passphrase (`--passphrase-env` / TTY prompt) encrypts the JSON keystore files and has an 8-character minimum. The optional **mnemonic passphrase** is the BIP-39 "25th word" mixed into seed derivation; empty is valid and there is no minimum. They are never interchangeable.
+**Two different passphrases.** The keystore passphrase (`--passphrase-env` / TTY prompt) encrypts the JSON keystore files and has an 8-byte minimum (UTF-8 length after EIP-2335 normalization). The optional **mnemonic passphrase** is the BIP-39 "25th word" mixed into seed derivation; empty is valid and there is no minimum. They are never interchangeable.
+
+**Env-var lifetime.** Values supplied via `--passphrase-env` or `--mnemonic-passphrase-env` remain in the process environment for the lifetime of that shell (and any child processes that inherit it). Prefer a dedicated shell/session for keygen work, and `unset` the variable when finished. Note that `export VAR=secret` can also land in shell history — the same exposure class as raw argv.
 
 ### Security note — raw `--mnemonic-passphrase VALUE`
 
@@ -274,7 +276,7 @@ eth-deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-di
 
 `--withdrawal-address` is **strict**: the address must be a correctly mixed-case EIP-55 checksum. All-lowercase, all-uppercase, or a mixed-case checksum mismatch is rejected with exit 2. This matches ethstaker/staking-deposit-cli and catches typos before they become irreversible withdrawal credentials.
 
-By contrast, `build`/`run`'s `--from` is **lenient**: any 0x-prefixed (or bare) 20-byte hex is accepted regardless of case — no checksum check. Do not expect the two flags to behave the same way.
+By contrast, `build`'s `--from` is **lenient**: any 0x-prefixed (or bare) 20-byte hex is accepted regardless of case — no checksum check. (`run` has no `--from`; it derives the sender from its signing key.) Do not expect the two flags to behave the same way.
 
 ### Example — Hoodi single validator
 
@@ -725,7 +727,7 @@ It does NOT protect:
 
 - **BLS mnemonic (`key new` / `key recover`)** — write it down offline during the ceremony; store it offline only. Never commit it, pipe `key new` (refused), or paste it into tickets/chat. Prefer air-gapped generation for high-value validators.
 - **Mnemonic passphrase (BIP-39 "25th word")** — prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (prompt). **Do not** use raw `--mnemonic-passphrase VALUE` for high-value mnemonics: the value is visible in the process table (`ps`) and shell history. A mistyped 25th word yields keys you cannot recover from the mnemonic alone.
-- **Keystore passphrase** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 characters. There is no raw-argv form (unlike the mnemonic passphrase).
+- **Keystore passphrase** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 bytes after EIP-2335 normalization. There is no raw-argv form (unlike the mnemonic passphrase). Env vars persist for the shell lifetime (and `export VAR=secret` can land in shell history) — use a dedicated session and `unset` when done (see [Step 0](#step-0--create-validator-keys-eth-deposit-key)).
 - `ETH_DEPOSIT_TX_PRIVATE_KEY` — env var only. There is NO `--private-key` flag. The env-var-name flag (`--private-key-env`) is validated to match `^[A-Z_][A-Z0-9_]*$` to prevent users from accidentally passing the key value.
 - `LocalSigner` zeroizes the key bytes in memory when `Close()` is called (end of every `sign` / `run` invocation).
 - For mainnet: use Ledger for the deposit-tx signer. The local signer is explicitly tagged "for development only" in its docs and is not recommended for any real-fund deposit.
@@ -892,7 +894,7 @@ cast decode-typed-tx "$RAW"
 | `--count: value 0 is invalid` (exit 2) | Pass `--count` ≥ 1. |
 | Invalid mnemonic / checksum (exit 2, `key recover`) | Check word count (12/15/18/21/24), spelling against the English wordlist, and that the full phrase matches what you wrote down (including any mnemonic passphrase). |
 | Ceremony re-entry mismatch → abort (exit 4) | You declined retry after a wrong re-entry, or sent SIGINT. Run `key new` again; the previous mnemonic was never written to disk. |
-| Keystore passphrase too short (exit 2) | Keystore passphrase must be at least 8 characters (after EIP-2335 normalization). |
+| Keystore passphrase too short (exit 2) | Keystore passphrase must be at least 8 bytes (after EIP-2335 normalization). |
 
 ### `eth-deposit gen` errors
 

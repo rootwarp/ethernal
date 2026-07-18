@@ -52,7 +52,7 @@ address; `0x01 ‖ 11 zero bytes ‖ addr20`) and G6.
   tail).
 
 **Notes**
-- Strict EIP-55 (reject lowercase) diverges intentionally from `gen`'s lenient `--from` (`parse_from_flag`,
+- Strict EIP-55 (reject lowercase) diverges intentionally from `build`'s lenient `--from` (`parse_from_flag`,
   `config.rs:142`, which accepts any case) — ethstaker-deposit-cli parity. The asymmetry is documented in K4-2
   (risk R5).
 
