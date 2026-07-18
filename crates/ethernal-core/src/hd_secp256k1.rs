@@ -1,8 +1,9 @@
 //! Hand-rolled BIP-32 secp256k1 hierarchical derivation over `k256`.
 //!
-//! Thin pure module: master key from seed and single-step CKDpriv covering both
-//! hardened and non-hardened branches. Path fold / BIP-44 model land in A1-2.
-//! Gated by BIP-32 official Test Vector 1 (keys **and** chain codes).
+//! Pure module: master key from seed, single-step CKDpriv (hardened +
+//! non-hardened), fixed BIP-44 Ethereum path model, and path fold.
+//! Gated by BIP-32 official Test Vector 1 (keys **and** chain codes) and the
+//! Ethereum BIP-44 `abandon…about` secret vector (empty passphrase vs `cast`).
 //!
 //! # S-1 zeroization — R1 decision: **scalar scrubbed on drop**
 //!
@@ -40,6 +41,35 @@ pub enum Bip32Error {
     /// Child at `index` rejected (`I_L ≥ n` or resulting `k_i == 0`).
     #[error("bip32: invalid child key at index {0} (I_L ≥ n or k_i = 0)")]
     InvalidChildKey(u32),
+}
+
+/// A BIP-44 Ethereum account path: `m/44'/60'/0'/0/<address_index>` (F-2).
+///
+/// `account'` is fixed at `0'`; only `address_index` varies (PRD F-2 /
+/// MetaMask "Account i"). Path strings are public and safe to log (S-2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bip44Path([u32; 5]);
+
+impl Bip44Path {
+    /// EOA path for MetaMask-style account `address_index`.
+    ///
+    /// Indices: `[44|H, 60|H, 0|H, 0, address_index]` with `H = 2³¹`.
+    pub fn eoa(address_index: u32) -> Self {
+        // account' is fixed at 0' (== HARDENED); only address_index varies (F-2).
+        Self([44 | HARDENED, 60 | HARDENED, HARDENED, 0, address_index])
+    }
+
+    /// Child-index sequence after `m` (five levels).
+    pub fn indices(&self) -> &[u32] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Bip44Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Fixed prefix; only the final address_index varies.
+        write!(f, "m/44'/60'/0'/0/{}", self.0[4])
+    }
 }
 
 /// An extended private key: secret scalar + 32-byte chain code.
@@ -119,6 +149,19 @@ impl ExtendedPrivKey {
         i.zeroize();
 
         self.child_from_halves(index, &il, ir)
+    }
+
+    /// Folds [`derive_child`](Self::derive_child) over [`master`](Self::master)
+    /// for the five BIP-44 path indices (F-2).
+    ///
+    /// Mixes both CKDpriv branches: `44'/60'/0'` hardened, then `0/i`
+    /// non-hardened.
+    pub fn derive_path(seed: &[u8], path: &Bip44Path) -> Result<Self, Bip32Error> {
+        let mut key = Self::master(seed)?;
+        for &index in path.indices() {
+            key = key.derive_child(index)?;
+        }
+        Ok(key)
     }
 
     /// 32-byte big-endian secret scalar. Feeds signer / keystore encrypt.
@@ -357,5 +400,71 @@ mod tests {
         );
         // chain_code field is Zeroizing (compile-time via field type).
         assert_eq!(key.chain_code.len(), 32);
+    }
+
+    // --- A1-2: Bip44Path + derive_path + Ethereum BIP-44 secrets ---
+
+    #[test]
+    fn bip44_path_eoa_indices_and_display() {
+        let p0 = Bip44Path::eoa(0);
+        assert_eq!(p0.indices(), &[0x8000_002C, 0x8000_003C, 0x8000_0000, 0, 0]);
+        assert_eq!(p0.to_string(), "m/44'/60'/0'/0/0");
+
+        let p1 = Bip44Path::eoa(1);
+        assert_eq!(p1.indices(), &[0x8000_002C, 0x8000_003C, 0x8000_0000, 0, 1]);
+        assert_eq!(p1.to_string(), "m/44'/60'/0'/0/1");
+
+        let p42 = Bip44Path::eoa(42);
+        assert_eq!(p42.indices()[4], 42);
+        assert_eq!(p42.to_string(), "m/44'/60'/0'/0/42");
+    }
+
+    /// Ethereum BIP-44 vector: mnemonic `abandon … about`, **empty** passphrase.
+    ///
+    /// Seed `5eb00bbd…` (NOT the TREZOR-passphrase seed `c55257c3…` used by BLS
+    /// EIP-2333 case-0). Secrets vs `cast wallet private-key` ground truth.
+    /// Source: docs/plan/eoa-keystore/research/bip32-secp256k1.md
+    const BIP44_ETH_SEED: &str = concat!(
+        "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1",
+        "9a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+    );
+
+    /// (address_index, expected secret hex). Addresses gated in A3-1.
+    const BIP44_ETH_SECRETS: &[(u32, &str)] = &[
+        (
+            0,
+            "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727",
+        ),
+        (
+            1,
+            "9a983cb3d832fbde5ab49d692b7a8bf5b5d232479c99333d0fc8e1d21f1b55b6",
+        ),
+    ];
+
+    #[test]
+    fn bip44_eth_abandon_secrets_empty_passphrase() {
+        // Guard: must not use the TREZOR / BLS case-0 seed.
+        assert!(
+            !BIP44_ETH_SEED.starts_with("c55257c3"),
+            "must use empty-passphrase seed 5eb00bbd…, not TREZOR seed"
+        );
+        assert!(BIP44_ETH_SEED.starts_with("5eb00bbd"));
+
+        let seed = decode_hex(BIP44_ETH_SEED);
+        assert_eq!(seed.len(), 64, "BIP-39 seed is 64 bytes");
+
+        for &(index, expected) in BIP44_ETH_SECRETS {
+            let path = Bip44Path::eoa(index);
+            let key = ExtendedPrivKey::derive_path(&seed, &path)
+                .unwrap_or_else(|e| panic!("derive_path index {index}: {e}"));
+            let secret = key.secret_bytes();
+            assert_eq!(
+                hex::encode(secret.as_slice()),
+                expected,
+                "m/44'/60'/0'/0/{index}: secret mismatch vs cast"
+            );
+            // secret_bytes returns Zeroizing (type-level + drop scrub).
+            let _: &Zeroizing<[u8; 32]> = &secret;
+        }
     }
 }

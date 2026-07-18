@@ -122,16 +122,16 @@ Satisfies F-2 (`m/44'/60'/0'/0/i` derivation) and C-1/G4 (BIP-44 vector).
   exercises the full A1-1 primitive.
 
 **Acceptance criteria**
-- [ ] `Bip44Path::eoa(i)` yields `[0x8000002C, 0x8000003C, 0x80000000, 0, i]` and `Display` renders
+- [x] `Bip44Path::eoa(i)` yields `[0x8000002C, 0x8000003C, 0x80000000, 0, i]` and `Display` renders
   `"m/44'/60'/0'/0/<i>"` — F-2 (architecture §"`core::hd_secp256k1`").
-- [ ] `derive_path` over the **Ethereum BIP-44 vector** (`abandon…about`, **empty** passphrase, seed
+- [x] `derive_path` over the **Ethereum BIP-44 vector** (`abandon…about`, **empty** passphrase, seed
   `5eb00bbd…`) reproduces the secp256k1 **secrets** at `m/44'/60'/0'/0/0` (`1ab42cc412b618bd…fb12b727`)
   and `m/44'/60'/0'/0/1` (`9a983cb3d832fbde…f1b55b6`), byte-for-byte against `cast wallet private-key`
   ground truth — F-2, C-1, G4 (research/bip32-secp256k1.md §"Ethereum BIP-44 vector").
-- [ ] the seed is the **empty-passphrase** seed `5eb00bbd…` (**not** the `TREZOR` seed `c55257c3…`
+- [x] the seed is the **empty-passphrase** seed `5eb00bbd…` (**not** the `TREZOR` seed `c55257c3…`
   used by the BLS EIP-2333 tree — different tree, do not cross the seeds) — C-1 (research §"⚠ Do not
   cross the seeds").
-- [ ] `secret_bytes()` for each derived key is `Zeroizing` — S-1.
+- [x] `secret_bytes()` for each derived key is `Zeroizing` — S-1.
 
 **Test plan**
 - `#[cfg(test)]` extending the A1-1 tests: feed seed `5eb00bbd…` (inline, or a

@@ -192,8 +192,10 @@ docs — `research/bip32-secp256k1.md`, `research/web3-v3-keystore.md`):
 
 | Issue | Status | Commit | Gate result |
 |---|---|---|---|
-| A1-1 | done | (this commit) | BIP-32 TV1 keys+cc; R1 scalar scrubbed on drop |
-| A1 | todo | — | |
+| A1-1 | done | f1f0507 | BIP-32 TV1 keys+cc; R1 scalar scrubbed on drop |
+| A1-2 | done | (this commit) | Bip44Path + derive_path; abandon secrets vs cast |
+| A1 | done | — | M-A1 secrets half closed (addresses via A3-1) |
+| M-A1 | open | | secrets green; addresses pending A3-1 |
 | A2 | todo | — | |
 | M-A1 | open | | BIP-32 TV1 + Ethereum BIP-44 vectors; `k256` zeroize-feature decision recorded |
 | M-A2 | open | | G3 v3 encrypt byte-gate (`ciphertext`/`mac`) + round-trip + `v3_filename` vector |
