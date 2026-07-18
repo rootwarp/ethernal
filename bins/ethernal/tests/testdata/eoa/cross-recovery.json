@@ -1,0 +1,30 @@
+{
+  "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "mnemonic_passphrase": "",
+  "seed_hex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+  "note": "Empty mnemonic passphrase → seed 5eb00bbd… (Ethereum BIP-44 / cast vector). BLS pubkeys are regression-locked from this same seed — NOT an external EIP-2333 vector (case-0 uses TREZOR → c55257c3…). EOA addresses are cast-verified.",
+  "indices": [
+    {
+      "index": 0,
+      "eoa_path": "m/44'/60'/0'/0/0",
+      "eoa_private_key": "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727",
+      "address": "9858effd232b4033e47d90003d41ec34ecaeda94",
+      "eip55": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+      "bls_signing_path": "m/12381/3600/0/0/0",
+      "bls_signing_pubkey": "b3e445d43871965d890a398f719348a1405ac72e35b92727cc570026f54471af7ea7b2040622a8fd0b5bfb2a209b5911",
+      "bls_withdrawal_path": "m/12381/3600/0/0",
+      "bls_withdrawal_pubkey": "8ebe599559cbf3abbc6a72b25d8bc13fd9b5075283fcd9ec47b2a0bf6c5148a2e9e615b181e5b2c03abe63818ef70c61"
+    },
+    {
+      "index": 1,
+      "eoa_path": "m/44'/60'/0'/0/1",
+      "eoa_private_key": "9a983cb3d832fbde5ab49d692b7a8bf5b5d232479c99333d0fc8e1d21f1b55b6",
+      "address": "6fac4d18c912343bf86fa7049364dd4e424ab9c0",
+      "eip55": "0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0",
+      "bls_signing_path": "m/12381/3600/1/0/0",
+      "bls_signing_pubkey": "aeb399bf5648b0e9980c1731824c269631a41320c3d7f730c40587e1a37a5e1c8b5755fd90080a7b3fb90d3fd419c0a7",
+      "bls_withdrawal_path": "m/12381/3600/1/0",
+      "bls_withdrawal_pubkey": "8b52e53cb73723a8f60fe279edfb277f48ec3ae54070326113c7277decd0f1dd9fab5267dfe40604c2614028be7860b1"
+    }
+  ]
+}

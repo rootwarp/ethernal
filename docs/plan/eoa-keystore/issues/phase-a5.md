@@ -48,18 +48,18 @@ the fixed mnemonic, no hidden entropy/time flag).
   not a shipped flag.
 
 **Acceptance criteria**
-- [ ] `account recover` (fixed `abandon…about` + empty passphrase) derives seed `5eb00bbd…` and v3
+- [x] `account recover` (fixed `abandon…about` + empty passphrase) derives seed `5eb00bbd…` and v3
   keystores whose index 0/1 `address` fields are `9858effd…`/`6fac4d18…` and whose EIP-55 display is
   `0x9858…Eda94`/`0x6Fac…b9C0` — C-1, G4 (research/bip32-secp256k1.md §"Ethereum BIP-44 vector").
-- [ ] each keystore is written `0600`, atomically, with a `UTC--…` filename that parses back to the
+- [x] each keystore is written `0600`, atomically, with a `UTC--…` filename that parses back to the
   address; a second run into the same dir refuses to overwrite — F-4, S-3.
-- [ ] **cross-recovery:** the same seed feeds `core::hd` (BLS `m/12381/3600/i/0/0`) and
+- [x] **cross-recovery:** the same seed feeds `core::hd` (BLS `m/12381/3600/i/0/0`) and
   `core::hd_secp256k1` (EOA `m/44'/60'/0'/0/i`); the BLS pubkeys match a **committed regression
   fixture** (no external-vector claim for this passphrase) while the EOA addresses match the cast
   vector — PRD §"Cross-recovery property", C-1.
-- [ ] the E2E output is **byte-stable** against the committed goldens under
+- [x] the E2E output is **byte-stable** against the committed goldens under
   `bins/ethernal/tests/testdata/eoa/` — C-1 (frozen once).
-- [ ] no hidden entropy/time flag: determinism is via the fixed mnemonic through `account recover`;
+- [x] no hidden entropy/time flag: determinism is via the fixed mnemonic through `account recover`;
   the fixed `Timestamp` is a `#[cfg(test)]` injection only — S-4.
 
 **Test plan**
