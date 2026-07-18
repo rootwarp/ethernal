@@ -28,7 +28,7 @@ use crate::errors::AppError;
 use crate::gen_cmd::Progress;
 use crate::key_cmd::{
     check_cancel, resolve_mnemonic_passphrase, run_ceremony, MinLenPassphrase, MnemonicSource,
-    StdinMnemonicSource,
+    RecoverMnemonicSource, StdinMnemonicSource,
 };
 use crate::logging::{Format, Level, Logger};
 
@@ -46,9 +46,11 @@ pub struct Timestamp {
     pub nanos: u32,
 }
 
-/// Injectable dependencies for [`run_account_new_with_deps`].
+/// Injectable dependencies for [`run_account_new_with_deps`] /
+/// [`run_account_recover_with_deps`].
 ///
-/// Production values come from [`run_account_new`]; tests replace any piece.
+/// Production values come from [`run_account_new`] / [`run_account_recover`];
+/// tests replace any piece.
 pub struct AccountDeps<'a> {
     pub cfg: &'a AccountConfig,
     /// CSPRNG for mnemonic entropy and per-keystore salt/iv/uuid.
@@ -125,9 +127,50 @@ pub fn run_account_new(cfg: &AccountConfig, cancel: &CancelToken) -> Result<(), 
     run_account_new_with_deps(&mut deps, cancel)
 }
 
-/// Production entry for `account recover`. Pipeline lands in A4-1.
-pub fn run_account_recover(_cfg: &AccountConfig, _cancel: &CancelToken) -> Result<(), AppError> {
-    Ok(())
+/// Production entry for `account recover`: assembles real deps and runs the pipeline.
+pub fn run_account_recover(cfg: &AccountConfig, cancel: &CancelToken) -> Result<(), AppError> {
+    let logger = Logger::stderr(Level::Info, Format::Text);
+    let entropy = OsEntropy;
+    let progress = if stderr_is_tty() {
+        Progress::Tty
+    } else {
+        Progress::NonTty
+    };
+    let timestamp = wall_clock_timestamp();
+
+    // Keystore passphrase: env + min-len, or interactive confirm+≥8.
+    let env_source;
+    let checked_env;
+    let tty_pw;
+    let keystore_pw: &dyn PassphraseSource = if !cfg.passphrase_env.is_empty() {
+        env_source = EnvSource::new(&cfg.passphrase_env);
+        checked_env = MinLenPassphrase {
+            inner: &env_source,
+            min: KEYSTORE_PASSPHRASE_MIN_LEN,
+        };
+        &checked_env
+    } else {
+        tty_pw = NewKeystorePassphrase::new(std::io::stderr());
+        &tty_pw
+    };
+
+    // TTY prompt or piped stdin (F-10); no TTY-only gate on recover.
+    let mnemonic_src = RecoverMnemonicSource::new(std::io::stderr());
+    let mut tty_writer = io::sink();
+    let mut summary_out = std::io::stderr();
+
+    let mut deps = AccountDeps {
+        cfg,
+        entropy: &entropy,
+        keystore_pw,
+        mnemonic_src: &mnemonic_src,
+        tty_writer: &mut tty_writer,
+        summary_out: &mut summary_out,
+        progress,
+        logger: &logger,
+        timestamp,
+    };
+    run_account_recover_with_deps(&mut deps, cancel)
 }
 
 /// Opens `/dev/tty` for the mnemonic display only. **No stderr fallback** (S-2).
@@ -214,10 +257,56 @@ pub fn run_account_new_with_deps(
     )
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline — account recover
+// ---------------------------------------------------------------------------
+
+/// Testable core of `account recover`: read mnemonic (TTY/pipe) → validate →
+/// mnemonic passphrase (single-entry prompt) → seed → derive/address/encrypt/write.
+/// **No** display/re-entry ceremony (F-10).
+pub fn run_account_recover_with_deps(
+    deps: &mut AccountDeps<'_>,
+    cancel: &CancelToken,
+) -> Result<(), AppError> {
+    let log = deps.logger;
+    let cfg = deps.cfg;
+
+    check_cancel(cancel)?;
+
+    // 1. Existing mnemonic from TTY prompt or piped stdin (F-10).
+    log.debug("account recover: reading mnemonic", &[]);
+    let mnemonic = deps.mnemonic_src.read_line("Enter your mnemonic: ")?;
+    // 2. Validate first — 12/15/18/21/24; bad word/checksum → exit 2 (F-11).
+    bip39::validate_mnemonic(mnemonic.as_str()).map_err(map_bip39_err)?;
+    let word_count = mnemonic.split_whitespace().count();
+    log.debug(
+        "account recover: mnemonic validated",
+        &[("words", word_count.to_string())],
+    );
+
+    // 3. Mnemonic passphrase: flag > env > prompt (single-entry on recover).
+    check_cancel(cancel)?;
+    let mnemonic_pass = resolve_mnemonic_passphrase(
+        &cfg.mnemonic_passphrase,
+        deps.mnemonic_src,
+        cancel,
+        /* confirm */ false,
+    )?;
+
+    // 4–6. Keystore passphrase → seed → derive/address/encrypt/write (shared with new).
+    finish_from_mnemonic(
+        deps,
+        cancel,
+        mnemonic.as_str(),
+        mnemonic_pass.as_slice(),
+        "account recover",
+    )
+}
+
 /// Shared tail: keystore passphrase → to_seed → per-index
 /// derive → address → encrypt_v3 → write.
 ///
-/// Used by `account new` now; `account recover` will call this in A4-1.
+/// Used by both `account new` and `account recover`.
 fn finish_from_mnemonic(
     deps: &mut AccountDeps<'_>,
     cancel: &CancelToken,
@@ -435,6 +524,9 @@ mod tests {
     /// All-zero 32-byte entropy → `abandon` × 23 + `art` (24 words).
     const ZERO_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
+    /// 12-word Trezor vector mnemonic (valid checksum).
+    const ABANDON_12: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
     /// Frozen timestamp for deterministic `UTC--` filenames.
     const TS: Timestamp = Timestamp {
         unix_secs: 1_784_384_525,
@@ -620,6 +712,42 @@ mod tests {
             timestamp: TS,
         };
         run_account_new_with_deps(&mut deps, cancel)?;
+        Ok((tty, summary))
+    }
+
+    fn recover_cfg(dir: &str, count: u32, start_index: u32) -> AccountConfig {
+        AccountConfig {
+            mode: AccountMode::Recover,
+            count,
+            output_dir: dir.into(),
+            start_index,
+            passphrase_env: String::new(),
+            mnemonic_passphrase: MnemonicPassphraseForm::Empty,
+        }
+    }
+
+    fn run_recover_with(
+        cfg: &AccountConfig,
+        entropy: &dyn Entropy,
+        keystore_pw: &dyn PassphraseSource,
+        mnemonic_src: &dyn MnemonicSource,
+        cancel: &CancelToken,
+    ) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = discard_logger();
+        let mut deps = AccountDeps {
+            cfg,
+            entropy,
+            keystore_pw,
+            mnemonic_src,
+            tty_writer: &mut tty,
+            summary_out: &mut summary,
+            progress: Progress::Tty,
+            logger: &logger,
+            timestamp: TS,
+        };
+        run_account_recover_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
     }
 
@@ -1021,6 +1149,270 @@ mod tests {
     }
 
     // =========================================================================
+    // A4-1 account recover
+    // =========================================================================
+
+    #[test]
+    fn recover_12_word_crypto_address_consistent() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        // No ceremony: first scripted line is the mnemonic itself.
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+        let entropy = FixedEntropy::new(vec![]); // salt/iv/uuid zeros
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let (tty, summary) =
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+
+        // No ceremony: tty_writer must not receive the mnemonic.
+        let tty_s = String::from_utf8(tty).unwrap();
+        assert!(
+            !tty_s.contains(ABANDON_12),
+            "recover must not display mnemonic: {tty_s:?}"
+        );
+        let summary_s = String::from_utf8(summary).unwrap();
+        assert!(summary_s.contains("wrote 1 keystore"), "{summary_s}");
+        assert!(!summary_s.contains(ABANDON_12));
+
+        let files = dir.v3_files();
+        assert_eq!(files.len(), 1);
+
+        let seed = bip39::to_seed(ABANDON_12, b"").unwrap();
+        let salt = [0u8; 32];
+        let iv = [0u8; 16];
+        let uuid_bytes = [0u8; 16];
+        let path = Bip44Path::eoa(0);
+        let derived = hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &path).unwrap();
+        let sk = derived.secret_bytes();
+        let addr = secret_to_address(&sk).unwrap();
+        let eip55 = eip55_checksum(&addr);
+        let expected_name = v3_filename(&addr, TS.unix_secs, TS.nanos);
+
+        let f = &files[0];
+        assert_eq!(
+            f.file_name().and_then(|n| n.to_str()),
+            Some(expected_name.as_str())
+        );
+        assert!(summary_s.contains(&eip55), "summary missing {eip55}");
+
+        let body = std::fs::read(f).unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["version"], 3);
+        assert_eq!(val["address"], hex::encode(addr));
+
+        let expected = encrypt_v3(&EncryptV3Input {
+            secret: sk.as_slice(),
+            password: b"password1",
+            address: addr,
+            salt,
+            iv,
+            uuid_bytes,
+            scrypt: ScryptParams::STANDARD,
+        })
+        .unwrap();
+        assert_eq!(body, expected);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn recover_24_word_crypto_address_consistent() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+
+        let files = dir.v3_files();
+        assert_eq!(files.len(), 1);
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
+        let derived =
+            hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
+                .unwrap();
+        let sk = derived.secret_bytes();
+        let addr = secret_to_address(&sk).unwrap();
+        let expected_name = v3_filename(&addr, TS.unix_secs, TS.nanos);
+        assert_eq!(
+            files[0].file_name().and_then(|n| n.to_str()),
+            Some(expected_name.as_str())
+        );
+        let body = std::fs::read(&files[0]).unwrap();
+        let expected = encrypt_v3(&EncryptV3Input {
+            secret: sk.as_slice(),
+            password: b"password1",
+            address: addr,
+            salt: [0u8; 32],
+            iv: [0u8; 16],
+            uuid_bytes: [0u8; 16],
+            scrypt: ScryptParams::STANDARD,
+        })
+        .unwrap();
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn recover_bad_word_exit2() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon notaword";
+        let lines = ScriptedLines::new(vec![bad]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let err = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2, "err={err}");
+        let msg = err.to_string();
+        assert!(msg.contains("unknown word at position 12"), "err={err}");
+        assert!(
+            !msg.contains("notaword"),
+            "token must not appear in error Display: {err}"
+        );
+        assert!(dir.v3_files().is_empty());
+    }
+
+    #[test]
+    fn recover_bad_checksum_exit2() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        // 12× abandon — wrong checksum (valid ends with about).
+        let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+        let lines = ScriptedLines::new(vec![bad]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let err = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap_err();
+        assert_eq!(exit_code_for(&err), 2, "err={err}");
+        assert!(err.to_string().contains("checksum"), "err={err}");
+        assert!(dir.v3_files().is_empty());
+    }
+
+    #[test]
+    fn recover_start_index_range_filenames() {
+        let dir = Tmp::new();
+        // indices 5, 6, 7
+        let cfg = recover_cfg(dir.str(), 3, 5);
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let (_, summary) =
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let summary_s = String::from_utf8(summary).unwrap();
+        assert!(summary_s.contains("wrote 3 keystores"), "{summary_s}");
+
+        let files = dir.v3_files();
+        assert_eq!(files.len(), 3, "files={files:?}");
+
+        let seed = bip39::to_seed(ABANDON_12, b"").unwrap();
+        for index in 5u32..=7 {
+            let derived =
+                hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(index))
+                    .unwrap();
+            let sk = derived.secret_bytes();
+            let addr = secret_to_address(&sk).unwrap();
+            let eip55 = eip55_checksum(&addr);
+            let expected_name = v3_filename(&addr, TS.unix_secs, TS.nanos);
+            let f = files
+                .iter()
+                .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(expected_name.as_str()))
+                .unwrap_or_else(|| panic!("missing {expected_name}; files={files:?}"));
+            assert!(
+                summary_s.contains(&eip55),
+                "summary missing address for index {index}: {summary_s}"
+            );
+            let body = std::fs::read(f).unwrap();
+            let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(val["address"], hex::encode(addr));
+        }
+    }
+
+    #[test]
+    fn recover_no_ceremony_tty_empty() {
+        let dir = Tmp::new();
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let (tty, _) = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap();
+        assert!(
+            tty.is_empty(),
+            "recover must not write to tty_writer: {}",
+            String::from_utf8_lossy(&tty)
+        );
+    }
+
+    #[test]
+    fn recover_mnemonic_passphrase_prompt_single_entry() {
+        // Bare prompt is single-entry on recover (no confirm); wiring for A4-2.
+        let dir = Tmp::new();
+        let mut cfg = recover_cfg(dir.str(), 1, 0);
+        cfg.mnemonic_passphrase = MnemonicPassphraseForm::Prompt;
+        // mnemonic, then single passphrase (no confirm).
+        let lines = ScriptedLines::new(vec![ABANDON_12, "TREZOR"]);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+
+        let seed = bip39::to_seed(ABANDON_12, b"TREZOR").unwrap();
+        let derived =
+            hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
+                .unwrap();
+        let sk = derived.secret_bytes();
+        let addr = secret_to_address(&sk).unwrap();
+        let expected_name = v3_filename(&addr, TS.unix_secs, TS.nanos);
+        let files = dir.v3_files();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].file_name().and_then(|n| n.to_str()),
+            Some(expected_name.as_str())
+        );
+        // Empty-passphrase address must differ (passphrase honored).
+        let seed_empty = bip39::to_seed(ABANDON_12, b"").unwrap();
+        let derived_empty =
+            hd_secp256k1::ExtendedPrivKey::derive_path(seed_empty.as_slice(), &Bip44Path::eoa(0))
+                .unwrap();
+        let addr_empty = secret_to_address(&derived_empty.secret_bytes()).unwrap();
+        assert_ne!(addr, addr_empty);
+    }
+
+    #[test]
+    fn recover_same_shape_as_account_new() {
+        // Same fixed mnemonic (24-word abandon…art), empty mnemonic-pass,
+        // same FixedEntropy salt/iv/uuid zeros and timestamp → identical JSON.
+        let dir_new = Tmp::new();
+        let dir_rec = Tmp::new();
+        let cfg_new = base_cfg(dir_new.str(), 1);
+        let cfg_rec = recover_cfg(dir_rec.str(), 1, 0);
+
+        let entropy_new = FixedEntropy::zero_mnemonic();
+        let entropy_rec = FixedEntropy::new(vec![]); // only salt/iv/uuid
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines_new = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let lines_rec = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+
+        run_with(&cfg_new, &entropy_new, &pw, &lines_new, &CancelToken::new()).unwrap();
+        run_recover_with(&cfg_rec, &entropy_rec, &pw, &lines_rec, &CancelToken::new()).unwrap();
+
+        let f_new = dir_new.v3_files();
+        let f_rec = dir_rec.v3_files();
+        assert_eq!(f_new.len(), 1);
+        assert_eq!(f_rec.len(), 1);
+        assert_eq!(
+            f_new[0].file_name(),
+            f_rec[0].file_name(),
+            "filenames should match"
+        );
+        let a = std::fs::read(&f_new[0]).unwrap();
+        let b = std::fs::read(&f_rec[0]).unwrap();
+        assert_eq!(
+            a, b,
+            "account new and account recover must produce identical shape"
+        );
+    }
+
+    // =========================================================================
     // A3-5 secret hygiene (S-2 / G5)
     // =========================================================================
 
@@ -1191,6 +1583,80 @@ mod tests {
         // Progress/summary should still be non-empty (paths + addresses only).
         assert!(summary_s.contains("wrote 1 keystore"), "{summary_s}");
         assert!(!logs.is_empty(), "debug logger should emit events");
+    }
+
+    /// Recover path: no tty display; secrets still absent from summary/logger.
+    #[test]
+    fn secret_hygiene_account_recover_buffers() {
+        let dir = Tmp::new();
+        let mut cfg = recover_cfg(dir.str(), 1, 0);
+        cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+        let keystore_pw_plain = "password1";
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(keystore_pw_plain.as_bytes().to_vec());
+        // Injected mnemonic (simulates pipe/TTY read) — must not reappear on buffers.
+        let lines = ScriptedLines::new(vec![ABANDON_12]);
+
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(
+            Level::Debug,
+            Format::Text,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        {
+            let mut deps = AccountDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                timestamp: TS,
+            };
+            run_account_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+
+        let tty_s = String::from_utf8(tty).unwrap();
+        let summary_s = String::from_utf8(summary).unwrap();
+        let logs = logbuf.lock().unwrap().clone();
+        let logs_s = String::from_utf8_lossy(&logs).into_owned();
+
+        assert!(
+            tty_s.is_empty(),
+            "recover must not write mnemonic to tty: {tty_s:?}"
+        );
+        for secret in [
+            ABANDON_12,
+            "TREZOR",
+            keystore_pw_plain,
+            &hex::encode(bip39::to_seed(ABANDON_12, b"TREZOR").unwrap().as_slice()),
+            &hex::encode(b"TREZOR"),
+            &hex::encode(keystore_pw_plain.as_bytes()),
+        ] {
+            assert!(!summary_s.contains(secret), "secret {secret:?} in summary");
+            assert!(!logs_s.contains(secret), "secret {secret:?} in logs");
+        }
+
+        // Leaf scalar + chain-code style raw bytes also absent.
+        let seed = bip39::to_seed(ABANDON_12, b"TREZOR").unwrap();
+        let derived =
+            hd_secp256k1::ExtendedPrivKey::derive_path(seed.as_slice(), &Bip44Path::eoa(0))
+                .unwrap();
+        let sk = derived.secret_bytes();
+        assert_absent_hex_and_raw(&summary_s, &logs_s, &logs, "scalar", sk.as_slice());
+        assert_absent_hex_and_raw(&summary_s, &logs_s, &logs, "seed", seed.as_slice());
+
+        // Public address still appears via NonTty logger progress path.
+        let addr = secret_to_address(&sk).unwrap();
+        let eip55 = eip55_checksum(&addr);
+        assert!(
+            logs_s.contains(&eip55) || summary_s.contains(&eip55),
+            "public address must appear: summary={summary_s} logs={logs_s}"
+        );
     }
 
     fn assert_absent_hex_and_raw(

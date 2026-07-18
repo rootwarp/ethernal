@@ -38,17 +38,17 @@ F-11 (12–24-word validation + range), F-16, and the S-1/S-2 hygiene of the **s
   single-entry** here (the mnemonic already exists — no confirm). A4-2 hardens/tests all three forms.
 
 **Acceptance criteria**
-- [ ] `account recover` reads the mnemonic from an interactive TTY prompt **or** piped stdin
+- [x] `account recover` reads the mnemonic from an interactive TTY prompt **or** piped stdin
   (`echo "$M" | ethernal account recover …`) — F-10.
-- [ ] `validate_mnemonic` runs first; 12/15/18/21/24-word mnemonics accepted; a bad word → exit 2
+- [x] `validate_mnemonic` runs first; 12/15/18/21/24-word mnemonics accepted; a bad word → exit 2
   reporting the **1-based position** (never the token, H1); a tampered checksum → exit 2 — F-11, F-16,
   S-2.
-- [ ] `--start-index N` / `--count N` select the range `[start, start+count)` and produce matching
+- [x] `--start-index N` / `--count N` select the range `[start, start+count)` and produce matching
   per-index `UTC--…` filenames/addresses — F-11.
-- [ ] there is **no** display/re-entry ceremony — F-10.
-- [ ] produced keystores are identical in shape to `account new` output (v3, `crypto`/`address`
+- [x] there is **no** display/re-entry ceremony — F-10.
+- [x] produced keystores are identical in shape to `account new` output (v3, `crypto`/`address`
   internally consistent, `0600`) — F-3.
-- [ ] **recover-stdin secret hygiene (S-1/S-2):** the mnemonic read from piped stdin, the derived
+- [x] **recover-stdin secret hygiene (S-1/S-2):** the mnemonic read from piped stdin, the derived
   seed, chain codes, and secret scalars never reach stdout/stderr/logger (the stdin path is a distinct
   input surface from the `account new` ceremony); a bad word is reported by 1-based position, not the
   token — S-1, S-2, G5.
