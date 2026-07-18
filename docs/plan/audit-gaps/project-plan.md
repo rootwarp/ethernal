@@ -208,7 +208,7 @@ it. Two of the closing artifacts live in the **Obsidian vault**, not in `eth-uti
 
 **In `eth-utils` (four green fast-forward commits, each `make lint && make test` green):**
 - [x] G1 merged → **SM-1**: ETHSTAKER-7 ✅ Mitigated (success path; fail-open + multiplexer caveat documented).
-- [ ] G2 merged + green CI under pinned actions → **SM-2**: ETHSTAKER-1 ✅ Mitigated (SHA-pinned).
+- [x] G2 merged + green CI under pinned actions → **SM-2**: ETHSTAKER-1 ✅ Mitigated (SHA-pinned).
 - [ ] G3 merged → **SM-3**: ToB Mar 2026 symlink rec. ✅ Mitigated (warn on symlinked output dir).
 - [ ] G4 merged, test-only diff → **SM-4**: GHSA-c6rv-g6pj-r6qx / ETHSTAKER-6 ✅ Mitigated + regression-guarded.
 
