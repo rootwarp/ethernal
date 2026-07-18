@@ -11,10 +11,10 @@ edition = "2021"
 
 [workspace.dependencies]
 # Internal crates
-eth-deposit-core = { path = "crates/core" }
-eth-deposit-keystore = { path = "crates/keystore" }
-eth-deposit-tx = { path = "crates/tx" }
-eth-deposit-signer = { path = "crates/signer" }
+ethernal-core = { path = "crates/ethernal-core" }
+ethernal-keystore = { path = "crates/ethernal-keystore" }
+ethernal-tx = { path = "crates/ethernal-tx" }
+ethernal-signer = { path = "crates/ethernal-signer" }
 
 # Crypto
 blst = "0.3"

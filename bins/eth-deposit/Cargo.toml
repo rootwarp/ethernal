@@ -10,13 +10,13 @@ path = "src/main.rs"
 
 [features]
 # Forwarded to the signer crate: real Ledger HID transport.
-ledger = ["eth-deposit-signer/ledger"]
+ledger = ["ethernal-signer/ledger"]
 
 [dependencies]
-eth-deposit-core = { workspace = true }
-eth-deposit-keystore = { workspace = true }
-eth-deposit-tx = { workspace = true }
-eth-deposit-signer = { workspace = true }
+ethernal-core = { workspace = true }
+ethernal-keystore = { workspace = true }
+ethernal-tx = { workspace = true }
+ethernal-signer = { workspace = true }
 clap = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }

@@ -1,0 +1,20 @@
+[package]
+name = "ethernal-tx"
+version.workspace = true
+edition.workspace = true
+description = "Unsigned EIP-1559 deposit transaction building, deposit() ABI packing, and JSON-RPC client"
+
+[lib]
+name = "ethernal_tx"
+
+[dependencies]
+ethernal-core = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ureq = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+sha3 = { workspace = true }

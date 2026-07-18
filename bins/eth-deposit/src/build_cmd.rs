@@ -11,9 +11,9 @@ use std::io::{Read, Write};
 
 use clap::{Arg, ArgMatches, Command};
 
-use eth_deposit_core::cancel::CancelToken;
-use eth_deposit_core::deposit;
-use eth_deposit_tx::{BuildConfig, Builder, EthClient, EthRpc, TxError, UnsignedTx};
+use ethernal_core::cancel::CancelToken;
+use ethernal_core::deposit;
+use ethernal_tx::{BuildConfig, Builder, EthClient, EthRpc, TxError, UnsignedTx};
 
 use crate::config::{
     self, Config, DEFAULT_GAS_LIMIT, DEFAULT_MAX_FEE_PER_GAS, DEFAULT_MAX_PRIORITY_FEE_PER_GAS,
@@ -319,7 +319,7 @@ pub(crate) fn write_file_mode(path: &str, data: &[u8], mode: u32) -> std::io::Re
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use eth_deposit_core::network::{self, Network};
+    use ethernal_core::network::{self, Network};
 
     /// A `Config` with the given RPC/from/gas/nonce and holesky defaults for the
     /// rest, for driving [`require_from_for_rpc`] directly.

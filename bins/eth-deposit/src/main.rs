@@ -30,7 +30,7 @@ use std::sync::OnceLock;
 
 use clap::Command;
 
-use eth_deposit_core::cancel::CancelToken;
+use ethernal_core::cancel::CancelToken;
 
 use crate::errors::{exit_code_for, AppError};
 use crate::logging::{Format, Level, Logger};

@@ -14,9 +14,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use eth_deposit_core::bip39;
-use eth_deposit_core::hd::{self, KeyPath};
-use eth_deposit_keystore::{KeyLoader, Loader, PassphraseSource};
+use ethernal_core::bip39;
+use ethernal_core::hd::{self, KeyPath};
+use ethernal_keystore::{KeyLoader, Loader, PassphraseSource};
 
 use common::{crate_testdata, eth_deposit, TempDir};
 
@@ -65,7 +65,7 @@ struct IndexFixture {
 
 struct FixedPw(Vec<u8>);
 impl PassphraseSource for FixedPw {
-    fn read(&self) -> Result<Vec<u8>, eth_deposit_keystore::KeystoreError> {
+    fn read(&self) -> Result<Vec<u8>, ethernal_keystore::KeystoreError> {
         Ok(self.0.clone())
     }
 }

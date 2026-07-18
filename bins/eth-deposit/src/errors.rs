@@ -13,15 +13,15 @@
 
 use std::fmt;
 
-use eth_deposit_core::bip39::Bip39Error;
-use eth_deposit_core::bls::BlsError;
-use eth_deposit_core::deposit::DepositError;
-use eth_deposit_core::hd::HdError;
-use eth_deposit_core::network::NetworkError;
-use eth_deposit_core::output::OutputError;
-use eth_deposit_keystore::KeystoreError;
-use eth_deposit_signer::SignerError;
-use eth_deposit_tx::TxError;
+use ethernal_core::bip39::Bip39Error;
+use ethernal_core::bls::BlsError;
+use ethernal_core::deposit::DepositError;
+use ethernal_core::hd::HdError;
+use ethernal_core::network::NetworkError;
+use ethernal_core::output::OutputError;
+use ethernal_keystore::KeystoreError;
+use ethernal_signer::SignerError;
+use ethernal_tx::TxError;
 
 /// The bin-level error type. Every command action returns this; `main` maps
 /// it to an exit code via [`exit_code_for`] and logs the Display rendering.

@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use eth_deposit_core::cancel::CancelToken;
-use eth_deposit_signer::{new_local_signer_from_env, Signer};
+use ethernal_core::cancel::CancelToken;
+use ethernal_signer::{new_local_signer_from_env, Signer};
 
 use crate::build_cmd::{build_flags, build_unsigned_tx, read_input};
 use crate::config::{self, Config};
@@ -400,7 +400,7 @@ fn go_join(dir: &str, name: &str) -> String {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use eth_deposit_core::network::{self, Network};
+    use ethernal_core::network::{self, Network};
 
     /// A `RunConfig` for driving [`require_ledger_flags_for_rpc`] directly.
     fn run_cfg(signer: &str, rpc_url: &str, gas_limit: u64, nonce: Option<u64>) -> RunConfig {

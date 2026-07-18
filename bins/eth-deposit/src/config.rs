@@ -3,7 +3,7 @@
 //! resolved flag > env > default into a typed [`Config`]; numeric flags are
 //! declared as strings so the Go validation messages render verbatim.
 
-use eth_deposit_core::network::{self, Network, Params};
+use ethernal_core::network::{self, Network, Params};
 
 use clap::ArgMatches;
 
@@ -192,7 +192,7 @@ fn parse_wei(flag: &str, s: &str) -> Result<u128, AppError> {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use eth_deposit_core::network::Network;
+    use ethernal_core::network::Network;
 
     // Go: config_test.go / from_test.go. These exercise the FLAG path only. The
     // env-var fallback cases (EnvVarOverride/FlagBeatsEnvVar/GasLimitEnvVar/

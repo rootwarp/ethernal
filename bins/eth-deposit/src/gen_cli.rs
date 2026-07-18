@@ -8,10 +8,10 @@ use std::path::Path;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use eth_deposit_core::bls;
-use eth_deposit_core::deposit::eth1_withdrawal_credentials;
-use eth_deposit_core::network::{self, Network};
-use eth_deposit_signer::{eip55_checksum, validate_eip55_address};
+use ethernal_core::bls;
+use ethernal_core::deposit::eth1_withdrawal_credentials;
+use ethernal_core::network::{self, Network};
+use ethernal_signer::{eip55_checksum, validate_eip55_address};
 
 use crate::errors::AppError;
 
@@ -413,7 +413,7 @@ fn print_banner(w: &mut dyn Write, cfg: &GenConfig) {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use eth_deposit_core::bls::{self, Signer};
+    use ethernal_core::bls::{self, Signer};
     use std::path::PathBuf;
 
     // Port of `internal/cli/cli_test.go` (validation + banner) and

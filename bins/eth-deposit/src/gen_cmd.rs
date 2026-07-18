@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use eth_deposit_core::bls::{self, BlsError, Verifier};
-use eth_deposit_core::cancel::CancelToken;
-use eth_deposit_core::deposit::{self, Entry, Generator, Request};
-use eth_deposit_core::network::{self, Network};
-use eth_deposit_core::output::{DryRunWriter, FsWriter, Writer as OutputWriter};
-use eth_deposit_keystore::{
+use ethernal_core::bls::{self, BlsError, Verifier};
+use ethernal_core::cancel::CancelToken;
+use ethernal_core::deposit::{self, Entry, Generator, Request};
+use ethernal_core::network::{self, Network};
+use ethernal_core::output::{DryRunWriter, FsWriter, Writer as OutputWriter};
+use ethernal_keystore::{
     scan_dir, DirectoryIndex, EnvSource, KeyLoader, Loader, PassphraseSource, TermPromptSource,
 };
 
@@ -511,9 +511,9 @@ pub fn run_gen(cfg: &GenConfig, cancel: &CancelToken) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use eth_deposit_core::bls::Signer;
-    use eth_deposit_core::output::OutputError;
-    use eth_deposit_keystore::{Key, KeystoreError};
+    use ethernal_core::bls::Signer;
+    use ethernal_core::output::OutputError;
+    use ethernal_keystore::{Key, KeystoreError};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};

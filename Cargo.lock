@@ -293,10 +293,10 @@ name = "eth-deposit"
 version = "0.1.0"
 dependencies = [
  "clap",
- "eth-deposit-core",
- "eth-deposit-keystore",
- "eth-deposit-signer",
- "eth-deposit-tx",
+ "ethernal-core",
+ "ethernal-keystore",
+ "ethernal-signer",
+ "ethernal-tx",
  "hex",
  "libc",
  "rpassword",
@@ -308,7 +308,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eth-deposit-core"
+name = "ethernal-core"
 version = "0.1.0"
 dependencies = [
  "blst",
@@ -325,7 +325,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eth-deposit-keystore"
+name = "ethernal-keystore"
 version = "0.1.0"
 dependencies = [
  "aes",
@@ -344,10 +344,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "eth-deposit-signer"
+name = "ethernal-signer"
 version = "0.1.0"
 dependencies = [
- "eth-deposit-tx",
+ "ethernal-tx",
  "hex",
  "hidapi",
  "k256",
@@ -359,10 +359,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "eth-deposit-tx"
+name = "ethernal-tx"
 version = "0.1.0"
 dependencies = [
- "eth-deposit-core",
+ "ethernal-core",
  "hex",
  "serde",
  "serde_json",

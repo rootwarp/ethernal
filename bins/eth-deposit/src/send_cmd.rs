@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use eth_deposit_core::cancel::CancelToken;
-use eth_deposit_core::network;
-use eth_deposit_signer::SignedTx;
-use eth_deposit_tx::{EthBroadcaster, EthClient, Receipt, TxError};
+use ethernal_core::cancel::CancelToken;
+use ethernal_core::network;
+use ethernal_signer::SignedTx;
+use ethernal_tx::{EthBroadcaster, EthClient, Receipt, TxError};
 
 use crate::build_cmd::read_input;
 use crate::errors::AppError;

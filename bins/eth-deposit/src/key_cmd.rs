@@ -9,13 +9,13 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
-use eth_deposit_core::bip39::{self, Bip39Error};
-use eth_deposit_core::cancel::CancelToken;
-use eth_deposit_core::entropy::{Entropy, EntropyError, OsEntropy};
-use eth_deposit_core::hd::{self, KeyPath};
-use eth_deposit_core::output::{write_new_0600, OutputError};
-use eth_deposit_keystore::encrypt::{encrypt, keystore_filename, EncryptInput};
-use eth_deposit_keystore::{
+use ethernal_core::bip39::{self, Bip39Error};
+use ethernal_core::cancel::CancelToken;
+use ethernal_core::entropy::{Entropy, EntropyError, OsEntropy};
+use ethernal_core::hd::{self, KeyPath};
+use ethernal_core::output::{write_new_0600, OutputError};
+use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput};
+use ethernal_keystore::{
     require_min_len, EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource,
     KEYSTORE_PASSPHRASE_MIN_LEN,
 };
@@ -787,8 +787,8 @@ mod tests {
     use super::*;
     use crate::errors::exit_code_for;
     use crate::key_cli::KeyMode;
-    use eth_deposit_core::hd::derive_path;
-    use eth_deposit_keystore::{KeyLoader, Loader};
+    use ethernal_core::hd::derive_path;
+    use ethernal_keystore::{KeyLoader, Loader};
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};

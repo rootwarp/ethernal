@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 use clap::{Arg, ArgMatches, Command};
-use eth_deposit_core::cancel::CancelToken;
+use ethernal_core::cancel::CancelToken;
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;

@@ -7,9 +7,9 @@ use std::io::Write;
 
 use clap::{Arg, ArgMatches, Command};
 
-use eth_deposit_core::cancel::CancelToken;
-use eth_deposit_signer::{new_local_signer_from_env, LedgerSigner, SignedTx, Signer};
-use eth_deposit_tx::UnsignedTx;
+use ethernal_core::cancel::CancelToken;
+use ethernal_signer::{new_local_signer_from_env, LedgerSigner, SignedTx, Signer};
+use ethernal_tx::UnsignedTx;
 
 use crate::build_cmd::{read_input, write_file_mode};
 use crate::errors::AppError;
