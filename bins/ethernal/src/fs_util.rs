@@ -5,8 +5,38 @@
 //! existing symlink fails instead of truncating its target.
 
 use std::fs::OpenOptions;
-use std::io;
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+/// If `dir`'s FINAL component is a symlink, returns its fully-resolved real path.
+/// `None` for a normal directory on ANY platform — including macOS temp dirs
+/// (`/tmp`,`/var`→`/private/…`), whose final component is a real dir, not a link
+/// (this is the false-positive a canonicalize-divergence check would trip; D-G3a).
+/// Advisory only (S-3): never consulted to decide where or how a file is written.
+pub(crate) fn symlinked_output_dir(dir: &Path) -> Option<PathBuf> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(dir).ok(),
+        _ => None,
+    }
+}
+
+/// Emits exactly ONE `WARNING:` line to `warn_out` naming the given path and its
+/// resolved target when `dir`'s final component is a symlink; returns whether it
+/// warned. No behavior change beyond the text (S-2/S-3).
+pub(crate) fn warn_if_symlinked_output_dir(dir: &Path, warn_out: &mut dyn Write) -> bool {
+    match symlinked_output_dir(dir) {
+        Some(real) => {
+            let _ = writeln!(
+                warn_out,
+                "WARNING: output directory \"{}\" is a symlink; keystores will be written to \"{}\".",
+                dir.display(),
+                real.display()
+            );
+            true
+        }
+        None => false,
+    }
+}
 
 /// Returns the probe path used under `dir` for the current process.
 pub(crate) fn probe_path(dir: &Path) -> std::path::PathBuf {
@@ -174,5 +204,53 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&dir.0, perms).unwrap();
         let _ = std::fs::remove_file(&probe);
+    }
+
+    #[test]
+    fn real_dir_is_not_symlinked_output_dir() {
+        let dir = Tmp::new();
+        assert!(symlinked_output_dir(&dir.0).is_none());
+
+        let mut buf = Vec::new();
+        assert!(!warn_if_symlinked_output_dir(&dir.0, &mut buf));
+        assert!(
+            buf.is_empty(),
+            "expected empty buffer, got {}",
+            String::from_utf8_lossy(&buf)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_output_dir_detects_final_component_link() {
+        use std::os::unix::fs::symlink;
+
+        let dir = Tmp::new();
+        let real = dir.0.join("real-out");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.0.join("link-out");
+        symlink(&real, &link).unwrap();
+
+        let resolved = symlinked_output_dir(&link).expect("final-component symlink");
+        let expected = std::fs::canonicalize(&real).unwrap();
+        assert_eq!(resolved, expected);
+
+        let mut buf = Vec::new();
+        assert!(warn_if_symlinked_output_dir(&link, &mut buf));
+        let text = String::from_utf8(buf).unwrap();
+        let warning_lines: Vec<_> = text.lines().filter(|l| l.contains("WARNING")).collect();
+        assert_eq!(
+            warning_lines.len(),
+            1,
+            "expected exactly one WARNING line, got: {text}"
+        );
+        assert!(
+            warning_lines[0].contains(link.to_str().unwrap()),
+            "warning must name given path: {text}"
+        );
+        assert!(
+            warning_lines[0].contains(resolved.to_str().unwrap()),
+            "warning must name resolved path: {text}"
+        );
     }
 }

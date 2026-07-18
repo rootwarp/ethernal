@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::io::Write;
+use std::path::Path;
 
 use clap::{Arg, ArgMatches, Command};
 use ethernal_core::cancel::CancelToken;
@@ -175,6 +176,7 @@ pub fn load_config(
         return Err(AppError::exit2("--output-dir: required flag not set"));
     }
     validate_output_dir(&output_dir).map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
+    crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
 
     // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ env).
     let mnemonic_passphrase = resolve_mnemonic_passphrase(m)?;
@@ -491,6 +493,57 @@ mod tests {
         assert!(err.contains("not a directory"), "{err}");
 
         assert!(validate_output_dir(dir.str()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recover_load_config_warns_on_symlinked_output_dir() {
+        use std::os::unix::fs::symlink;
+
+        let dir = Tmp::new();
+        let real = dir.0.join("real-out");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.0.join("link-out");
+        symlink(&real, &link).unwrap();
+        let resolved = std::fs::canonicalize(&real).unwrap();
+
+        let (_, banner) = load_recover(&[
+            "--output-dir",
+            link.to_str().unwrap(),
+            "--count",
+            "1",
+            "--start-index",
+            "0",
+        ])
+        .expect("ok");
+        let warning_lines: Vec<_> = banner.lines().filter(|l| l.contains("WARNING")).collect();
+        assert_eq!(
+            warning_lines.len(),
+            1,
+            "expected exactly one WARNING, got: {banner}"
+        );
+        assert!(
+            warning_lines[0].contains(link.to_str().unwrap()),
+            "must name given path: {banner}"
+        );
+        assert!(
+            warning_lines[0].contains(resolved.to_str().unwrap()),
+            "must name resolved path: {banner}"
+        );
+
+        let (_, banner) = load_recover(&[
+            "--output-dir",
+            real.to_str().unwrap(),
+            "--count",
+            "1",
+            "--start-index",
+            "0",
+        ])
+        .expect("ok");
+        assert!(
+            !banner.contains("WARNING"),
+            "real dir must be warning-free: {banner}"
+        );
     }
 
     #[cfg(unix)]

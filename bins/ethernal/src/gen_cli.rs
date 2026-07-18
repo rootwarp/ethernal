@@ -221,6 +221,7 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
         }
         validate_output_dir(&output_dir)
             .map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
+        crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
     }
 
     // 5. Validate --parallel: must be in [1, NumCPU*4].
