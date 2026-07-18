@@ -1,0 +1,30 @@
+[package]
+name = "ethernal"
+version.workspace = true
+edition.workspace = true
+description = "Generate, build, sign, and broadcast Ethereum Beacon Chain deposit transactions"
+
+[[bin]]
+name = "ethernal"
+path = "src/main.rs"
+
+[features]
+# Forwarded to the signer crate: real Ledger HID transport.
+ledger = ["ethernal-signer/ledger"]
+
+[dependencies]
+ethernal-core = { workspace = true }
+ethernal-keystore = { workspace = true }
+ethernal-tx = { workspace = true }
+ethernal-signer = { workspace = true }
+clap = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+libc = { workspace = true }
+zeroize = { workspace = true }
+rpassword = { workspace = true }
+
+[dev-dependencies]

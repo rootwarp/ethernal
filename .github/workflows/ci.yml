@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  test:
+    name: Test ethernal
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Lint (clippy + rustfmt)
+        run: make lint
+
+      - name: Test (unit + integration)
+        run: make test
+
+      - name: E2E mock (build+sign+send via mock broadcaster, no real RPC)
+        run: make e2e-mock
+
+      - name: Build (release, ledger feature compile check)
+        run: |
+          sudo apt-get update && sudo apt-get install -y libudev-dev
+          cargo build --release --features ledger

@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "bins/*",
+    "crates/*",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+# Internal crates
+ethernal-core = { path = "crates/ethernal-core" }
+ethernal-keystore = { path = "crates/ethernal-keystore" }
+ethernal-tx = { path = "crates/ethernal-tx" }
+ethernal-signer = { path = "crates/ethernal-signer" }
+
+# Crypto
+blst = "0.3"
+sha2 = "0.10"
+sha3 = "0.10"
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+scrypt = { version = "0.11", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+hmac = "0.12"
+aes = "0.8"
+ctr = "0.9"
+zeroize = "1"
+unicode-normalization = "0.1"
+getrandom = "0.3"
+
+# Encoding / serialization
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+thiserror = "2"
+
+# HTTP / URL
+ureq = { version = "2", features = ["json"] }
+url = "2"
+
+# CLI (bin only)
+clap = { version = "4", features = ["env"] }
+rpassword = "7"
+libc = "0.2"
+
+# Ledger (feature-gated)
+hidapi = { version = "2", default-features = false, features = ["macos-shared-device"] }
