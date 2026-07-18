@@ -192,26 +192,26 @@ docs — `research/bip32-secp256k1.md`, `research/web3-v3-keystore.md`):
 
 | Issue | Status | Commit | Gate result |
 |---|---|---|---|
-| A3-2 | done | 1b85734 | pub(crate) widening of key_cli/key_cmd; BLS suite green |
-| A1-1 | done | f1f0507 | BIP-32 TV1 keys+cc; R1 scalar scrubbed on drop |
-| A1-2 | done | 0d7aaad | Bip44Path + derive_path; abandon secrets vs cast |
-| A2-1 | done | 0de013b | G3 byte-gate + C-4 raw passphrase + encrypt_v3 |
-| A2-2 | done | e5dfbc1 | v3_filename + civil_from_days fixed vector |
-| A3-1 | done | 8d9d21f | secret_to_address + abandon EIP-55 addresses |
-| A3-3 | done | 67399d2 | account clap namespace + AccountConfig + TTY guard |
-| A3-4 | done | 90260a8 | account new pipeline + AccountDeps + nanos+1 collision |
-| A3-5 | done | (this commit) | AppError::Bip32=>3 + account new secret-hygiene |
+| A3-2 | done | 256cba2 | pub(crate) widening of key_cli/key_cmd; BLS suite green |
+| A1-1 | done | 19a79c3 | BIP-32 TV1 keys+cc; R1 scalar scrubbed on drop |
+| A1-2 | done | b08b717 | Bip44Path + derive_path; abandon secrets vs cast |
+| A2-1 | done | 95dd01a | G3 byte-gate + C-4 raw passphrase + encrypt_v3 |
+| A2-2 | done | 545b909 | v3_filename + civil_from_days fixed vector |
+| A3-1 | done | f37e1ee | secret_to_address + abandon EIP-55 addresses |
+| A3-3 | done | bc9f353 | account clap namespace + AccountConfig + TTY guard |
+| A3-4 | done | b7de8b6 | account new pipeline + AccountDeps + nanos+1 collision |
+| A3-5 | done | 521839d | AppError::Bip32=>3 + account new secret-hygiene |
 | A1 | done | — | M-A1 closed (secrets + addresses) |
 | A2 | done | — | M-A2 closed |
 | M-A1 | done | | BIP-32 TV1 + BIP-44 secrets + addresses; R1 scalar on drop |
 | M-A2 | done | | G3 encrypt byte-gate + round-trip + v3_filename |
 | A3 | done | — | M-A3 closed |
 | M-A3 | done | | account new ceremony + TTY + 0600 v3 + secret-hygiene |
-| A4-1 | done | (this commit) | account recover TTY/stdin + validate-first + range + recover-stdin hygiene |
-| A4-2 | done | (this commit) | three-form mnemonic passphrase both commands + seed-derivation anchor |
+| A4-1 | done | 9f2e749 | account recover TTY/stdin + validate-first + range + recover-stdin hygiene |
+| A4-2 | done | e63eb4a | three-form mnemonic passphrase both commands + seed-derivation anchor |
 | A4 | done | — | M-A4 closed |
 | M-A4 | done | | `account recover` TTY/stdin, 12–24-word + 1-based bad word, range, mnemonic passphrase |
-| A5-1 | done | (this commit) | account_e2e: abandon+empty → cast addresses + BLS regression fixture; 0600/UTC--/no-overwrite; S-4 no entropy flag |
-| A5-2 | done | (this commit) | USER-GUIDE account section + README/CHANGELOG; raw mnemonic-passphrase ps/history; v3 no-NFKD (C-4) |
+| A5-1 | done | 7fe126a | account_e2e: abandon+empty → cast addresses + BLS regression fixture; 0600/UTC--/no-overwrite; S-4 no entropy flag |
+| A5-2 | done | 7091c30 | USER-GUIDE account section + README/CHANGELOG; raw mnemonic-passphrase ps/history; v3 no-NFKD (C-4) |
 | A5 | todo | — | A5-M manual remains (docs A5-2 done) |
 | M-A5 | open | | E2E fixture frozen + cross-recovery (A5-1); docs (A5-2); **manual C-2 parity session** |
