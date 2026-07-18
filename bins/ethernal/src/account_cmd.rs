@@ -242,6 +242,7 @@ pub fn run_account_new_with_deps(
     run_ceremony(
         mnemonic.as_str(),
         deps.tty_writer,
+        deps.summary_out,
         deps.mnemonic_src,
         cancel,
     )?;

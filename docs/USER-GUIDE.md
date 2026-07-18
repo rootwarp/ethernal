@@ -92,7 +92,11 @@ ethernal --version
 End-to-end deposit on Hoodi using a Ledger:
 
 ```bash
-# 0. Create validator keystores (interactive TTY ceremony — write down the mnemonic)
+# 0. Create validator keystores (interactive TTY ceremony — write down the mnemonic).
+#    When the ceremony ends, ethernal clears the terminal screen + scrollback
+#    automatically so the phrase does not linger; if that fails it warns and
+#    continues. Inside tmux/screen also clear the multiplexer’s own history
+#    (tmux: `tmux clear-history`; screen: C-a : then `scrollback 0`).
 mkdir -p ./keystores ./out
 export KEYSTORE_PASS=my-keystore-passphrase
 ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
@@ -217,8 +221,9 @@ ethernal key new --output-dir DIR [--count N] [--passphrase-env VAR] \
 2. **Entropy → mnemonic** — 256-bit OS CSPRNG → 24-word English BIP-39 with checksum.
 3. **Mnemonic passphrase** — flag / env / prompt-with-confirm / empty.
 4. **Ceremony** — mnemonic displayed **once** on the controlling terminal (`/dev/tty` only — never stdout/stderr/logs). Write it down offline, then re-enter the full phrase. Mismatch → retry or abort (exit **4**); nothing on disk until re-entry succeeds.
-5. **Keystore passphrase** — env (min 8) or interactive confirm.
-6. **Derive → encrypt → write** — path `m/12381/3600/i/0/0` for `i` in `0..count`; EIP-2335 scrypt keystores at `0o600`.
+5. **Automatic scrollback clear** — as soon as the ceremony ends (confirmed **or** aborted), the screen **and scrollback** of the controlling terminal are cleared (ANSI `2J`/`3J`/`H`, written twice) so the mnemonic does not stay readable to anyone scrolling back later — the one leak every deposit-cli audit found. If the clear fails, `ethernal` continues (fail-open) but warns loudly: clear manually (e.g. `clear && printf '\x1b[3J'`, or Cmd+K in Terminal.app) before leaving the machine. **tmux/screen caveat:** the multiplexer keeps its **own** scrollback buffer that ANSI sequences cannot reach — clear it there too (tmux: `tmux clear-history`; screen: C-a : then `scrollback 0`).
+6. **Keystore passphrase** — env (min 8) or interactive confirm.
+7. **Derive → encrypt → write** — path `m/12381/3600/i/0/0` for `i` in `0..count`; EIP-2335 scrypt keystores at `0o600`.
 
 **Example**
 
@@ -330,8 +335,9 @@ ethernal account new --output-dir DIR [--count N] [--passphrase-env VAR] \
 2. **Entropy →** 24-word BIP-39 mnemonic.
 3. **Mnemonic passphrase** → flag / env / confirm / empty.
 4. **Ceremony** → display once on `/dev/tty`, full re-entry; mismatch → exit **4**, nothing on disk.
-5. **Keystore passphrase** → env or interactive confirm (min 8, **raw** bytes to KDF).
-6. **Derive → encrypt → write** → `m/44'/60'/0'/0/i`, Web3 v3 scrypt, `UTC--` names, mode `0o600`. Stderr summary lists path + **EIP-55 address**.
+5. **Automatic scrollback clear** → same clear-on-confirm as `key new` (screen + scrollback, on confirm **and** abort; fail-open with a manual-clear warning if the ANSI write fails). **tmux/screen caveat:** multiplexers keep their own history that ANSI cannot reach — `tmux clear-history`; screen: C-a : then `scrollback 0`. Details under [`key new` Flow](#key-new--create-a-new-bls-key-set).
+6. **Keystore passphrase** → env or interactive confirm (min 8, **raw** bytes to KDF).
+7. **Derive → encrypt → write** → `m/44'/60'/0'/0/i`, Web3 v3 scrypt, `UTC--` names, mode `0o600`. Stderr summary lists path + **EIP-55 address**.
 
 **Example**
 
