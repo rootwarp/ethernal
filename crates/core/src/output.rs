@@ -35,13 +35,17 @@ pub enum OutputError {
     WriteTmp(#[source] io::Error),
     #[error("output: sync tmp file: {0}")]
     SyncTmp(#[source] io::Error),
-    #[error("output: rename tmp to final: {0}")]
+    /// Final-path publish failed (`hard_link` or `rename`).
+    #[error("output: publish to final path: {0}")]
     Rename(#[source] io::Error),
     #[error("output: write dry-run output: {0}")]
     WriteDryRun(#[source] io::Error),
     /// Target path already exists; refuse to overwrite (F-4 / S-3).
     #[error("output: file already exists")]
     AlreadyExists,
+    /// Parent-directory fsync after publish failed; durability not guaranteed.
+    #[error("output: sync parent directory: {0}")]
+    SyncDir(#[source] io::Error),
 }
 
 /// Serializes a slice of deposit entries to JSON and persists them.
@@ -133,6 +137,7 @@ impl Writer for FsWriter {
     ///  3. Sync the file.
     ///  4. Close the file.
     ///  5. Rename to the final path.
+    ///  6. Fsync the parent directory (reported success ⇒ durable entry).
     ///
     /// On any failure the temporary file is removed so no stale artifacts
     /// remain.
@@ -150,13 +155,14 @@ impl Writer for FsWriter {
         let final_path: PathBuf = dir.join(&filename);
         let tmp_path: PathBuf = dir.join(&tmp_name);
 
-        // Write, sync, close, then rename. Any failure removes the tmp file.
+        // Write, sync, close, rename, parent-dir fsync. Any failure removes tmp.
         let result = (|| {
             let mut f = open_0600(&tmp_path).map_err(OutputError::OpenTmp)?;
             f.write_all(&data).map_err(OutputError::WriteTmp)?;
             f.sync_all().map_err(OutputError::SyncTmp)?;
             drop(f);
-            fs::rename(&tmp_path, &final_path).map_err(OutputError::Rename)
+            fs::rename(&tmp_path, &final_path).map_err(OutputError::Rename)?;
+            sync_parent_dir(&final_path)
         })();
 
         if let Err(e) = result {
@@ -193,13 +199,43 @@ fn open_create_new_0600(path: &Path) -> io::Result<fs::File> {
     opts.open(path)
 }
 
+/// Parent directory of `path`, or `"."` when the path has no parent component.
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+/// Fsync the parent directory so a newly published directory entry is durable.
+///
+/// Portable baseline: open the parent and `sync_all` on that fd. On macOS this
+/// is ordinary `fsync` semantics, not `F_FULLFSYNC` — the accepted portable
+/// floor for this codebase (K2-L2 / H6).
+fn sync_parent_dir(path: &Path) -> Result<(), OutputError> {
+    let parent = parent_dir(path);
+    let dir = fs::File::open(parent).map_err(OutputError::SyncDir)?;
+    dir.sync_all().map_err(OutputError::SyncDir)
+}
+
+/// `true` when `hard_link` failed because the filesystem rejects hard links
+/// (`EPERM` / `ENOTSUP` / `EOPNOTSUPP` class).
+fn hard_link_unsupported(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+    )
+}
+
 // -----------------------------------------------------------------------------
-// write_new_0600 — generic atomic 0600 writer, refuse-overwrite (K2-2)
+// write_new_0600 — generic atomic 0600 writer, refuse-overwrite (K2-2 / H6)
 // -----------------------------------------------------------------------------
 
 /// Unlinks `path` on drop unless disarmed after a successful rename.
+///
 /// Only constructed after this call successfully `create_new`s the tmp, so
-/// Drop never deletes a file it does not own.
+/// Drop never deletes a file it does not own. After a successful hard_link
+/// publish the guard stays armed: Drop removes the tmp *entry* while the
+/// inode remains reachable under `final_path`.
 struct TmpGuard {
     path: PathBuf,
     armed: bool,
@@ -233,10 +269,7 @@ impl Drop for TmpGuard {
 /// cleanup never unlinks a path this call did not create.
 fn create_unique_tmp(final_path: &Path) -> Result<(TmpGuard, fs::File), OutputError> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let parent = final_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let parent = parent_dir(final_path);
 
     for _ in 0..10_000 {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -258,25 +291,9 @@ fn create_unique_tmp(final_path: &Path) -> Result<(TmpGuard, fs::File), OutputEr
     )))
 }
 
-/// Atomic `0600` write with overwrite refusal: unique `create_new` tmp → write
-/// → fsync → `create_new` final reservation → rename. Errors if `final_path`
-/// already exists (F-4). Removes the owned tmp (and any empty final
-/// reservation) on failure or panic; SIGKILL cannot guarantee cleanup.
-///
-/// Unlike the private [`open_0600`] used by [`FsWriter`] (create/truncate), this
-/// uses `OpenOptions::create_new(true)` on both tmp and final so an existing
-/// file is never clobbered. Intended for keystore writes composed by the bin.
-pub fn write_new_0600(final_path: &Path, bytes: &[u8]) -> Result<(), OutputError> {
-    let (tmp, mut f) = create_unique_tmp(final_path)?;
-
-    if let Err(e) = f.write_all(bytes) {
-        return Err(OutputError::WriteTmp(e));
-    }
-    if let Err(e) = f.sync_all() {
-        return Err(OutputError::SyncTmp(e));
-    }
-    drop(f);
-
+/// Publish via exclusive empty reservation then rename over it.
+/// Fallback when the filesystem does not support hard links (H6).
+fn publish_via_reservation_rename(tmp: TmpGuard, final_path: &Path) -> Result<(), OutputError> {
     // Exclusive claim on final_path before rename. On Unix, rename replaces an
     // existing file, so create_new is what enforces refuse-overwrite.
     // Non-AlreadyExists open failures use OpenTmp (not Rename): rename never ran.
@@ -300,6 +317,68 @@ pub fn write_new_0600(final_path: &Path, bytes: &[u8]) -> Result<(), OutputError
             Err(OutputError::Rename(e))
         }
     }
+}
+
+/// Atomic `0600` write with overwrite refusal.
+///
+/// Sequence:
+///  1. Unique `create_new` tmp (mode 0600) → write → fsync.
+///  2. **Primary publish:** `hard_link(tmp, final_path)` so the final entry
+///     appears with full contents in one atomic directory update (same inode
+///     as the synced tmp). No empty stub is ever created at `final_path`.
+///     On success the tmp *entry* is unlinked via [`TmpGuard`] Drop (do not
+///     disarm — the inode lives on under `final_path`).
+///  3. **Fallback** (hard links unsupported: `EPERM`/`ENOTSUP` class): the
+///     pre-H6 reservation+rename path.
+///  4. Fsync the parent directory (reported success ⇒ durable entry).
+///
+/// Errors if `final_path` already exists (F-4). Removes the owned tmp (and any
+/// empty final reservation on the fallback path) on failure or panic; SIGKILL
+/// cannot guarantee cleanup.
+///
+/// Unlike the private [`open_0600`] used by [`FsWriter`] (create/truncate), this
+/// never clobbers an existing file. Intended for keystore writes composed by
+/// the bin.
+pub fn write_new_0600(final_path: &Path, bytes: &[u8]) -> Result<(), OutputError> {
+    let (tmp, mut f) = create_unique_tmp(final_path)?;
+
+    if let Err(e) = f.write_all(bytes) {
+        return Err(OutputError::WriteTmp(e));
+    }
+    if let Err(e) = f.sync_all() {
+        return Err(OutputError::SyncTmp(e));
+    }
+    drop(f);
+
+    // Test-only: simulate crash/error after tmp is durable but before publish.
+    // On this path nothing exists at final_path; TmpGuard Drop removes tmp.
+    #[cfg(test)]
+    if tests::take_inject_fail_before_publish() {
+        return Err(OutputError::WriteTmp(io::Error::other(
+            "injected failure before publish",
+        )));
+    }
+
+    // Primary: link-then-unlink. hard_link fails with AlreadyExists if the
+    // name is taken — refuse-overwrite without a create_new reservation.
+    match fs::hard_link(tmp.path(), final_path) {
+        Ok(()) => {
+            // Do not disarm: Drop removes the tmp entry; inode stays at final.
+            drop(tmp);
+            sync_parent_dir(final_path)?;
+            return Ok(());
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(OutputError::AlreadyExists);
+        }
+        Err(e) if hard_link_unsupported(&e) => {
+            // Fall through to reservation+rename on filesystems without links.
+        }
+        Err(e) => return Err(OutputError::Rename(e)),
+    }
+
+    publish_via_reservation_rename(tmp, final_path)?;
+    sync_parent_dir(final_path)
 }
 
 // -----------------------------------------------------------------------------
@@ -337,8 +416,31 @@ impl<W: IoWrite> Writer for DryRunWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Per-thread inject flag: when set, the next `write_new_0600` on *this*
+    // thread fails after tmp sync and before publish (K2-L1 crash window).
+    // Thread-local so parallel `cargo test` cannot steal another test's flag.
+    thread_local! {
+        static INJECT_FAIL_BEFORE_PUBLISH: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Consume the inject flag (one-shot). Called from `write_new_0600`.
+    pub(super) fn take_inject_fail_before_publish() -> bool {
+        INJECT_FAIL_BEFORE_PUBLISH.with(|c| c.replace(false))
+    }
+
+    /// Clears the inject flag on drop so a panicked test cannot poison others
+    /// on the same thread (test harness may reuse threads).
+    struct InjectFailGuard;
+
+    impl Drop for InjectFailGuard {
+        fn drop(&mut self) {
+            INJECT_FAIL_BEFORE_PUBLISH.with(|c| c.set(false));
+        }
+    }
 
     /// Unique temp directory cleaned up on drop (no tempfile dependency).
     struct TempDir {
@@ -475,5 +577,87 @@ mod tests {
         let _ = write_new_0600(&path, b"v2").expect_err("second");
         assert_eq!(fs::read(&path).unwrap(), b"v1");
         assert_no_owned_tmp(dir.path());
+    }
+
+    /// Hard-link publish: final appears with full contents; no empty stub and
+    /// no owned tmp left. Permissions remain 0600 (link shares the tmp inode).
+    #[test]
+    fn write_new_0600_hard_link_publish_full_contents() {
+        let dir = TempDir::new();
+        let path = dir.path().join("hardlink-ks.json");
+        let bytes = b"full-keystore-payload-not-empty";
+
+        write_new_0600(&path, bytes).expect("write");
+
+        assert_eq!(fs::read(&path).expect("read"), bytes);
+        assert_no_owned_tmp(dir.path());
+
+        // nlink should be 1 after TmpGuard unlinked the tmp entry.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let meta = fs::metadata(&path).unwrap();
+            assert_eq!(meta.nlink(), 1, "tmp entry must be unlinked after publish");
+            assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        }
+    }
+
+    /// Injected failure between tmp-sync and publish leaves nothing at final
+    /// and no owned tmp; a subsequent write succeeds (K2-L1 footgun closed).
+    #[test]
+    fn write_new_0600_interrupted_before_publish_leaves_nothing_retry_ok() {
+        let dir = TempDir::new();
+        let path = dir.path().join("interrupt-ks.json");
+        let _clear = InjectFailGuard;
+
+        INJECT_FAIL_BEFORE_PUBLISH.with(|c| c.set(true));
+        let err = write_new_0600(&path, b"secret-bytes").expect_err("injected fail");
+        assert!(
+            matches!(err, OutputError::WriteTmp(_)),
+            "expected injected WriteTmp, got {err:?}"
+        );
+        assert!(
+            !path.exists(),
+            "final_path must not exist after interrupted write (no 0-byte stub)"
+        );
+        assert_no_owned_tmp(dir.path());
+
+        // Retry without inject: succeeds; operator need not delete a stub.
+        write_new_0600(&path, b"secret-bytes").expect("retry after interrupt");
+        assert_eq!(fs::read(&path).unwrap(), b"secret-bytes");
+        assert_no_owned_tmp(dir.path());
+    }
+
+    /// Parent-dir fsync failure surfaces as `SyncDir`.
+    #[test]
+    fn sync_parent_dir_missing_parent_is_sync_dir() {
+        let err = sync_parent_dir(Path::new("/nonexistent-eth-deposit-core-h6-xyz/child.json"))
+            .expect_err("missing parent must fail");
+        assert!(
+            matches!(err, OutputError::SyncDir(_)),
+            "expected SyncDir, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("sync parent directory"),
+            "Display should name the stage: {msg}"
+        );
+    }
+
+    #[test]
+    fn hard_link_unsupported_classifies_kinds() {
+        assert!(hard_link_unsupported(&io::Error::new(
+            io::ErrorKind::Unsupported,
+            "enotsup"
+        )));
+        assert!(hard_link_unsupported(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "eperm"
+        )));
+        assert!(!hard_link_unsupported(&io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "eexist"
+        )));
+        assert!(!hard_link_unsupported(&io::Error::other("other")));
     }
 }

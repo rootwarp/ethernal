@@ -311,14 +311,14 @@ after reported success.
   the dir fd is the accepted portable baseline here — document the choice in a comment.
 
 **Acceptance criteria**
-- [ ] Refuse-overwrite behavior unchanged: existing-file target → `AlreadyExists`, no tmp left.
-- [ ] On the primary (hard-link) path there is **no** point where `final_path` exists without its
+- [x] Refuse-overwrite behavior unchanged: existing-file target → `AlreadyExists`, no tmp left.
+- [x] On the primary (hard-link) path there is **no** point where `final_path` exists without its
   full contents — asserted structurally: no `create_new` reservation call remains on that path.
-- [ ] Interrupted-write simulation (error injected between tmp-sync and publish) leaves *nothing*
+- [x] Interrupted-write simulation (error injected between tmp-sync and publish) leaves *nothing*
   at `final_path` and no stray tmp after guard drop — a retry then succeeds (the K2-L1 operator
   footgun is gone).
-- [ ] Successful write fsyncs the parent dir; `SyncDir` failure surfaces as an error.
-- [ ] All existing `write_new_0600` tests (0600-before-bytes, no-tmp-on-handled-errors, gen/key
+- [x] Successful write fsyncs the parent dir; `SyncDir` failure surfaces as an error.
+- [x] All existing `write_new_0600` tests (0600-before-bytes, no-tmp-on-handled-errors, gen/key
   call sites) green unchanged.
 
 **Test plan** — extend `output.rs` unit tests: hard-link publish round-trip, AlreadyExists via
@@ -444,7 +444,7 @@ require no action and are listed here only for completeness of the traceability 
 | H3 | done | fc0daab | review PASS (0 findings) |
 | H4 | done | 3b6c66f | review PASS (0 findings) |
 | H5 | done | 1997b5e | review PASS (0 blocking) |
-| H6 | todo | | |
+| H6 | done | 57174d6 | review PASS; inject race fixed |
 | H7 | todo | | |
 | H8 | todo | | |
 | H9 | todo (manual) | — | M-K4 G1/G2 session — versions to be pinned here |
