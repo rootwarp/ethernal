@@ -357,12 +357,12 @@ shim, and the fallback keeps exotic filesystems working.
   plain `Vec` the caller must re-wrap in `Zeroizing` (as the real caller does).
 
 **Acceptance criteria**
-- [ ] A keystore JSON with `n=2^25, r=8` (or any params over the ceiling) is rejected on load
+- [x] A keystore JSON with `n=2^25, r=8` (or any params over the ceiling) is rejected on load
   with a clear error and **without** the multi-GB allocation — new decrypt test.
-- [ ] EIP-2335 spec-vector encrypt/decrypt and the existing fixture round-trips green (ceiling
+- [x] EIP-2335 spec-vector encrypt/decrypt and the existing fixture round-trips green (ceiling
   must not touch legitimate parameters).
-- [ ] `PassphraseTooShort` message says "bytes"; test asserting the message updated.
-- [ ] Lossy-decode branch holds only `Zeroizing` buffers; `checksum_message` fails closed on
+- [x] `PassphraseTooShort` message says "bytes"; test asserting the message updated.
+- [x] Lossy-decode branch holds only `Zeroizing` buffers; `checksum_message` fails closed on
   short dk in release builds.
 
 **Test plan** — new hostile-params decrypt unit test (assert error kind, bound the test's own
@@ -445,7 +445,7 @@ require no action and are listed here only for completeness of the traceability 
 | H4 | done | 3b6c66f | review PASS (0 findings) |
 | H5 | done | 1997b5e | review PASS (0 blocking) |
 | H6 | done | 57174d6 | review PASS; inject race fixed |
-| H7 | todo | | |
+| H7 | done | 1c847ec | review PASS (0 blockers) |
 | H8 | todo | | |
 | H9 | todo (manual) | — | M-K4 G1/G2 session — versions to be pinned here |
 | M-H | open | | all findings fixed or dispositioned; parity session recorded |

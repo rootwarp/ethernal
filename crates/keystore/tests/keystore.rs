@@ -223,6 +223,60 @@ fn load_pbkdf2_fixture_file() {
     assert_eq!(key.secret, TEST_SECRET, "secret mismatch");
 }
 
+/// Hostile scrypt params (`n=2^25, r=8`) must be rejected on load with a clear
+/// error **without** multi-GB allocation (K2-L4 / H7). Bound by construction:
+/// the ceiling fires before `scrypt::Params::new` / buffer alloc.
+#[test]
+fn load_rejects_hostile_scrypt_memory() {
+    let n: u64 = 1 << 25; // 2^25
+    let ks = serde_json::json!({
+        "crypto": {
+            "kdf": {
+                "function": "scrypt",
+                "params": {
+                    "dklen": 32,
+                    "n": n,
+                    "p": 1,
+                    "r": 8,
+                    "salt": "00".repeat(32),
+                },
+                "message": "",
+            },
+            "checksum": {
+                "function": "sha256",
+                "params": {},
+                "message": "00".repeat(32),
+            },
+            "cipher": {
+                "function": "aes-128-ctr",
+                "params": { "iv": "00".repeat(16) },
+                "message": "00".repeat(32),
+            },
+        },
+        "pubkey": TEST_PUBKEY_HEX,
+        "version": 4,
+        "uuid": "00000000-0000-0000-0000-000000000099",
+        "path": "",
+    });
+    let dir = TempDir::new("hostile-scrypt");
+    let path = dir.write("keystore.json", serde_json::to_vec(&ks).unwrap().as_slice());
+
+    let loader = Loader::new();
+    let err = loader
+        .load(&path, &BytesSource::new(TEST_PASSPHRASE))
+        .expect_err("hostile n/r must fail before multi-GB alloc");
+
+    assert!(
+        matches!(err, KeystoreError::KeystoreMalformed { .. }),
+        "Load() error = {err:?}, want KeystoreMalformed",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("memory cost") || msg.contains("exceeds limit") || msg.contains("scrypt"),
+        "error should name the scrypt ceiling: {msg}",
+    );
+}
+
 // Go: TestLoad_MissingCryptoField
 #[test]
 fn load_missing_crypto_field() {

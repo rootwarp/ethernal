@@ -22,8 +22,14 @@ use crate::error::KeystoreError;
 /// speaks one error type. A source's error is wrapped by the loader in
 /// [`KeystoreError::PassphraseSource`].
 pub trait PassphraseSource {
-    /// Returns the passphrase bytes. The loader zeroizes the returned buffer
-    /// immediately after decryption; implementations must not retain it.
+    /// Returns the passphrase bytes as a plain [`Vec`].
+    ///
+    /// The loader wraps the buffer in [`zeroize::Zeroizing`] immediately and
+    /// scrubs it after decryption. **Other callers must do the same** — the
+    /// trait returns a non-zeroizing `Vec` for historical Go parity and so
+    /// implementors stay simple; forgetting to re-wrap is a secret-residue
+    /// footgun (K2 info). Implementations must not retain a copy after
+    /// returning.
     fn read(&self) -> Result<Vec<u8>, KeystoreError>;
 }
 
@@ -409,8 +415,8 @@ mod tests {
         }
         let msg = err.to_string();
         assert!(
-            msg.contains("at least 8") || msg.contains("8 characters"),
-            "error message should name the minimum: {msg:?}",
+            msg.contains("at least 8 bytes") && msg.contains("got 7"),
+            "PassphraseTooShort must say bytes (not characters): {msg:?}",
         );
     }
 

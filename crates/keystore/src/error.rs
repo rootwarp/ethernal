@@ -110,7 +110,7 @@ pub enum KeystoreError {
     /// The passphrase is shorter than the required minimum length (keygen create
     /// path; F-7). Length is measured after EIP-2335 normalization (NFKD + strip
     /// controls), as UTF-8 byte length. Maps to exit code 2.
-    #[error("passphrase must be at least {min} characters (got {got})")]
+    #[error("passphrase must be at least {min} bytes (got {got})")]
     PassphraseTooShort {
         /// The required minimum length (UTF-8 bytes after EIP-2335 normalize).
         min: usize,

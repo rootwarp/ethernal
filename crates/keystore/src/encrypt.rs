@@ -19,6 +19,18 @@ const SCRYPT_DKLEN: usize = 32;
 
 /// Inputs for [`encrypt`]. All randomness is caller-supplied so this function
 /// stays pure (no `Entropy`, no `keystore → core` edge).
+///
+/// # Caller responsibilities (footguns)
+///
+/// - **`salt` / `iv` / `uuid_bytes` uniqueness:** this module does not draw RNG
+///   and does not check for reuse. Production callers **must** fill each field
+///   with fresh CSPRNG bytes per keystore (as `key_cmd` does). Reusing salt or
+///   IV across encrypts is a crypto footgun; reusing `uuid_bytes` collides on
+///   disk/UUID identity. Injectable fixed values exist only for the EIP-2335
+///   spec vector and tests.
+/// - **Passphrase lifetime:** `password` is borrowed for the call only; keep
+///   the source buffer in [`zeroize::Zeroizing`] (or equivalent) at the call
+///   site so secret material is scrubbed after use.
 pub struct EncryptInput<'a> {
     /// 32-byte BLS signing secret key (big-endian).
     pub secret: &'a [u8],
@@ -29,10 +41,12 @@ pub struct EncryptInput<'a> {
     /// Compressed 48-byte signing public key; written as lowercase hex.
     pub pubkey: &'a [u8],
     /// 32-byte scrypt salt (drawn by the caller; injectable for the spec vector).
+    /// **Must be unique and CSPRNG-fresh per keystore** — see struct docs.
     pub salt: [u8; 32],
-    /// 16-byte AES-128-CTR IV.
+    /// 16-byte AES-128-CTR IV. **Must be unique and CSPRNG-fresh per keystore.**
     pub iv: [u8; 16],
     /// 16 random bytes; formatted to a UUID v4 string inside [`encrypt`].
+    /// **Must be unique and CSPRNG-fresh per keystore.**
     pub uuid_bytes: [u8; 16],
 }
 
