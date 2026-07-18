@@ -132,6 +132,19 @@ pub fn new_local_signer_from_env(env_var: &str) -> Result<LocalSigner, SignerErr
     })
 }
 
+/// Derives the Ethereum address for a 32-byte secp256k1 secret.
+///
+/// Validates the scalar via `SigningKey::from_slice` (`0 < k < n`); returns
+/// [`SignerError::InvalidKey`] for the zero scalar or any value `≥ n`. On
+/// success returns the 20-byte address
+/// `keccak256(uncompressed_pubkey[1..])[12..]`.
+pub fn secret_to_address(secret: &[u8; 32]) -> Result<[u8; 20], SignerError> {
+    let sk = SigningKey::from_slice(secret).map_err(|_| {
+        SignerError::context("failed to parse signing key", SignerError::InvalidKey)
+    })?;
+    Ok(pubkey_address(sk.verifying_key()))
+}
+
 impl LocalSigner {
     /// Derives the Ethereum address for the in-memory signing key.
     /// It is defined on the concrete `LocalSigner` only, deliberately NOT
@@ -142,10 +155,7 @@ impl LocalSigner {
             return Err(SignerError::SignerClosed);
         }
         let key = self.key.lock().unwrap();
-        let sk = SigningKey::from_slice(&*key).map_err(|_| {
-            SignerError::context("failed to parse signing key", SignerError::InvalidKey)
-        })?;
-        Ok(pubkey_address(sk.verifying_key()))
+        secret_to_address(&key)
     }
 }
 
@@ -482,6 +492,66 @@ mod tests {
         let addr = s.address().unwrap();
         assert_eq!(
             eip55_checksum(&addr),
+            "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1"
+        );
+        let _ = s.close();
+    }
+
+    // A3-1: Ethereum BIP-44 abandon vectors (cast wallet ground truth).
+    // Path m/44'/60'/0'/0/0 and …/0/1, empty passphrase; see
+    // docs/plan/eoa-keystore/research/bip32-secp256k1.md.
+    #[test]
+    fn secret_to_address_abandon_bip44_vectors() {
+        let cases: [(&str, &str); 2] = [
+            (
+                "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727",
+                "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+            ),
+            (
+                "9a983cb3d832fbde5ab49d692b7a8bf5b5d232479c99333d0fc8e1d21f1b55b6",
+                "0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0",
+            ),
+        ];
+        for (secret_hex, want_eip55) in cases {
+            let mut secret = [0u8; 32];
+            hex::decode_to_slice(secret_hex, &mut secret).expect("fixture hex");
+            let addr = secret_to_address(&secret).expect("canonical secret");
+            assert_eq!(eip55_checksum(&addr), want_eip55, "secret {secret_hex}");
+        }
+    }
+
+    // A3-1: non-canonical scalars (zero and ≥ n) → InvalidKey.
+    #[test]
+    fn secret_to_address_rejects_non_canonical() {
+        // Zero scalar.
+        let err = secret_to_address(&[0u8; 32]).unwrap_err();
+        assert!(matches!(err.sentinel(), SignerError::InvalidKey));
+
+        // secp256k1 order n (exactly n is invalid: need 0 < k < n).
+        // n = FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE BAAEDCE6 AF48A03B BFD25E8C D0364141
+        let n = hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+            .unwrap();
+        let mut ge_n = [0u8; 32];
+        ge_n.copy_from_slice(&n);
+        let err = secret_to_address(&ge_n).unwrap_err();
+        assert!(matches!(err.sentinel(), SignerError::InvalidKey));
+
+        // All-0xff is well above n.
+        let err = secret_to_address(&[0xffu8; 32]).unwrap_err();
+        assert!(matches!(err.sentinel(), SignerError::InvalidKey));
+    }
+
+    // A3-1: LocalSigner::address and secret_to_address agree for a known key.
+    #[test]
+    fn address_delegates_to_secret_to_address() {
+        let s = new_local_signer();
+        let via_signer = s.address().unwrap();
+        let mut secret = [0u8; 32];
+        hex::decode_to_slice(TEST_KEY_HEX, &mut secret).unwrap();
+        let via_fn = secret_to_address(&secret).unwrap();
+        assert_eq!(via_signer, via_fn);
+        assert_eq!(
+            eip55_checksum(&via_fn),
             "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1"
         );
         let _ = s.close();

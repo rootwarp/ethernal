@@ -192,18 +192,19 @@ docs — `research/bip32-secp256k1.md`, `research/web3-v3-keystore.md`):
 
 | Issue | Status | Commit | Gate result |
 |---|---|---|---|
+| A3-2 | done | 1b85734 | pub(crate) widening of key_cli/key_cmd; BLS suite green |
 | A1-1 | done | f1f0507 | BIP-32 TV1 keys+cc; R1 scalar scrubbed on drop |
-| A1-2 | done | (this commit) | Bip44Path + derive_path; abandon secrets vs cast |
-| A1 | done | — | M-A1 secrets half closed (addresses via A3-1) |
-| M-A1 | open | | secrets green; addresses pending A3-1 |
-| A2-1 | done | (this commit) | G3 byte-gate + C-4 raw passphrase + encrypt_v3 |
-| A2 | todo | — | |
-| M-A1 | open | | BIP-32 TV1 + Ethereum BIP-44 vectors; `k256` zeroize-feature decision recorded |
-| M-A2 | open | | G3 v3 encrypt byte-gate (`ciphertext`/`mac`) + round-trip + `v3_filename` vector |
-| A3-2 | done | (this commit) | pub(crate) widening of key_cli/key_cmd; BLS suite green |
-| A3 | todo | — | |
-| M-A3 | open | | `account new` ceremony + TTY guard + 0600 v3 files + `secret_to_address` + secret-hygiene |
+| A1-2 | done | 0d7aaad | Bip44Path + derive_path; abandon secrets vs cast |
+| A2-1 | done | 0de013b | G3 byte-gate + C-4 raw passphrase + encrypt_v3 |
+| A2-2 | done | e5dfbc1 | v3_filename + civil_from_days fixed vector |
+| A3-1 | done | (this commit) | secret_to_address + abandon EIP-55 addresses |
+| A1 | done | — | M-A1 closed (secrets + addresses) |
+| A2 | done | — | M-A2 closed |
+| M-A1 | done | | BIP-32 TV1 + BIP-44 secrets + addresses; R1 scalar on drop |
+| M-A2 | done | | G3 encrypt byte-gate + round-trip + v3_filename |
+| A3 | todo | — | A3-3..A3-5 remaining |
+| M-A3 | open | | `account new` ceremony + TTY guard + 0600 v3 files + secret-hygiene |
 | A4 | todo | — | |
 | M-A4 | open | | `account recover` TTY/stdin, 12–24-word + 1-based bad word, range, mnemonic passphrase |
 | A5 | todo | — | |
-| M-A5 | open | | E2E fixture frozen + cross-recovery + docs; **manual C-2 parity session** — versions to be pinned here (recommend combining with keygen H9) |
+| M-A5 | open | | E2E fixture frozen + cross-recovery + docs; **manual C-2 parity session** |

@@ -39,15 +39,15 @@ compute — no keccak). Satisfies F-2 (address + canonical-scalar validation).
   is already `pub` (`lib.rs:21`). No new dep, no new edge (`signer` already has `k256` + `sha3`).
 
 **Acceptance criteria**
-- [ ] `secret_to_address` maps the **Ethereum BIP-44** secrets (from A1-2) to their EIP-55 addresses:
+- [x] `secret_to_address` maps the **Ethereum BIP-44** secrets (from A1-2) to their EIP-55 addresses:
   `1ab42cc4…fb12b727` → `0x9858EfFD232B4033E47d90003D41EC34EcaEda94` and `9a983cb3…f1b55b6` →
   `0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0` (via `eip55_checksum` of the returned 20 bytes) — F-2,
   C-1, G4, **delivers the M-A1 address clause** (research/bip32-secp256k1.md §"Ethereum BIP-44 vector").
-- [ ] a **non-canonical** scalar (all-zero, or a 32-byte value `≥ n`) → `SignerError::InvalidKey`
+- [x] a **non-canonical** scalar (all-zero, or a 32-byte value `≥ n`) → `SignerError::InvalidKey`
   (via `SigningKey::from_slice`) — F-2 (architecture §"`signer::secret_to_address`").
-- [ ] `LocalSigner::address` delegates to `secret_to_address` (single implementation; existing signer
+- [x] `LocalSigner::address` delegates to `secret_to_address` (single implementation; existing signer
   tests still green) — regression.
-- [ ] `cargo tree -p ethernal-signer` shows no new crate edge; `eip55_checksum` remains `pub` —
+- [x] `cargo tree -p ethernal-signer` shows no new crate edge; `eip55_checksum` remains `pub` —
   architecture §Design note (b).
 
 **Test plan**
