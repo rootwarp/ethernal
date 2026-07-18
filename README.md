@@ -1,4 +1,4 @@
-# eth-utils
+# ethernal
 
 Ethereum utility CLIs for validator operations — generating BLS keystores,
 building, signing, and broadcasting Beacon Chain deposit transactions from

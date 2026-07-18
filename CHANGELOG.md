@@ -269,5 +269,5 @@ against real hardware are not yet refined — that refinement is tracked for v0.
 
 ---
 
-[eth-deposit-tx 0.1.0]: https://github.com/rootwarp/eth-utils/releases/tag/eth-deposit-tx/v0.1.0
-[eth-deposit-gen 1.0.0]: https://github.com/rootwarp/eth-utils/releases/tag/v1.0.0
+[eth-deposit-tx 0.1.0]: https://github.com/rootwarp/ethernal/releases/tag/eth-deposit-tx/v0.1.0
+[eth-deposit-gen 1.0.0]: https://github.com/rootwarp/ethernal/releases/tag/v1.0.0

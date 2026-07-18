@@ -1,4 +1,4 @@
-# eth-utils User Guide
+# ethernal User Guide
 
 Comprehensive guide for `ethernal`, the CLI in this repository that takes a
 validator all the way from a BIP-39 mnemonic to a broadcast Ethereum deposit
@@ -66,8 +66,8 @@ The two-phase split (`build` then `sign`) supports air-gapped operation: build t
 No prebuilt archives are published for the Rust binary yet — install from source:
 
 ```bash
-git clone https://github.com/rootwarp/eth-utils.git
-cd eth-utils
+git clone https://github.com/rootwarp/ethernal.git
+cd ethernal
 make build   # produces target/release/ethernal
 
 # or, with Ledger hardware support:
