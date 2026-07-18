@@ -113,6 +113,25 @@ pub fn run_gen_with_deps(
         log.debug("mainnet: explicit ack verified", &[]);
     }
 
+    // Defense-in-depth: refuse placeholder / burn withdrawal credentials so a
+    // non-CLI GenConfig constructor cannot mint permanent-loss deposit data.
+    // Safe for a future 0x00-BLS mode (a real 0x00 cred has a non-zero BLS-key
+    // hash tail, not the all-zero placeholder).
+    if cfg.withdrawal_credentials == [0u8; 32] {
+        log.debug("withdrawal credentials: all-zero placeholder rejected", &[]);
+        return Err(AppError::exit2(
+            "withdrawal credentials: all-zero credentials are not allowed (placeholder)",
+        ));
+    }
+    if cfg.withdrawal_credentials[0] == 0x01
+        && cfg.withdrawal_credentials[12..].iter().all(|&b| b == 0)
+    {
+        log.debug("withdrawal credentials: 0x01 burn address rejected", &[]);
+        return Err(AppError::exit2(
+            "withdrawal credentials: 0x01 credentials with zero address are not allowed (burn address)",
+        ));
+    }
+
     // Step 3: scan the keystore directory — no decryption yet.
     log.debug(
         "keystore: scanning directory",
@@ -1509,6 +1528,84 @@ mod tests {
         let wc = default_withdrawal_creds();
         assert_eq!(wc[0], 0x00);
         assert!(wc[1..].iter().all(|&b| b == 0));
+    }
+
+    // H2 / K5-L1: pipeline-level defense rejects all-zero and 0x01-burn credentials
+    // independent of how GenConfig was constructed.
+    #[test]
+    fn rejects_placeholder_and_burn_withdrawal_credentials() {
+        let pks = multi_pks(1);
+        let (_dir, idx) = index_over(&pks);
+        let loader = routing_loader();
+        let verifier = FakeVerifier { ok: true };
+        let mut writer = FakeWriter {
+            path: "/out".into(),
+            sha: "x".into(),
+            err: false,
+        };
+        let init_bls = || Ok(());
+        let scanner = move |_: &Path| Ok(idx.clone());
+        let signers = signer_map(&pks);
+        let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
+            let s = &signers[&secret[0]];
+            Ok(Box::new(FakeSigner {
+                pubkey: s.pubkey,
+                sig: s.sig,
+            }))
+        };
+        let verify = |_: &str, _: &str| Ok(());
+        let logger = discard_logger();
+
+        // (a) all-zero placeholder (default_withdrawal_creds / future non-CLI path).
+        {
+            let mut summary = Vec::<u8>::new();
+            let mut cfg = base_cfg(pks.clone());
+            cfg.withdrawal_credentials = [0u8; 32];
+            let mut deps = GenDeps {
+                init_bls: &init_bls,
+                scanner: &scanner,
+                loader: &loader,
+                new_signer: &new_signer,
+                verifier: &verifier,
+                writer: &mut writer,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                verify_deposit_cli: &verify,
+            };
+            let err = run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).unwrap_err();
+            assert_eq!(exit_code_for(&err), 2);
+            assert!(err.to_string().contains("all-zero"), "err: {err}");
+            assert!(summary.is_empty(), "no summary on credential reject");
+        }
+
+        // (b) 0x01 ‖ 11 zero ‖ 20 zero (burn address).
+        {
+            let mut summary = Vec::<u8>::new();
+            let mut cfg = base_cfg(pks);
+            let mut burn = [0u8; 32];
+            burn[0] = 0x01;
+            cfg.withdrawal_credentials = burn;
+            let mut deps = GenDeps {
+                init_bls: &init_bls,
+                scanner: &scanner,
+                loader: &loader,
+                new_signer: &new_signer,
+                verifier: &verifier,
+                writer: &mut writer,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                verify_deposit_cli: &verify,
+            };
+            let err = run_gen_with_deps(&cfg, &mut deps, &CancelToken::new()).unwrap_err();
+            assert_eq!(exit_code_for(&err), 2);
+            assert!(
+                err.to_string().contains("zero address") || err.to_string().contains("burn"),
+                "err: {err}"
+            );
+            assert!(summary.is_empty(), "no summary on credential reject");
+        }
     }
 
     // Go: TestBuildGenLogger_* — build_gen_logger selects level/format. Since it

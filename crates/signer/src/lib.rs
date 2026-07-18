@@ -118,9 +118,7 @@ mod validate_eip55_tests {
     fn rejects_wrong_length() {
         // 19 bytes (38 hex chars) and 21 bytes (42 hex chars).
         assert!(validate_eip55_address("0x1a642f0e3c3af545e7acbd38b07251b3990914").is_err());
-        assert!(
-            validate_eip55_address("0x1a642f0e3c3af545e7acbd38b07251b3990914f1aa").is_err()
-        );
+        assert!(validate_eip55_address("0x1a642f0e3c3af545e7acbd38b07251b3990914f1aa").is_err());
         assert!(validate_eip55_address("0x").is_err());
         assert!(validate_eip55_address("").is_err());
     }
@@ -129,5 +127,31 @@ mod validate_eip55_tests {
     fn rejects_non_hex() {
         assert!(validate_eip55_address("0xZZ642f0E3c3aF545E7AcBD38b07251B3990914F1").is_err());
         assert!(validate_eip55_address("not-an-address").is_err());
+    }
+
+    // H2 / K5-L4: strict prefix contract — only lowercase `0x` is accepted.
+    // Pins against a lenient-prefix refactor that would accept `0X` or bare hex.
+    #[test]
+    fn rejects_0x_uppercase_prefix() {
+        // Same body as CHECKSUMMED, but with `0X` instead of `0x`.
+        let upper_prefix = format!("0X{}", &CHECKSUMMED[2..]);
+        assert_ne!(upper_prefix, CHECKSUMMED);
+        assert!(
+            validate_eip55_address(&upper_prefix).is_err(),
+            "0X-prefixed form must be rejected: {upper_prefix}"
+        );
+    }
+
+    #[test]
+    fn rejects_bare_address_without_0x_prefix() {
+        let bare = &CHECKSUMMED[2..]; // drop "0x"
+        assert!(
+            !bare.starts_with("0x") && !bare.starts_with("0X"),
+            "fixture must be bare"
+        );
+        assert!(
+            validate_eip55_address(bare).is_err(),
+            "bare (no-prefix) address must be rejected: {bare}"
+        );
     }
 }

@@ -312,14 +312,8 @@ fn gen_without_withdrawal_address_exit2() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("--withdrawal-address"),
-        "stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("required flag not set"),
-        "stderr: {stderr}"
-    );
+    assert!(stderr.contains("--withdrawal-address"), "stderr: {stderr}");
+    assert!(stderr.contains("required flag not set"), "stderr: {stderr}");
 }
 
 // K5-2: lowercase --withdrawal-address → exit 2 (strict EIP-55).
@@ -350,8 +344,9 @@ fn gen_withdrawal_address_lowercase_exit2() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // H2 / K5-L5: pin *why* rejection happened (drop always-true flag-name disjunct).
     assert!(
-        stderr.contains("EIP-55 checksum mismatch") || stderr.contains("--withdrawal-address"),
+        stderr.contains("EIP-55 checksum mismatch"),
         "stderr: {stderr}"
     );
 }
@@ -389,8 +384,83 @@ fn gen_withdrawal_address_checksum_mismatch_exit2() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // H2 / K5-L5: pin *why* rejection happened (drop always-true flag-name disjunct).
     assert!(
-        stderr.contains("EIP-55 checksum mismatch") || stderr.contains("--withdrawal-address"),
+        stderr.contains("EIP-55 checksum mismatch"),
         "stderr: {stderr}"
+    );
+}
+
+// H2 / K5-L1: zero address self-checksums under EIP-55 but is refused → exit 2, no deposit output.
+#[test]
+fn gen_withdrawal_address_zero_exit2() {
+    let out = eth_deposit()
+        .env(PASS_ENV, hoodi_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--passphrase-env",
+            PASS_ENV,
+            "--withdrawal-address",
+            "0x0000000000000000000000000000000000000000",
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "zero address must not produce deposit JSON: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("zero address"),
+        "stderr must name the zero address: {stderr}"
+    );
+}
+
+// H2 / K5-L2: pre-signing banner echoes EIP-55 withdrawal address + full creds hex.
+#[test]
+fn gen_banner_echoes_withdrawal_address_and_credentials() {
+    let out = eth_deposit()
+        .env(PASS_ENV, hoodi_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--passphrase-env",
+            PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("withdrawal_address={WITHDRAWAL_ADDR}")),
+        "banner must show EIP-55 address: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("withdrawal_credentials=0x{WITHDRAWAL_CREDS_HEX}")),
+        "banner must show full credentials hex: {stderr}"
     );
 }

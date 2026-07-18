@@ -149,13 +149,13 @@ show the destination in the pre-signing banner, and pin the EIP-55 strictness co
   always-true `|| contains("--withdrawal-address")` so each assertion pins *why* rejection happened.
 
 **Acceptance criteria**
-- [ ] `gen --withdrawal-address 0x0000000000000000000000000000000000000000` → exit 2, no output
+- [x] `gen --withdrawal-address 0x0000000000000000000000000000000000000000` → exit 2, no output
   written; message names the zero address explicitly.
-- [ ] Pipeline rejects all-zero `[u8;32]` creds and `0x01‖0¹¹‖0²⁰` creds → exit 2, no output
+- [x] Pipeline rejects all-zero `[u8;32]` creds and `0x01‖0¹¹‖0²⁰` creds → exit 2, no output
   written, independent of how `GenConfig` was constructed.
-- [ ] Banner shows the EIP-55 address + full creds hex before signing; asserted by a banner test.
-- [ ] `0X`-prefix and bare-address forms → `Err` in signer unit tests.
-- [ ] The two integration assertions each pin the specific rejection message; suite green.
+- [x] Banner shows the EIP-55 address + full creds hex before signing; asserted by a banner test.
+- [x] `0X`-prefix and bare-address forms → `Err` in signer unit tests.
+- [x] The two integration assertions each pin the specific rejection message; suite green.
 
 **Test plan** — command-level tests in `tests/gen.rs` for the zero-address exit-2 and the banner
 content; a unit test constructing `GenConfig` directly with placeholder creds to hit the pipeline
@@ -440,7 +440,7 @@ require no action and are listed here only for completeness of the traceability 
 | Issue | Status | Commit | Gate result |
 |---|---|---|---|
 | H1 | done | 2e7f682 | review PASS (0 findings); S-2 token hygiene fixed |
-| H2 | todo | | |
+| H2 | done | 54f2700 | review PASS (0 findings) |
 | H3 | todo | | |
 | H4 | todo | | |
 | H5 | todo | | |

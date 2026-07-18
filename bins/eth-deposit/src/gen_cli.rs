@@ -11,7 +11,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use eth_deposit_core::bls;
 use eth_deposit_core::deposit::eth1_withdrawal_credentials;
 use eth_deposit_core::network::{self, Network};
-use eth_deposit_signer::validate_eip55_address;
+use eth_deposit_signer::{eip55_checksum, validate_eip55_address};
 
 use crate::errors::AppError;
 
@@ -251,6 +251,13 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
     }
     let addr = validate_eip55_address(&withdrawal_address)
         .map_err(|e| AppError::exit2(format!("--withdrawal-address: {e}")))?;
+    // Policy (not EIP-55): the all-digit zero address self-checksums under
+    // EIP-55, but would permanently lock stake — refuse it here.
+    if addr == [0u8; 20] {
+        return Err(AppError::exit2(
+            "--withdrawal-address: zero address is not allowed (would permanently lock stake)",
+        ));
+    }
     let withdrawal_credentials = eth1_withdrawal_credentials(addr);
 
     let cfg = GenConfig {
@@ -387,20 +394,26 @@ fn network_display(n: Network) -> String {
 }
 
 /// Writes the confirmation banner to `w` (stderr in production).
-/// Format: eth-deposit gen: network=<net> first_pubkey=<hex> last_pubkey=<hex> count=<n>
+/// Format: eth-deposit gen: network=<net> first_pubkey=<hex> last_pubkey=<hex>
+/// count=<n> withdrawal_address=0x<EIP-55> withdrawal_credentials=0x<64hex>
 fn print_banner(w: &mut dyn Write, cfg: &GenConfig) {
     if cfg.pubkeys.is_empty() {
         return;
     }
     let first = cfg.pubkeys[0];
     let last = cfg.pubkeys[cfg.pubkeys.len() - 1];
+    let mut addr20 = [0u8; 20];
+    addr20.copy_from_slice(&cfg.withdrawal_credentials[12..]);
+    let wd_addr = eip55_checksum(&addr20);
     let _ = writeln!(
         w,
-        "eth-deposit gen: network={} first_pubkey=0x{} last_pubkey=0x{} count={}",
+        "eth-deposit gen: network={} first_pubkey=0x{} last_pubkey=0x{} count={} withdrawal_address={} withdrawal_credentials=0x{}",
         network_display(cfg.network),
         hex::encode(first),
         hex::encode(last),
-        cfg.pubkeys.len()
+        cfg.pubkeys.len(),
+        wd_addr,
+        hex::encode(cfg.withdrawal_credentials),
     );
 }
 
@@ -594,9 +607,23 @@ mod tests {
         .expect("should succeed");
         assert_eq!(cfg.pubkeys.len(), 2);
         let want = format!(
-            "eth-deposit gen: network=hoodi first_pubkey=0x{pk} last_pubkey=0x{pk2} count=2"
+            "eth-deposit gen: network=hoodi first_pubkey=0x{pk} last_pubkey=0x{pk2} count=2 \
+             withdrawal_address={TEST_WITHDRAWAL_ADDR} \
+             withdrawal_credentials=0x{}",
+            hex::encode(TEST_WITHDRAWAL_CREDS)
         );
         assert!(banner.contains(&want), "banner {banner:?}\nwant {want:?}");
+        assert!(
+            banner.contains(&format!("withdrawal_address={TEST_WITHDRAWAL_ADDR}")),
+            "banner must echo EIP-55 withdrawal address: {banner:?}"
+        );
+        assert!(
+            banner.contains(&format!(
+                "withdrawal_credentials=0x{}",
+                hex::encode(TEST_WITHDRAWAL_CREDS)
+            )),
+            "banner must echo full credentials hex: {banner:?}"
+        );
     }
 
     // Go: TestMissingRequiredFlags — clap rejects missing required flags; a missing
@@ -1082,7 +1109,10 @@ mod tests {
         let flipped: String = chars.into_iter().collect();
         let err = base(&flipped);
         assert_eq!(exit_code_for(&err), 2);
-        assert!(err.to_string().contains("EIP-55 checksum mismatch"), "{err}");
+        assert!(
+            err.to_string().contains("EIP-55 checksum mismatch"),
+            "{err}"
+        );
 
         // wrong length.
         let err = base("0x1a642f0E3c3aF545E7AcBD38b07251B3990914");
@@ -1093,5 +1123,32 @@ mod tests {
         let err = base("not-an-address");
         assert_eq!(exit_code_for(&err), 2);
         assert!(err.to_string().contains("--withdrawal-address"), "{err}");
+    }
+
+    // H2 / K5-L1: zero address self-checksums under EIP-55 but is refused by CLI policy.
+    #[test]
+    fn withdrawal_address_zero_rejected() {
+        let dir = Tmp::new();
+        let ks = Tmp::new();
+        let pk = valid_pubkey(1);
+        let err = load_err(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+            "--withdrawal-address",
+            "0x0000000000000000000000000000000000000000",
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("zero address"),
+            "error must name the zero address: {msg}"
+        );
+        assert!(msg.contains("--withdrawal-address"), "{msg}");
     }
 }
