@@ -16,8 +16,11 @@ pub const WORDLIST: &str = include_str!("english.txt");
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Bip39Error {
     /// A mnemonic word is not in the English wordlist.
-    #[error("bip39: unknown word {0:?}")]
-    UnknownWord(String),
+    ///
+    /// Carries the **1-based** word position only — never the token itself
+    /// (S-2: mnemonic material must not reach stderr / structured logs).
+    #[error("bip39: unknown word at position {0}")]
+    UnknownWord(usize),
 
     /// Word count is outside the BIP-39 set {12, 15, 18, 21, 24}.
     ///
@@ -97,10 +100,11 @@ pub fn validate_mnemonic(mnemonic: &str) -> Result<(), Bip39Error> {
     let list = wordlist_words();
     // O(n) linear scan is fine for 2048 words × ≤24 lookups in recovery path.
     let mut indices = Vec::with_capacity(word_count);
-    for w in &words {
+    for (i, w) in words.iter().enumerate() {
         match list.iter().position(|lw| lw == w) {
-            Some(i) => indices.push(i),
-            None => return Err(Bip39Error::UnknownWord((*w).to_string())),
+            Some(idx) => indices.push(idx),
+            // 1-based position; never embed the token (S-2 / H1).
+            None => return Err(Bip39Error::UnknownWord(i + 1)),
         }
     }
 
@@ -272,15 +276,45 @@ mod tests {
     }
 
     #[test]
-    fn validate_unknown_word() {
+    fn validate_unknown_word_reports_1based_position() {
+        // Position 1 (first word).
+        let err = validate_mnemonic(
+            "notaword abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .unwrap_err();
+        assert_eq!(err, Bip39Error::UnknownWord(1));
+        let msg = err.to_string();
+        assert!(msg.contains("unknown word at position 1"), "msg={msg}");
+        assert!(
+            !msg.contains("notaword"),
+            "token must not appear in Display: {msg}"
+        );
+
+        // Position 7 (middle).
+        let err = validate_mnemonic(
+            "abandon abandon abandon abandon abandon abandon notaword abandon abandon abandon abandon about",
+        )
+        .unwrap_err();
+        assert_eq!(err, Bip39Error::UnknownWord(7));
+        let msg = err.to_string();
+        assert!(msg.contains("unknown word at position 7"), "msg={msg}");
+        assert!(
+            !msg.contains("notaword"),
+            "token must not appear in Display: {msg}"
+        );
+
+        // Position 12 (last word of a 12-word mnemonic).
         let err = validate_mnemonic(
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon notaword",
         )
         .unwrap_err();
-        match err {
-            Bip39Error::UnknownWord(w) => assert_eq!(w, "notaword"),
-            other => panic!("expected UnknownWord, got {other:?}"),
-        }
+        assert_eq!(err, Bip39Error::UnknownWord(12));
+        let msg = err.to_string();
+        assert!(msg.contains("unknown word at position 12"), "msg={msg}");
+        assert!(
+            !msg.contains("notaword"),
+            "token must not appear in Display: {msg}"
+        );
     }
 
     #[test]

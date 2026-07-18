@@ -572,23 +572,20 @@ mod tests {
     #[test]
     fn bip39_is_exit2() {
         assert_eq!(code(AppError::Bip39(Bip39Error::Checksum)), 2);
-        assert_eq!(
-            code(AppError::Bip39(Bip39Error::UnknownWord("x".into()))),
-            2
-        );
+        assert_eq!(code(AppError::Bip39(Bip39Error::UnknownWord(1))), 2);
         assert_eq!(code(AppError::Bip39(Bip39Error::WordCount(13))), 2);
         assert_eq!(
-            code(AppError::context("wrap", AppError::Bip39(Bip39Error::Checksum))),
+            code(AppError::context(
+                "wrap",
+                AppError::Bip39(Bip39Error::Checksum)
+            )),
             2
         );
     }
 
     #[test]
     fn hd_is_exit3() {
-        assert_eq!(
-            code(AppError::Hd(HdError::Master("too short".into()))),
-            3
-        );
+        assert_eq!(code(AppError::Hd(HdError::Master("too short".into()))), 3);
         assert_eq!(
             code(AppError::context(
                 "derive",
@@ -629,9 +626,9 @@ mod tests {
         // Keystore writes must not use this variant (call-site Exit{3}).
         assert_eq!(code(AppError::Output(OutputError::AlreadyExists)), 1);
         assert_eq!(
-            code(AppError::Output(OutputError::WriteTmp(std::io::Error::other(
-                "disk full"
-            )))),
+            code(AppError::Output(OutputError::WriteTmp(
+                std::io::Error::other("disk full")
+            ))),
             1
         );
     }

@@ -199,10 +199,7 @@ fn stdin_is_tty() -> bool {
 
 /// Testable core of `key new`: entropy → mnemonic → mnemonic passphrase →
 /// ceremony → seed → derive/encrypt/write per index.
-pub fn run_key_new_with_deps(
-    deps: &mut KeyDeps<'_>,
-    cancel: &CancelToken,
-) -> Result<(), AppError> {
+pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Result<(), AppError> {
     let log = deps.logger;
     let cfg = deps.cfg;
 
@@ -239,11 +236,22 @@ pub fn run_key_new_with_deps(
 
     // 3. Ceremony: display once on tty_writer, require full re-entry (F-6).
     check_cancel(cancel)?;
-    run_ceremony(mnemonic.as_str(), deps.tty_writer, deps.mnemonic_src, cancel)?;
+    run_ceremony(
+        mnemonic.as_str(),
+        deps.tty_writer,
+        deps.mnemonic_src,
+        cancel,
+    )?;
     log.debug("key new: ceremony complete", &[]);
 
     // 4–6. Keystore passphrase → seed → derive/encrypt/write.
-    finish_from_mnemonic(deps, cancel, mnemonic.as_str(), mnemonic_pass.as_slice(), "key new")
+    finish_from_mnemonic(
+        deps,
+        cancel,
+        mnemonic.as_str(),
+        mnemonic_pass.as_slice(),
+        "key new",
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -264,9 +272,7 @@ pub fn run_key_recover_with_deps(
 
     // 1. Existing mnemonic from TTY prompt or piped stdin (F-10).
     log.debug("key recover: reading mnemonic", &[]);
-    let mnemonic = deps
-        .mnemonic_src
-        .read_line("Enter your mnemonic: ")?;
+    let mnemonic = deps.mnemonic_src.read_line("Enter your mnemonic: ")?;
     // 2. Validate first — 12/15/18/21/24; bad word/checksum → exit 2 (F-11).
     bip39::validate_mnemonic(mnemonic.as_str()).map_err(map_bip39_err)?;
     let word_count = mnemonic.split_whitespace().count();
@@ -319,9 +325,9 @@ fn finish_from_mnemonic(
     for i in 0..count {
         check_cancel(cancel)?;
 
-        let index = start.checked_add(i as u32).ok_or_else(|| {
-            AppError::exit2("--start-index + --count overflows u32")
-        })?;
+        let index = start
+            .checked_add(i as u32)
+            .ok_or_else(|| AppError::exit2("--start-index + --count overflows u32"))?;
         let path = KeyPath::signing(index);
         let path_str = path.to_string();
 
@@ -397,9 +403,7 @@ fn resolve_mnemonic_passphrase(
     match form {
         MnemonicPassphraseForm::Empty => Ok(Zeroizing::new(Vec::new())),
         MnemonicPassphraseForm::Raw(v) => Ok(Zeroizing::new(v.as_bytes().to_vec())),
-        MnemonicPassphraseForm::Env { value, .. } => {
-            Ok(Zeroizing::new(value.as_bytes().to_vec()))
-        }
+        MnemonicPassphraseForm::Env { value, .. } => Ok(Zeroizing::new(value.as_bytes().to_vec())),
         MnemonicPassphraseForm::Prompt => {
             // Echo-off secret entry (S-2).
             check_cancel(cancel)?;
@@ -683,8 +687,7 @@ impl MnemonicSource for RecoverMnemonicSource {
                     .prompt_out
                     .lock()
                     .map_err(|_| AppError::Internal("prompt writer lock poisoned".into()))?;
-                write!(w, "{prompt}")
-                    .map_err(|e| AppError::exit2(format!("write prompt: {e}")))?;
+                write!(w, "{prompt}").map_err(|e| AppError::exit2(format!("write prompt: {e}")))?;
                 w.flush()
                     .map_err(|e| AppError::exit2(format!("write prompt: {e}")))?;
             }
@@ -880,10 +883,7 @@ mod tests {
         fn new() -> Self {
             static N: AtomicUsize = AtomicUsize::new(0);
             let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!(
-                "key-cmd-test-{}-{n}",
-                std::process::id()
-            ));
+            let p = std::env::temp_dir().join(format!("key-cmd-test-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&p).unwrap();
             Tmp(p)
         }
@@ -1242,8 +1242,7 @@ mod tests {
     fn happy_path_with_trezor_mnemonic_passphrase_24_word() {
         let dir = Tmp::new();
         let mut cfg = base_cfg(dir.str(), 1);
-        cfg.mnemonic_passphrase =
-            MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+        cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
         let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
@@ -1380,10 +1379,7 @@ mod tests {
         let files = dir.keystore_files();
         assert_eq!(files.len(), 1);
         let name = files[0].file_name().unwrap().to_string_lossy();
-        assert_eq!(
-            name.as_ref(),
-            "keystore-m_12381_3600_0_0_0-1700000000.json"
-        );
+        assert_eq!(name.as_ref(), "keystore-m_12381_3600_0_0_0-1700000000.json");
 
         let raw = std::fs::read(&files[0]).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
@@ -1505,9 +1501,11 @@ mod tests {
         let pw = FixedPassphrase(b"password1".to_vec());
         let err = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap_err();
         assert_eq!(exit_code_for(&err), 2, "err={err}");
+        let msg = err.to_string();
+        assert!(msg.contains("unknown word at position 12"), "err={err}");
         assert!(
-            err.to_string().contains("unknown word") || err.to_string().contains("notaword"),
-            "err={err}"
+            !msg.contains("notaword"),
+            "token must not appear in error Display: {err}"
         );
         assert!(dir.keystore_files().is_empty());
     }
@@ -1523,10 +1521,7 @@ mod tests {
         let pw = FixedPassphrase(b"password1".to_vec());
         let err = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap_err();
         assert_eq!(exit_code_for(&err), 2, "err={err}");
-        assert!(
-            err.to_string().contains("checksum"),
-            "err={err}"
-        );
+        assert!(err.to_string().contains("checksum"), "err={err}");
         assert!(dir.keystore_files().is_empty());
     }
 
@@ -1585,8 +1580,7 @@ mod tests {
         let lines = ScriptedLines::new(vec![ABANDON_12]);
         let entropy = FixedEntropy::new(vec![]);
         let pw = FixedPassphrase(b"password1".to_vec());
-        let (tty, _) =
-            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap();
+        let (tty, _) = run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).unwrap();
         assert!(
             tty.is_empty(),
             "recover must not write to tty_writer: {}",
@@ -1630,22 +1624,8 @@ mod tests {
         let lines_new = ScriptedLines::new(vec![ZERO_MNEMONIC]);
         let lines_rec = ScriptedLines::new(vec![ZERO_MNEMONIC]);
 
-        run_with(
-            &cfg_new,
-            &entropy_new,
-            &pw,
-            &lines_new,
-            &CancelToken::new(),
-        )
-        .unwrap();
-        run_recover_with(
-            &cfg_rec,
-            &entropy_rec,
-            &pw,
-            &lines_rec,
-            &CancelToken::new(),
-        )
-        .unwrap();
+        run_with(&cfg_new, &entropy_new, &pw, &lines_new, &CancelToken::new()).unwrap();
+        run_recover_with(&cfg_rec, &entropy_rec, &pw, &lines_rec, &CancelToken::new()).unwrap();
 
         let f_new = dir_new.keystore_files();
         let f_rec = dir_rec.keystore_files();
@@ -1684,8 +1664,7 @@ mod tests {
         let dir = Tmp::new();
         let mut cfg = base_cfg(dir.str(), 1);
         // Distinct mnemonic passphrase so we can grep for it.
-        cfg.mnemonic_passphrase =
-            MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+        cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
 
         let keystore_pw_plain = "password1";
         let entropy = FixedEntropy::zero_mnemonic();
@@ -1806,8 +1785,7 @@ mod tests {
     fn secret_hygiene_key_recover_buffers() {
         let dir = Tmp::new();
         let mut cfg = recover_cfg(dir.str(), 1, 0);
-        cfg.mnemonic_passphrase =
-            MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
+        cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
         let keystore_pw_plain = "password1";
         let entropy = FixedEntropy::new(vec![]);
         let pw = FixedPassphrase(keystore_pw_plain.as_bytes().to_vec());
@@ -1853,10 +1831,7 @@ mod tests {
             &hex::encode(b"TREZOR"),
             &hex::encode(keystore_pw_plain.as_bytes()),
         ] {
-            assert!(
-                !summary_s.contains(secret),
-                "secret {secret:?} in summary"
-            );
+            assert!(!summary_s.contains(secret), "secret {secret:?} in summary");
             assert!(!logs_s.contains(secret), "secret {secret:?} in logs");
         }
     }

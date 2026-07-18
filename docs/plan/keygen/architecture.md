@@ -78,7 +78,9 @@ pub fn validate_mnemonic(mnemonic: &str) -> Result<(), Bip39Error>;
 pub fn to_seed(mnemonic: &str, mnemonic_passphrase: &[u8]) -> Zeroizing<[u8; 64]>;
 
 #[derive(Debug, thiserror::Error)] pub enum Bip39Error {   // all user-input → exit 2
-    #[error("bip39: unknown word {0:?}")] UnknownWord(String),
+    // 1-based position only — never the token (S-2: mnemonic material must not
+    // reach stderr / structured logs on the key-recover error path).
+    #[error("bip39: unknown word at position {0}")] UnknownWord(usize),
     #[error("bip39: word count {0} not in {{12,15,18,21,24}}")] WordCount(usize),
     #[error("bip39: checksum mismatch")] Checksum,
 }
