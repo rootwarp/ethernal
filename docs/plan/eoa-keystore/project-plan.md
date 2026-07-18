@@ -212,5 +212,6 @@ docs — `research/bip32-secp256k1.md`, `research/web3-v3-keystore.md`):
 | A4 | done | — | M-A4 closed |
 | M-A4 | done | | `account recover` TTY/stdin, 12–24-word + 1-based bad word, range, mnemonic passphrase |
 | A5-1 | done | (this commit) | account_e2e: abandon+empty → cast addresses + BLS regression fixture; 0600/UTC--/no-overwrite; S-4 no entropy flag |
-| A5 | todo | — | A5-2 docs + A5-M manual remain |
-| M-A5 | open | | E2E fixture frozen + cross-recovery (A5-1); docs; **manual C-2 parity session** |
+| A5-2 | done | (this commit) | USER-GUIDE account section + README/CHANGELOG; raw mnemonic-passphrase ps/history; v3 no-NFKD (C-4) |
+| A5 | todo | — | A5-M manual remains (docs A5-2 done) |
+| M-A5 | open | | E2E fixture frozen + cross-recovery (A5-1); docs (A5-2); **manual C-2 parity session** |

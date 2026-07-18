@@ -1,11 +1,15 @@
 # ethernal
 
 CLI for Ethereum validator deposits: BIP-39 keystores → Launchpad deposit data →
-signed Beacon Chain deposit transaction → broadcast.
+signed Beacon Chain deposit transaction → broadcast. Also generates Web3 v3 EOA
+keystores (`account new|recover`) for geth / Foundry / MetaMask.
 
 ```text
 mnemonic / keystores  →  deposit_data JSON  →  signed EIP-1559 tx  →  chain
      key new|recover           gen              build / sign / run      send
+
+mnemonic  →  Web3 v3 EOA keystores (geth / cast / MetaMask)
+  account new|recover
 ```
 
 **Status:** unreleased (`0.1.0`). Formerly the `eth-deposit` binary in the
@@ -33,9 +37,11 @@ supported. On Linux, enable the `ledger` feature only after installing
 
 | Command | Purpose |
 |---------|---------|
-| `ethernal key new` | Fresh BIP-39 mnemonic (TTY ceremony) → EIP-2335 scrypt keystores |
-| `ethernal key recover` | Existing mnemonic (TTY or stdin) → keystores |
-| `ethernal gen` | Keystores → Launchpad `deposit_data` JSON (requires EIP-55 `--withdrawal-address`) |
+| `ethernal key new` | Fresh BIP-39 mnemonic (TTY ceremony) → EIP-2335 v4 scrypt BLS keystores |
+| `ethernal key recover` | Existing mnemonic (TTY or stdin) → EIP-2335 BLS keystores |
+| `ethernal account new` | Fresh BIP-39 mnemonic (TTY ceremony) → Web3 v3 EOA keystores |
+| `ethernal account recover` | Existing mnemonic (TTY or stdin) → Web3 v3 EOA keystores |
+| `ethernal gen` | EIP-2335 keystores → Launchpad `deposit_data` JSON (requires EIP-55 `--withdrawal-address`) |
 | `ethernal build` | Deposit data → unsigned EIP-1559 deposit tx (offline or `--rpc-url`) |
 | `ethernal sign` | Sign with Ledger (recommended) or local key (`ETHERNAL_TX_PRIVATE_KEY`) |
 | `ethernal run` | `build` + `sign` in one shot |
@@ -74,9 +80,15 @@ ethernal run --network hoodi --input-file ./out/deposit_data-*.json \
 ethernal send --input signed.json --rpc-url https://hoodi.example/rpc
 ```
 
-`key recover` rebuilds keystores from an existing mnemonic (TTY prompt or piped
-stdin). Prefer `--mnemonic-passphrase-env` or a bare `--mnemonic-passphrase`
-prompt over raw `--mnemonic-passphrase VALUE` (visible in `ps` / shell history).
+`key recover` / `account recover` rebuild keystores from an existing mnemonic
+(TTY prompt or piped stdin). Prefer `--mnemonic-passphrase-env` or a bare
+`--mnemonic-passphrase` prompt over raw `--mnemonic-passphrase VALUE` (visible
+in `ps` / shell history).
+
+`account` writes geth-style `UTC--…` **v3** files (BIP-44 `m/44'/60'/0'/0/i`);
+`key` writes EIP-2335 **v4** BLS keystores. Do not pass v3 files to `gen`. v3
+encryption uses the keystore passphrase as **raw UTF-8** (no NFKD), matching
+geth/MetaMask — see [User Guide](docs/USER-GUIDE.md#create-eoa-keystores-ethernal-account).
 
 ## Build & test
 
@@ -97,7 +109,7 @@ before any real-fund use.
 |------|----------|
 | `bins/ethernal` | CLI: subcommands, exit-code map, logging |
 | `crates/ethernal-core` | SSZ HTR, network params, BLS, BIP-39/HD, deposit generator |
-| `crates/ethernal-keystore` | EIP-2335 v4 encrypt/decrypt, directory index, passphrase sources |
+| `crates/ethernal-keystore` | EIP-2335 v4 + Web3 v3 encrypt/decrypt, directory index, passphrase sources |
 | `crates/ethernal-tx` | `deposit()` ABI, EIP-1559 builder, JSON-RPC client, URL redaction |
 | `crates/ethernal-signer` | Local secp256k1 + Ledger signers; strict EIP-55 validation |
 | `docs/` | [User Guide](docs/USER-GUIDE.md), design/plan archive (`docs/plan/`) |
@@ -110,6 +122,8 @@ before any real-fund use.
 |-------|----------|
 | Withdrawal credentials | `gen` **requires** `--withdrawal-address` (strict EIP-55) → real `0x01` creds; zero address rejected |
 | `--from` (build only) | Lenient any-case 20-byte hex; `run` has no `--from` (sender from signing key) |
+| `key` vs `account` | BLS EIP-2335 v4 (`key`) vs secp256k1 Web3 v3 (`account`); additive — `key`/`gen` surface unchanged |
+| v3 keystore passphrase | Raw UTF-8 into scrypt (**no NFKD**); geth/MetaMask interop |
 | Local private key | Env only (`ETHERNAL_TX_PRIVATE_KEY` by default) — never a CLI flag |
 | RPC | `http`/`https` only (`ws://` rejected); API keys redacted from errors by construction |
 | Wei quantities | `u128` (values ≥ 2^128 wei rejected) |

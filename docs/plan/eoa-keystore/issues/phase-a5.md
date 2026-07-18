@@ -98,12 +98,12 @@ and the documentation half of C-2.
   `key`/`gen` surface is untouched — U-3).
 
 **Acceptance criteria**
-- [ ] USER-GUIDE documents `account new` (ceremony, TTY-only) and `account recover` (TTY/stdin), the
+- [x] USER-GUIDE documents `account new` (ceremony, TTY-only) and `account recover` (TTY/stdin), the
   flags, and the v3-vs-EIP-2335 distinction — U-1, U-3.
-- [ ] the raw `--mnemonic-passphrase` `ps`/shell-history exposure note is present, env/prompt
+- [x] the raw `--mnemonic-passphrase` `ps`/shell-history exposure note is present, env/prompt
   recommended — architecture Design note (c) security note.
-- [ ] the v3 raw-passphrase interop rule (no NFKD) is documented — C-4.
-- [ ] README command list + CHANGELOG record the new `account` namespace; the `key`/`gen` docs are
+- [x] the v3 raw-passphrase interop rule (no NFKD) is documented — C-4.
+- [x] README command list + CHANGELOG record the new `account` namespace; the `key`/`gen` docs are
   unchanged — U-3.
 
 **Test plan**
