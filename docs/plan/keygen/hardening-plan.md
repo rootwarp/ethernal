@@ -194,13 +194,13 @@ of silently deriving a wrong seed, and pin 24-word checksum rejection against re
   add a 24-word (cs_bits=8) checksum-flip rejection test — covers the `key new` default size.
 
 **Acceptance criteria**
-- [ ] Both `indices` vectors and the mnemonic assembly string are `Zeroizing`; no non-zeroizing
+- [x] Both `indices` vectors and the mnemonic assembly string are `Zeroizing`; no non-zeroizing
   intermediate holds entropy-equivalent material (review-listed sites all covered).
-- [ ] `to_seed` with an invalid-UTF-8 passphrase → `Err(PassphraseNotUtf8)`; via `key recover`
+- [x] `to_seed` with an invalid-UTF-8 passphrase → `Err(PassphraseNotUtf8)`; via `key recover`
   → exit 2; the error output contains no passphrase bytes.
-- [ ] All Trezor vectors and the frozen K4-1 E2E golden are byte-identical (pure hardening —
+- [x] All Trezor vectors and the frozen K4-1 E2E golden are byte-identical (pure hardening —
   outputs must not change for valid inputs).
-- [ ] 24-word checksum-flip test rejects with `Bip39Error::Checksum`.
+- [x] 24-word checksum-flip test rejects with `Bip39Error::Checksum`.
 
 **Test plan** — existing Trezor/EIP-2333/E2E suites as the no-behavior-change oracle; new unit
 tests: invalid-UTF-8 passphrase error, 24-word flip. Hygiene suite (incl. H1's new error-path
@@ -441,7 +441,7 @@ require no action and are listed here only for completeness of the traceability 
 |---|---|---|---|
 | H1 | done | 2e7f682 | review PASS (0 findings); S-2 token hygiene fixed |
 | H2 | done | 54f2700 | review PASS (0 findings) |
-| H3 | todo | | |
+| H3 | done | fc0daab | review PASS (0 findings) |
 | H4 | todo | | |
 | H5 | todo | | |
 | H6 | todo | | |

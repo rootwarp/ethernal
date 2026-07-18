@@ -315,7 +315,7 @@ fn finish_from_mnemonic(
     let keystore_pass = Zeroizing::new(deps.keystore_pw.read().map_err(map_passphrase_err)?);
 
     check_cancel(cancel)?;
-    let seed = bip39::to_seed(mnemonic, mnemonic_pass);
+    let seed = bip39::to_seed(mnemonic, mnemonic_pass).map_err(map_bip39_err)?;
 
     let count = cfg.count as usize;
     let start = cfg.start_index;
@@ -1023,7 +1023,7 @@ mod tests {
         assert_eq!(files.len(), 2, "files: {files:?}");
 
         // Loader round-trip: decrypt and match HD-derived secret.
-        let seed = bip39::to_seed(ZERO_MNEMONIC, b"");
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
         let loader = Loader::new();
         let pw_src = FixedPassphrase(b"password1".to_vec());
         for f in &files {
@@ -1202,7 +1202,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let seed = bip39::to_seed(ABANDON_12, pass.as_slice());
+        let seed = bip39::to_seed(ABANDON_12, pass.as_slice()).unwrap();
         assert_eq!(hex::encode(seed.as_slice()), TREZOR_SEED_HEX);
 
         // Empty form → empty passphrase (valid).
@@ -1224,7 +1224,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prompted.as_slice(), b"TREZOR");
-        let seed2 = bip39::to_seed(ABANDON_12, prompted.as_slice());
+        let seed2 = bip39::to_seed(ABANDON_12, prompted.as_slice()).unwrap();
         assert_eq!(hex::encode(seed2.as_slice()), TREZOR_SEED_HEX);
 
         // Recover: single-entry Prompt (no confirm line).
@@ -1248,7 +1248,7 @@ mod tests {
         let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
         run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
 
-        let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR");
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR").unwrap();
         // 24-word abandon…art + TREZOR seed (bip39 unit test vector).
         assert_eq!(
             hex::encode(seed.as_slice()),
@@ -1457,7 +1457,7 @@ mod tests {
 
         let files = dir.keystore_files();
         assert_eq!(files.len(), 1);
-        let seed = bip39::to_seed(ABANDON_12, b"");
+        let seed = bip39::to_seed(ABANDON_12, b"").unwrap();
         let loader = Loader::new();
         let key = loader
             .load(&files[0], &FixedPassphrase(b"password1".to_vec()))
@@ -1483,7 +1483,7 @@ mod tests {
         run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
         let files = dir.keystore_files();
         assert_eq!(files.len(), 1);
-        let seed = bip39::to_seed(ZERO_MNEMONIC, b"");
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
         let key = Loader::new()
             .load(&files[0], &FixedPassphrase(b"password1".to_vec()))
             .unwrap();
@@ -1556,7 +1556,7 @@ mod tests {
         );
 
         // Loader round-trip for each index.
-        let seed = bip39::to_seed(ABANDON_12, b"");
+        let seed = bip39::to_seed(ABANDON_12, b"").unwrap();
         let loader = Loader::new();
         let pw_src = FixedPassphrase(b"password1".to_vec());
         for f in &files {
@@ -1598,7 +1598,7 @@ mod tests {
         let entropy = FixedEntropy::new(vec![]);
         let pw = FixedPassphrase(b"password1".to_vec());
         run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
-        let seed = bip39::to_seed(ABANDON_12, b"TREZOR");
+        let seed = bip39::to_seed(ABANDON_12, b"TREZOR").unwrap();
         assert_eq!(hex::encode(seed.as_slice()), TREZOR_SEED_HEX);
         let files = dir.keystore_files();
         assert_eq!(files.len(), 1);
@@ -1714,7 +1714,7 @@ mod tests {
         );
 
         // Seed (24-word abandon…art + TREZOR).
-        let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR");
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR").unwrap();
         let seed_hex = hex::encode(seed.as_slice());
         assert!(
             !summary_s.contains(&seed_hex) && !logs_s.contains(&seed_hex),
@@ -1827,7 +1827,7 @@ mod tests {
             ABANDON_12,
             "TREZOR",
             keystore_pw_plain,
-            &hex::encode(bip39::to_seed(ABANDON_12, b"TREZOR").as_slice()),
+            &hex::encode(bip39::to_seed(ABANDON_12, b"TREZOR").unwrap().as_slice()),
             &hex::encode(b"TREZOR"),
             &hex::encode(keystore_pw_plain.as_bytes()),
         ] {

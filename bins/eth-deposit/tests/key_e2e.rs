@@ -22,7 +22,8 @@ use common::{crate_testdata, eth_deposit, TempDir};
 
 // --- chain anchor: BIP-39 abandon×11 about + "TREZOR" = EIP-2333 case-0 seed ---
 
-const ABANDON_12: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const ABANDON_12: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const MNEMONIC_PASS: &str = "TREZOR";
 const TREZOR_SEED_HEX: &str =
     "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";
@@ -153,7 +154,7 @@ fn recover_seed_and_pubkeys_match_fixture() {
     assert_eq!(fx.seed_hex, TREZOR_SEED_HEX);
     assert_eq!(fx.withdrawal_address, WITHDRAWAL_ADDR);
 
-    let seed = bip39::to_seed(ABANDON_12, MNEMONIC_PASS.as_bytes());
+    let seed = bip39::to_seed(ABANDON_12, MNEMONIC_PASS.as_bytes()).unwrap();
     assert_eq!(
         hex::encode(seed.as_slice()),
         TREZOR_SEED_HEX,
@@ -205,7 +206,7 @@ fn key_recover_keystores_match_fixture_and_loader_round_trip() {
         "expected {COUNT} keystores, got {files:?}"
     );
 
-    let seed = bip39::to_seed(ABANDON_12, MNEMONIC_PASS.as_bytes());
+    let seed = bip39::to_seed(ABANDON_12, MNEMONIC_PASS.as_bytes()).unwrap();
     let loader = Loader::new();
     let pw = FixedPw(KEYSTORE_PW.as_bytes().to_vec());
 
@@ -322,7 +323,8 @@ fn key_recover_then_gen_deposit_data_byte_stable() {
     // Byte-stable against the committed golden (compact JSON, no pretty-print).
     let golden = std::fs::read(deposit_data_golden()).expect("read deposit_data-golden.json");
     assert_eq!(
-        out.stdout, golden,
+        out.stdout,
+        golden,
         "deposit data must be byte-identical to tests/testdata/keygen/deposit_data-golden.json\n\
          got: {}\nwant: {}",
         String::from_utf8_lossy(&out.stdout),

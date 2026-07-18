@@ -574,6 +574,7 @@ mod tests {
         assert_eq!(code(AppError::Bip39(Bip39Error::Checksum)), 2);
         assert_eq!(code(AppError::Bip39(Bip39Error::UnknownWord(1))), 2);
         assert_eq!(code(AppError::Bip39(Bip39Error::WordCount(13))), 2);
+        assert_eq!(code(AppError::Bip39(Bip39Error::PassphraseNotUtf8)), 2);
         assert_eq!(
             code(AppError::context(
                 "wrap",

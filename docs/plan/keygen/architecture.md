@@ -75,7 +75,8 @@ pub fn entropy_to_mnemonic(entropy: &[u8]) -> Result<Zeroizing<String>, Bip39Err
 /// Validate word membership + checksum; accept 12/15/18/21/24 words (NFKD, lowercase, ws-collapse).
 pub fn validate_mnemonic(mnemonic: &str) -> Result<(), Bip39Error>;
 /// seed = PBKDF2-HMAC-SHA512(NFKD(mnemonic), NFKD("mnemonic"+passphrase), 2048, 64).
-pub fn to_seed(mnemonic: &str, mnemonic_passphrase: &[u8]) -> Zeroizing<[u8; 64]>;
+/// Passphrase must be valid UTF-8; invalid → PassphraseNotUtf8 (fail closed, S-2).
+pub fn to_seed(mnemonic: &str, mnemonic_passphrase: &[u8]) -> Result<Zeroizing<[u8; 64]>, Bip39Error>;
 
 #[derive(Debug, thiserror::Error)] pub enum Bip39Error {   // all user-input → exit 2
     // 1-based position only — never the token (S-2: mnemonic material must not
@@ -83,6 +84,8 @@ pub fn to_seed(mnemonic: &str, mnemonic_passphrase: &[u8]) -> Zeroizing<[u8; 64]
     #[error("bip39: unknown word at position {0}")] UnknownWord(usize),
     #[error("bip39: word count {0} not in {{12,15,18,21,24}}")] WordCount(usize),
     #[error("bip39: checksum mismatch")] Checksum,
+    // No payload — S-2; mis-encoded "25th word" must not silently derive a seed.
+    #[error("bip39: mnemonic passphrase is not valid UTF-8")] PassphraseNotUtf8,
 }
 ```
 

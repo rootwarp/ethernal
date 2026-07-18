@@ -6,7 +6,7 @@
 
 use sha2::{Digest, Sha256, Sha512};
 use unicode_normalization::UnicodeNormalization;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Canonical BIP-39 English wordlist (2048 words, LF, trailing newline).
 /// Pinned by sha256 test — see `research/bip39.md`.
@@ -33,6 +33,13 @@ pub enum Bip39Error {
     /// Entropy checksum bits do not match SHA256(entropy)[:CS].
     #[error("bip39: checksum mismatch")]
     Checksum,
+
+    /// Mnemonic passphrase bytes are not valid UTF-8.
+    ///
+    /// Fail-closed (no payload — S-2): a mis-encoded "25th word" must error
+    /// rather than derive an unrecoverable seed via lossy U+FFFD replacement.
+    #[error("bip39: mnemonic passphrase is not valid UTF-8")]
+    PassphraseNotUtf8,
 }
 
 /// Converts raw entropy (16/20/24/28/32 bytes) to a space-joined mnemonic.
@@ -54,10 +61,11 @@ pub fn entropy_to_mnemonic(entropy: &[u8]) -> Result<Zeroizing<String>, Bip39Err
 
     let ent_bits = entropy.len() * 8;
     // CS = ENT/32; first CS bits of SHA256(entropy) appended to the bitstring.
-    let hash = Sha256::digest(entropy);
+    let mut hash = Sha256::digest(entropy);
     let words = wordlist_words();
 
-    let mut indices = Vec::with_capacity(word_count);
+    // 11-bit indices are a bit-for-bit encoding of entropy+checksum — zeroize.
+    let mut indices = Zeroizing::new(Vec::with_capacity(word_count));
     for i in 0..word_count {
         let bit_offset = i * 11;
         let mut idx: u16 = 0;
@@ -77,13 +85,19 @@ pub fn entropy_to_mnemonic(entropy: &[u8]) -> Result<Zeroizing<String>, Bip39Err
         debug_assert!((idx as usize) < 2048);
         indices.push(idx as usize);
     }
+    // Defense-in-depth: scrub digest after checksum bits consumed (K1-L4).
+    hash.as_mut_slice().zeroize();
 
-    let mnemonic = indices
-        .iter()
-        .map(|&i| words[i])
-        .collect::<Vec<_>>()
-        .join(" ");
-    Ok(Zeroizing::new(mnemonic))
+    // Pre-sized zeroizing assembly — no intermediate Vec<&str> + join residue.
+    // English BIP-39 words are ≤8 chars; budget 8 + 1 space per word.
+    let mut mnemonic = Zeroizing::new(String::with_capacity(word_count * 9));
+    for (i, &idx) in indices.iter().enumerate() {
+        if i > 0 {
+            mnemonic.push(' ');
+        }
+        mnemonic.push_str(words[idx]);
+    }
+    Ok(mnemonic)
 }
 
 /// Validates word membership and checksum after NFKD + lowercase + whitespace collapse.
@@ -99,7 +113,8 @@ pub fn validate_mnemonic(mnemonic: &str) -> Result<(), Bip39Error> {
 
     let list = wordlist_words();
     // O(n) linear scan is fine for 2048 words × ≤24 lookups in recovery path.
-    let mut indices = Vec::with_capacity(word_count);
+    // Indices encode entropy+checksum — zeroize on drop (K1-L1).
+    let mut indices = Zeroizing::new(Vec::with_capacity(word_count));
     for (i, w) in words.iter().enumerate() {
         match list.iter().position(|lw| lw == w) {
             Some(idx) => indices.push(idx),
@@ -134,9 +149,11 @@ pub fn validate_mnemonic(mnemonic: &str) -> Result<(), Bip39Error> {
         }
     }
 
-    let hash = Sha256::digest(entropy.as_slice());
+    let mut hash = Sha256::digest(entropy.as_slice());
     // Leading cs_bits of the digest (cs_bits ∈ {4,5,6,7,8}).
     let expected = hash[0] >> (8 - cs_bits);
+    // Defense-in-depth: scrub digest after checksum bits consumed (K1-L4).
+    hash.as_mut_slice().zeroize();
     if checksum_bits != expected {
         return Err(Bip39Error::Checksum);
     }
@@ -153,18 +170,24 @@ pub fn validate_mnemonic(mnemonic: &str) -> Result<(), Bip39Error> {
 /// lowercase, whitespace collapse) so a noisy recover input that passes
 /// validation yields the same seed as the canonical form.
 ///
-/// `mnemonic_passphrase` must be UTF-8 text (flag/env/prompt). Non-UTF-8 bytes
-/// are lossily replaced with U+FFFD before NFKD — same stance as keystore
-/// passphrase handling. Prefer valid UTF-8 only.
+/// `mnemonic_passphrase` must be valid UTF-8 text (flag/env/prompt). Invalid
+/// UTF-8 returns [`Bip39Error::PassphraseNotUtf8`] — fail closed so a
+/// mis-encoded "25th word" cannot silently derive an unrecoverable seed.
 ///
 /// The seed and intermediate secret strings are zeroized on drop.
-pub fn to_seed(mnemonic: &str, mnemonic_passphrase: &[u8]) -> Zeroizing<[u8; 64]> {
+pub fn to_seed(
+    mnemonic: &str,
+    mnemonic_passphrase: &[u8],
+) -> Result<Zeroizing<[u8; 64]>, Bip39Error> {
     // Same normalization as validate_mnemonic: recover path is validate → to_seed
     // on the same user string and must not derive a different seed for case/ws noise.
     let mnemonic_norm = normalize_mnemonic(mnemonic);
 
-    // Passphrase is raw bytes (flag/env/prompt); must be UTF-8 text (see doc above).
-    let pass_text = Zeroizing::new(String::from_utf8_lossy(mnemonic_passphrase).into_owned());
+    // Passphrase is raw bytes (flag/env/prompt); require valid UTF-8 (fail closed).
+    let pass_text = match std::str::from_utf8(mnemonic_passphrase) {
+        Ok(s) => Zeroizing::new(s.to_owned()),
+        Err(_) => return Err(Bip39Error::PassphraseNotUtf8),
+    };
     let salt_raw = Zeroizing::new(format!("mnemonic{}", pass_text.as_str()));
     let salt_nfkd = Zeroizing::new(salt_raw.nfkd().collect::<String>());
 
@@ -175,7 +198,7 @@ pub fn to_seed(mnemonic: &str, mnemonic_passphrase: &[u8]) -> Zeroizing<[u8; 64]
         2048,
         seed.as_mut(),
     );
-    seed
+    Ok(seed)
 }
 
 /// NFKD → lowercase → collapse any whitespace run to a single space → trim.
@@ -255,7 +278,9 @@ mod tests {
     fn trezor_mnemonic_to_seed() {
         let vectors = load_vectors();
         for (i, row) in vectors.english.iter().enumerate() {
-            let seed = to_seed(&row[1], b"TREZOR");
+            let seed = to_seed(&row[1], b"TREZOR").unwrap_or_else(|e| {
+                panic!("vector {i}: to_seed failed: {e}");
+            });
             let expected = decode_hex(&row[2]);
             assert_eq!(
                 seed.as_slice(),
@@ -341,6 +366,42 @@ mod tests {
     }
 
     #[test]
+    fn validate_checksum_flip_24_word() {
+        // Valid 24-word all-zero entropy ends with "art" (cs_bits=8); flip last word.
+        // 24×abandon → wrong checksum (valid is 23×abandon + art).
+        let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+        let err = validate_mnemonic(bad).unwrap_err();
+        match err {
+            Bip39Error::Checksum => {}
+            other => panic!("expected Checksum, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_seed_rejects_non_utf8_passphrase() {
+        let mnemonic =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        // Distinctive invalid UTF-8 sequence (must not appear in the error).
+        let bad_pass = [0xffu8, 0xfe, 0xfd, b's', b'e', b'c', b'r', b'e', b't'];
+        let err = to_seed(mnemonic, &bad_pass).unwrap_err();
+        assert_eq!(err, Bip39Error::PassphraseNotUtf8);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not valid UTF-8"),
+            "expected UTF-8 message: {msg}"
+        );
+        // S-2: error must not embed passphrase bytes.
+        assert!(
+            !msg.as_bytes().windows(3).any(|w| w == &bad_pass[..3]),
+            "passphrase bytes leaked into error: {msg}"
+        );
+        assert!(
+            !msg.contains("secret"),
+            "passphrase ASCII tail leaked into error: {msg}"
+        );
+    }
+
+    #[test]
     fn validate_nfkd_case_and_whitespace() {
         // Uppercase + doubled spaces must normalize to the canonical form.
         let noisy = "  ABANDON  abandon   ABANDON abandon abandon abandon abandon abandon abandon abandon abandon ABOUT  ";
@@ -352,7 +413,7 @@ mod tests {
         // Regression: validate-accepts-noisy then to_seed must match Trezor seed.
         let noisy = "  ABANDON  abandon   ABANDON abandon abandon abandon abandon abandon abandon abandon abandon ABOUT  ";
         validate_mnemonic(noisy).expect("noisy form validates");
-        let seed = to_seed(noisy, b"TREZOR");
+        let seed = to_seed(noisy, b"TREZOR").unwrap();
         assert_eq!(
             hex::encode(seed.as_slice()),
             "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04"
@@ -368,7 +429,7 @@ mod tests {
         assert_eq!(words.len(), 24);
         assert!(words.iter().take(23).all(|w| *w == "abandon"));
         assert_eq!(words[23], "art");
-        let seed = to_seed(&mnemonic, b"TREZOR");
+        let seed = to_seed(&mnemonic, b"TREZOR").unwrap();
         assert_eq!(
             hex::encode(seed.as_slice()),
             "bda85446c68413707090a52022edd26a1c9462295029f2e60cd7c4f2bbd3097170af7a4d73245cafa9c3cca8d561a7c3de6f5d4a10be8ed2a5e608d68f92fcc8"
@@ -409,8 +470,8 @@ mod tests {
                 panic!("validate after {ent_len}-byte entropy: {e}");
             });
             // to_seed is deterministic for the same normalized mnemonic.
-            let seed1 = to_seed(&mnemonic, b"");
-            let seed2 = to_seed(&mnemonic, b"");
+            let seed1 = to_seed(&mnemonic, b"").unwrap();
+            let seed2 = to_seed(&mnemonic, b"").unwrap();
             assert_eq!(seed1.as_slice(), seed2.as_slice());
             // Round-trip: mnemonic → bits must re-validate (checksum path).
             let rederived = entropy_to_mnemonic(&entropy).unwrap();
