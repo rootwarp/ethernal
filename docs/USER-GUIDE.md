@@ -20,19 +20,20 @@ transaction, and (separately) creates Web3 v3 EOA keystores:
 1. [Concepts and workflow model](#concepts-and-workflow-model)
 2. [Install](#install)
 3. [Quick start (Hoodi testnet)](#quick-start-hoodi-testnet)
-4. [Step 0 — Create validator keys (`ethernal key`)](#step-0--create-validator-keys-ethernal-key)
-5. [Create EOA keystores (`ethernal account`)](#create-eoa-keystores-ethernal-account)
-6. [Step 1 — Generate deposit data (`ethernal gen`)](#step-1--generate-deposit-data-ethernal-gen)
-7. [Step 2 — Build the unsigned transaction (`ethernal build`)](#step-2--build-the-unsigned-transaction-ethernal-build)
-8. [Step 3 — Sign the transaction (`ethernal sign`)](#step-3--sign-the-transaction-ethernal-sign)
-9. [Step 4 — Broadcast (optional) (`ethernal send`)](#step-4--broadcast-optional-ethernal-send)
-10. [Convenience: `ethernal run` (build + sign in one shot)](#convenience-ethernal-run-build--sign-in-one-shot)
-11. [Air-gapped workflow](#air-gapped-workflow)
-12. [Networks](#networks)
-13. [Exit codes](#exit-codes)
-14. [Security](#security)
-15. [Recipes](#recipes)
-16. [Troubleshooting](#troubleshooting)
+4. [Key creation overview](#key-creation-overview)
+5. [Create BLS validator keys (`ethernal key`)](#create-bls-validator-keys-ethernal-key)
+6. [Create EOA keystores (`ethernal account`)](#create-eoa-keystores-ethernal-account)
+7. [Step 1 — Generate deposit data (`ethernal gen`)](#step-1--generate-deposit-data-ethernal-gen)
+8. [Step 2 — Build the unsigned transaction (`ethernal build`)](#step-2--build-the-unsigned-transaction-ethernal-build)
+9. [Step 3 — Sign the transaction (`ethernal sign`)](#step-3--sign-the-transaction-ethernal-sign)
+10. [Step 4 — Broadcast (optional) (`ethernal send`)](#step-4--broadcast-optional-ethernal-send)
+11. [Convenience: `ethernal run` (build + sign in one shot)](#convenience-ethernal-run-build--sign-in-one-shot)
+12. [Air-gapped workflow](#air-gapped-workflow)
+13. [Networks](#networks)
+14. [Exit codes](#exit-codes)
+15. [Security](#security)
+16. [Recipes](#recipes)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -49,8 +50,8 @@ A validator deposit takes three artifacts:
 Separately, `ethernal account` produces **Web3 Secret Storage v3** keystores for ordinary Ethereum (EOA) accounts — the same format geth, Foundry (`cast`), and MetaMask import. These are **not** deposit-pipeline inputs; do not pass them to `gen`.
 
 Two distinct keys are involved in the deposit path:
-- **BLS validator key** (per validator) — held in EIP-2335 keystores created by `ethernal key` (or any compatible tool); used by `ethernal gen` to sign the deposit message. Never leaves the keystore decryption boundary.
-- **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `ethernal sign`/`run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas. (You can also create a local EOA keystore with `account new` / `account recover` for testing or wallet import; that path is documented under [Create EOA keystores](#create-eoa-keystores-ethernal-account).)
+- **BLS validator key** (per validator) — held in EIP-2335 keystores created by `ethernal key` (or any compatible tool); used by `ethernal gen` to sign the deposit message. Never leaves the keystore decryption boundary. See [Create BLS validator keys](#create-bls-validator-keys-ethernal-key).
+- **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `ethernal sign`/`run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas. (You can also create a local EOA keystore with `account new` / `account recover` for testing or wallet import; see [Create EOA keystores](#create-eoa-keystores-ethernal-account).)
 
 The two-phase split (`build` then `sign`) supports air-gapped operation: build the unsigned tx on an online machine, transfer the JSON to a signing machine (which may be offline), sign there, transfer the signed JSON back online, broadcast. Prefer generating BLS keys (`key new`) on an air-gapped machine as well.
 
@@ -127,207 +128,212 @@ ethernal send \
   --wait-for-receipt
 ```
 
-If you already have EIP-2335 keystores from another tool, skip step 0 and pass those paths to `gen`. For a local-key dev flow, see the [recipes](#recipes) below.
+If you already have EIP-2335 keystores from another tool, skip BLS key creation and pass those paths to `gen`. For a local-key dev flow, see the [recipes](#recipes) below.
 
 ---
 
-## Step 0 — Create validator keys (`ethernal key`)
+## Key creation overview
 
-`ethernal key` produces EIP-2335 v4 scrypt signing keystores from a BIP-39 English mnemonic. Two subcommands:
+`ethernal` can create two kinds of keys from a BIP-39 English mnemonic. They are **separate commands**, **separate keystores**, and **separate consumers** — do not mix directories.
+
+| | **BLS validator keys** | **EOA account keys** |
+|---|---|---|
+| Commands | `ethernal key new` / `key recover` | `ethernal account new` / `account recover` |
+| Curve / use | BLS12-381 validator signing | secp256k1 execution address (EOA) |
+| HD path | EIP-2334 `m/12381/3600/i/0/0` | BIP-44 `m/44'/60'/0'/0/i` |
+| Keystore format | EIP-2335 **v4** scrypt | Web3 Secret Storage **v3** scrypt |
+| Filename | `keystore-m_12381_3600_<i>_0_0-<unix>.json` | `UTC--…--<40-hex-address>` |
+| Passphrase KDF | EIP-2335 **NFKD**-normalized | **Raw UTF-8** (no NFKD) — geth/MetaMask |
+| File mode | `0o600` | `0o600` |
+| Summary prints | 96-hex BLS **pubkey** | EIP-55 **address** |
+| Use with | Validator clients, `ethernal gen` | geth, Foundry (`cast`), MetaMask, wallets |
+| **Not** for | Wallet import / deposit-tx signing | `ethernal gen` or validator clients |
+
+**Same mnemonic, two trees.** One BIP-39 seed (plus optional 25th-word mnemonic passphrase) can derive **both** BLS and EOA keys. The secrets are unrelated; only the seed is shared. See [Recipe 6](#recipe-6--one-mnemonic--bls-and-eoa-keystores).
+
+**Shared interaction model** (both namespaces):
+
+| | `new` | `recover` |
+|---|---|---|
+| Mnemonic source | Fresh 24-word from OS CSPRNG | Existing 12–24-word phrase |
+| Terminal | **TTY only** (stdin *and* stdout) | TTY prompt **or** piped stdin |
+| Ceremony | Display once + full re-entry | None |
+| On abort / mismatch | Exit 4; **nothing** written | N/A |
+
+**Two different passphrases** (both commands):
+
+1. **Keystore passphrase** — encrypts the JSON files (`--passphrase-env` or interactive prompt-with-confirm). Minimum **8 bytes**. There is no raw-argv form for this secret.
+2. **Mnemonic passphrase** (optional BIP-39 “25th word”) — mixed into seed derivation only. Empty is valid; no minimum. Three forms: bare `--mnemonic-passphrase` (prompt), `--mnemonic-passphrase-env VAR`, or raw `--mnemonic-passphrase VALUE` (avoid for high-value keys — visible in `ps` / shell history).
+
+They are never interchangeable. Prefer a dedicated shell session for keygen work; `unset` env vars when finished (`export VAR=secret` can also land in shell history).
+
+---
+
+## Create BLS validator keys (`ethernal key`)
+
+Use this when you need **EIP-2335** keystores for validators and the deposit pipeline (`ethernal gen`). English BIP-39 only.
 
 | Subcommand | Purpose | I/O |
 |---|---|---|
-| `key new` | Fresh 24-word mnemonic + keystores | **TTY only** (stdin and stdout must both be terminals) |
-| `key recover` | Keystores from an existing mnemonic | Interactive TTY prompt **or** piped stdin |
+| `key new` | Fresh 24-word mnemonic + keystores | **TTY only** |
+| `key recover` | Keystores from an existing mnemonic | TTY prompt **or** piped stdin |
 
-Both write one `keystore-m_12381_3600_<i>_0_0-<unix>.json` (mode `0o600`) per index into `--output-dir`. The directory must already exist and be writable.
+Each run writes one file per index into `--output-dir` (directory must already exist and be writable):
 
-### Shared flags
+```text
+keystore-m_12381_3600_<i>_0_0-<unix-seconds>.json
+```
 
-| Flag | Description | Default |
-|---|---|---|
-| `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON files | — |
-| `--count N` | Number of validator keys to produce (must be ≥ 1) | `1` |
-| `--passphrase-env VAR` | Env var holding the **keystore** encryption passphrase (min 8 bytes after EIP-2335 normalization). Omit for a TTY prompt-with-confirm | TTY prompt |
-| `--mnemonic-passphrase [VALUE]` | Optional BIP-39 mnemonic passphrase ("25th word"). Bare flag → interactive prompt; with `VALUE` → raw argv value; omit → empty (default) | empty |
-| `--mnemonic-passphrase-env VAR` | Env var holding the BIP-39 mnemonic passphrase (empty string is valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
+Derivation: signing path `m/12381/3600/i/0/0` (EIP-2333/2334).
 
-`key recover` also accepts:
+### Flags
 
 | Flag | Description | Default |
 |---|---|---|
-| `--start-index N` | First HD derivation index; produces indices `[start, start+count)` | `0` |
+| `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON | — |
+| `--count N` | Number of validator keys (≥ 1) | `1` |
+| `--passphrase-env VAR` | Env var for **keystore** encryption passphrase (min 8 bytes after EIP-2335 normalization). Omit → TTY prompt-with-confirm | TTY prompt |
+| `--mnemonic-passphrase [VALUE]` | Optional BIP-39 25th word. Bare → prompt; with `VALUE` → raw argv; omit → empty | empty |
+| `--mnemonic-passphrase-env VAR` | Env var for the 25th word (empty string valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
+| `--start-index N` | **`key recover` only.** First HD index; produces `[start, start+count)` | `0` |
 
 `key new` always starts at index `0` (no `--start-index`).
 
-**Two different passphrases.** The keystore passphrase (`--passphrase-env` / TTY prompt) encrypts the JSON keystore files and has an 8-byte minimum (UTF-8 length after EIP-2335 normalization). The optional **mnemonic passphrase** is the BIP-39 "25th word" mixed into seed derivation; empty is valid and there is no minimum. They are never interchangeable.
+### Security notes (BLS)
 
-**Env-var lifetime.** Values supplied via `--passphrase-env` or `--mnemonic-passphrase-env` remain in the process environment for the lifetime of that shell (and any child processes that inherit it). Prefer a dedicated shell/session for keygen work, and `unset` the variable when finished. Note that `export VAR=secret` can also land in shell history — the same exposure class as raw argv.
+- **Raw `--mnemonic-passphrase VALUE`** is visible in `ps` and shell history. Prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (on `key new`, bare form is **double-entry** confirm). Scripting convenience only — not for high-value mnemonics.
+- Keystore passphrase is **NFKD-normalized** for EIP-2335 (different from EOA v3 — see [EOA interop note](#interop-note--v3-keystore-passphrase-is-raw-no-nfkd)).
 
-### Security note — raw `--mnemonic-passphrase VALUE`
+### `key new` — create a new BLS key set
 
-A raw `--mnemonic-passphrase VALUE` is visible in the process table (`ps`) and in shell history. Prefer:
-
-- `--mnemonic-passphrase-env VAR` (value lives only in the environment), or
-- bare `--mnemonic-passphrase` (interactive prompt; on `key new` the prompt is double-entry confirmed).
-
-Treat the raw form as a **scripting convenience, not for high-value mnemonics**.
-
-### `key new` — TTY ceremony
-
-```
+```bash
 ethernal key new --output-dir DIR [--count N] [--passphrase-env VAR] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
 
-Flow:
+**Flow**
 
-1. **Non-TTY guard** — if stdin or stdout is not a terminal, exit 2 **before** any entropy is drawn (a mnemonic must never land on a pipe or log).
-2. **Entropy → mnemonic** — 256-bit OS CSPRNG → 24-word English BIP-39 mnemonic with a valid checksum.
-3. **Mnemonic passphrase** — resolved from flag / env / prompt-with-confirm / empty (see above).
-4. **Ceremony** — the mnemonic is displayed **once** on the controlling terminal (`/dev/tty`, never stdout/stderr/logs). Write it down offline. You then re-enter the full mnemonic to confirm; mismatch → retry or abort (exit 4).
-5. **Keystore passphrase** — env (min length 8) or interactive confirm-with-min-length.
-6. **Derive → encrypt → write** — EIP-2333/2334 signing path `m/12381/3600/i/0/0` for `i` in `0..count`, EIP-2335 scrypt keystores at `0o600`.
+1. **Non-TTY guard** — if stdin or stdout is not a terminal, exit **2** before any entropy is drawn.
+2. **Entropy → mnemonic** — 256-bit OS CSPRNG → 24-word English BIP-39 with checksum.
+3. **Mnemonic passphrase** — flag / env / prompt-with-confirm / empty.
+4. **Ceremony** — mnemonic displayed **once** on the controlling terminal (`/dev/tty` only — never stdout/stderr/logs). Write it down offline, then re-enter the full phrase. Mismatch → retry or abort (exit **4**); nothing on disk until re-entry succeeds.
+5. **Keystore passphrase** — env (min 8) or interactive confirm.
+6. **Derive → encrypt → write** — path `m/12381/3600/i/0/0` for `i` in `0..count`; EIP-2335 scrypt keystores at `0o600`.
 
-Example:
+**Example**
 
 ```bash
 mkdir -p ./keystores
 export KEYSTORE_PASS=my-keystore-passphrase
 
+# One validator
 ethernal key new \
   --output-dir ./keystores \
-  --count 2 \
+  --count 1 \
   --passphrase-env KEYSTORE_PASS
 
-# optional 25th word via env (preferred over raw argv):
+# Two validators + optional 25th word (env form preferred)
 export MNEMONIC_PW=...
 ethernal key new \
   --output-dir ./keystores \
+  --count 2 \
   --mnemonic-passphrase-env MNEMONIC_PW \
   --passphrase-env KEYSTORE_PASS
 unset MNEMONIC_PW KEYSTORE_PASS
 ```
 
-### `key recover` — TTY or piped stdin
+### `key recover` — recreate BLS keys from a mnemonic
 
-```
+```bash
 ethernal key recover --output-dir DIR [--count N] [--start-index N] \
   [--passphrase-env VAR] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
 
-Unlike `key new`, there is **no** display/re-entry ceremony — the mnemonic already exists. Accepts 12/15/18/21/24-word English BIP-39 mnemonics (word-list membership + checksum validated first; bad input → exit 2). Interactive prompt when stdin is a TTY; otherwise the whole mnemonic is read from stdin (one line).
-
-Examples:
+No display/re-entry ceremony — the mnemonic already exists. Accepts **12 / 15 / 18 / 21 / 24** English words (wordlist + checksum validated first; bad input → exit **2**). Interactive prompt when stdin is a TTY; otherwise one line from stdin.
 
 ```bash
-# Interactive (prompts for mnemonic, then keystore passphrase if no env)
+# Interactive
 ethernal key recover \
   --output-dir ./keystores \
   --count 3 \
   --start-index 0 \
   --passphrase-env KEYSTORE_PASS
 
-# Piped (scripting / recovery automation)
+# Piped (automation)
 echo "$MNEMONIC" | ethernal key recover \
   --output-dir ./keystores \
   --count 1 \
   --passphrase-env KEYSTORE_PASS
-```
 
-Use `--start-index` to extend an existing set (e.g. you already deposited indices 0–2 and need index 3):
-
-```bash
+# Extend an existing set (e.g. next index after 0..2)
 ethernal key recover --output-dir ./keystores --start-index 3 --count 1 \
   --passphrase-env KEYSTORE_PASS
 ```
 
-### After key creation
+### After BLS key creation
 
-The summary on stderr lists each written path and its 96-hex-char BLS pubkey. Feed those pubkeys (and the keystore directory) into [Step 1 — `gen`](#step-1--generate-deposit-data-ethernal-gen). Keep the mnemonic offline and offline-only; never paste it into chat, tickets, or cloud notes.
+Stderr summary lists each path and its **96-hex-char BLS pubkey**. Next steps for a deposit:
+
+1. Copy the pubkey(s) from the summary.
+2. Run [`ethernal gen`](#step-1--generate-deposit-data-ethernal-gen) with `--keystore-dir` and `--pubkeys`.
+
+Keep the mnemonic offline only. Never paste it into chat, tickets, or cloud notes.
 
 ---
 
 ## Create EOA keystores (`ethernal account`)
 
-`ethernal account` produces **Web3 Secret Storage v3** (scrypt) secp256k1 EOA keystores from a BIP-39 English mnemonic. This is a **separate** surface from `ethernal key` (validator BLS / EIP-2335). Output is importable by geth, Foundry (`cast wallet import` / `decrypt-keystore`), and MetaMask — not by validator clients, and not usable as input to `gen`.
+Use this when you need a **software EOA** encrypted as a standard Web3 **v3** keystore (geth / Foundry / MetaMask). This is **not** the deposit-pipeline keystore format — never pass these files to `ethernal gen`.
 
 | Subcommand | Purpose | I/O |
 |---|---|---|
-| `account new` | Fresh 24-word mnemonic + v3 keystores | **TTY only** (stdin and stdout must both be terminals) |
-| `account recover` | v3 keystores from an existing mnemonic | Interactive TTY prompt **or** piped stdin |
+| `account new` | Fresh 24-word mnemonic + v3 keystores | **TTY only** |
+| `account recover` | v3 keystores from an existing mnemonic | TTY prompt **or** piped stdin |
 
-Both write one geth-style `UTC--<timestamp>--<address>` file (mode `0o600`) per BIP-44 index into `--output-dir`. The directory must already exist and be writable. Derivation path is Ethereum standard `m/44'/60'/0'/0/i`.
+Each run writes one geth-style file per BIP-44 address index into `--output-dir`:
 
-### `key` vs `account` (v3 vs EIP-2335)
+```text
+UTC--<YYYY-MM-DDTHH-MM-SS.nnnnnnnnnZ>--<40-hex-address-no-0x>
+```
 
-| | `ethernal key` | `ethernal account` |
-|---|---|---|
-| Curve / use | BLS12-381 validator signing | secp256k1 EOA (execution address) |
-| HD path | EIP-2334 `m/12381/3600/i/0/0` | BIP-44 `m/44'/60'/0'/0/i` |
-| Keystore format | EIP-2335 **v4** scrypt | Web3 Secret Storage **v3** scrypt |
-| Filename | `keystore-m_12381_3600_<i>_0_0-<unix>.json` | `UTC--…--<40-hex-address>` |
-| Passphrase KDF input | EIP-2335 **NFKD**-normalized | **Raw UTF-8 bytes (no NFKD)** — matches geth/MetaMask |
-| Consumers | Validator clients, `ethernal gen` | geth, Foundry, MetaMask, wallets |
+Derivation: `m/44'/60'/0'/0/i` (Ethereum BIP-44; `account'` fixed at `0'`).
 
-The same BIP-39 mnemonic (and optional mnemonic passphrase) can seed both trees; the derived keys are unrelated. Do not mix keystore directories or pass v3 files to `gen`.
-
-### Shared flags
+### Flags
 
 | Flag | Description | Default |
 |---|---|---|
-| `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON files | — |
-| `--count N` | Number of EOA keystores to produce (must be ≥ 1) | `1` |
-| `--passphrase-env VAR` | Env var holding the **keystore** encryption passphrase (min 8 bytes). Omit for a TTY prompt-with-confirm | TTY prompt |
-| `--mnemonic-passphrase [VALUE]` | Optional BIP-39 mnemonic passphrase ("25th word"). Bare flag → interactive prompt; with `VALUE` → raw argv value; omit → empty (default) | empty |
-| `--mnemonic-passphrase-env VAR` | Env var holding the BIP-39 mnemonic passphrase (empty string is valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
-
-`account recover` also accepts:
-
-| Flag | Description | Default |
-|---|---|---|
-| `--start-index N` | First HD derivation index; produces indices `[start, start+count)` | `0` |
+| `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON | — |
+| `--count N` | Number of EOA keystores (≥ 1) | `1` |
+| `--passphrase-env VAR` | Env var for **keystore** encryption passphrase (min 8 bytes). Omit → TTY prompt-with-confirm | TTY prompt |
+| `--mnemonic-passphrase [VALUE]` | Optional BIP-39 25th word. Bare → prompt; with `VALUE` → raw argv; omit → empty | empty |
+| `--mnemonic-passphrase-env VAR` | Env var for the 25th word (empty valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
+| `--start-index N` | **`account recover` only.** First address index; produces `[start, start+count)` | `0` |
 
 `account new` always starts at index `0` (no `--start-index`).
 
-**Two different passphrases.** The keystore passphrase (`--passphrase-env` / TTY prompt) encrypts the JSON keystore files (minimum 8 bytes). The optional **mnemonic passphrase** is the BIP-39 "25th word" mixed into seed derivation; empty is valid and there is no minimum. They are never interchangeable.
+### Security notes (EOA)
 
-**Env-var lifetime.** Values supplied via `--passphrase-env` or `--mnemonic-passphrase-env` remain in the process environment for the lifetime of that shell (and any child processes that inherit it). Prefer a dedicated shell/session, and `unset` the variable when finished. Note that `export VAR=secret` can also land in shell history — the same exposure class as raw argv.
+- **Raw `--mnemonic-passphrase VALUE`** — same `ps` / shell-history warning as `key`. Prefer env or bare prompt. On `account new`, bare form is **double-entry** confirm; on `account recover`, bare form is **single-entry**.
+- **Interop note — v3 keystore passphrase is raw (no NFKD):** scrypt consumes the keystore passphrase as **raw UTF-8 bytes** (no NFKD, no control-character strip). That matches geth and MetaMask. EIP-2335 (`key`) *does* normalize — do not assume one passphrase form unlocks both formats for non-ASCII secrets. Prefer ASCII unless you have verified unlock in the target wallet.
 
-### Security note — raw `--mnemonic-passphrase VALUE`
+### `account new` — create a new EOA key set
 
-A raw `--mnemonic-passphrase VALUE` is visible in the process table (`ps`) and in shell history. Prefer:
-
-- `--mnemonic-passphrase-env VAR` (value lives only in the environment), or
-- bare `--mnemonic-passphrase` (interactive prompt; on `account new` the prompt is double-entry confirmed).
-
-Treat the raw form as a **scripting convenience, not for high-value mnemonics**. (Same rule as `ethernal key`.)
-
-### Interop note — v3 keystore passphrase is raw (no NFKD)
-
-Web3 v3 keystores feed the keystore passphrase to scrypt as **raw UTF-8 bytes**. Unlike EIP-2335 (`key`), there is **no NFKD normalization** and no control-character stripping on the encryption path. This matches geth and MetaMask (C-4): a non-ASCII passphrase unlocks identically across those tools and `ethernal account`.
-
-- Prefer pure ASCII for the keystore passphrase unless you deliberately need non-ASCII and have verified unlock in your target wallet.
-- Do **not** assume an EIP-2335-normalized passphrase string will decrypt a v3 keystore (or vice versa).
-
-### `account new` — TTY ceremony
-
-```
+```bash
 ethernal account new --output-dir DIR [--count N] [--passphrase-env VAR] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
 
-Flow:
+**Flow** (same ceremony shape as `key new`):
 
-1. **Non-TTY guard** — if stdin or stdout is not a terminal, exit 2 **before** any entropy is drawn (a mnemonic must never land on a pipe or log).
-2. **Entropy → mnemonic** — 256-bit OS CSPRNG → 24-word English BIP-39 mnemonic with a valid checksum.
-3. **Mnemonic passphrase** — resolved from flag / env / prompt-with-confirm / empty (see above).
-4. **Ceremony** — the mnemonic is displayed **once** on the controlling terminal (`/dev/tty`, never stdout/stderr/logs). Write it down offline. You then re-enter the full mnemonic to confirm; mismatch → retry or abort (exit 4).
-5. **Keystore passphrase** — env (min length 8) or interactive confirm-with-min-length.
-6. **Derive → encrypt → write** — BIP-44 path `m/44'/60'/0'/0/i` for `i` in `0..count`, Web3 v3 scrypt keystores at `0o600` with geth `UTC--` filenames. Stderr summary lists each path and its **EIP-55** address.
+1. **Non-TTY guard** → exit **2** before entropy.
+2. **Entropy →** 24-word BIP-39 mnemonic.
+3. **Mnemonic passphrase** → flag / env / confirm / empty.
+4. **Ceremony** → display once on `/dev/tty`, full re-entry; mismatch → exit **4**, nothing on disk.
+5. **Keystore passphrase** → env or interactive confirm (min 8, **raw** bytes to KDF).
+6. **Derive → encrypt → write** → `m/44'/60'/0'/0/i`, Web3 v3 scrypt, `UTC--` names, mode `0o600`. Stderr summary lists path + **EIP-55 address**.
 
-Example:
+**Example**
 
 ```bash
 mkdir -p ./eoa-keys
@@ -338,7 +344,7 @@ ethernal account new \
   --count 2 \
   --passphrase-env KEYSTORE_PASS
 
-# optional 25th word via env (preferred over raw argv):
+# optional 25th word via env
 export MNEMONIC_PW=...
 ethernal account new \
   --output-dir ./eoa-keys \
@@ -347,43 +353,46 @@ ethernal account new \
 unset MNEMONIC_PW KEYSTORE_PASS
 ```
 
-### `account recover` — TTY or piped stdin
+### `account recover` — recreate EOA keys from a mnemonic
 
-```
+```bash
 ethernal account recover --output-dir DIR [--count N] [--start-index N] \
   [--passphrase-env VAR] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
 
-Unlike `account new`, there is **no** display/re-entry ceremony — the mnemonic already exists. Accepts 12/15/18/21/24-word English BIP-39 mnemonics (word-list membership + checksum validated first; bad input → exit 2). Interactive prompt when stdin is a TTY; otherwise the whole mnemonic is read from stdin (one line).
-
-Examples:
+No ceremony. Same 12–24-word validation as `key recover` (bad word reported by **1-based position**, never the token). TTY or piped stdin.
 
 ```bash
-# Interactive (prompts for mnemonic, then keystore passphrase if no env)
+# Interactive
 ethernal account recover \
   --output-dir ./eoa-keys \
   --count 3 \
   --start-index 0 \
   --passphrase-env KEYSTORE_PASS
 
-# Piped (scripting / recovery automation)
+# Piped
 echo "$MNEMONIC" | ethernal account recover \
   --output-dir ./eoa-keys \
   --count 1 \
   --passphrase-env KEYSTORE_PASS
-```
 
-Use `--start-index` to extend an existing set (e.g. you already have indices 0–2 and need index 3):
-
-```bash
+# Next address index (e.g. after 0..2)
 ethernal account recover --output-dir ./eoa-keys --start-index 3 --count 1 \
   --passphrase-env KEYSTORE_PASS
 ```
 
-### After account creation
+### After EOA key creation
 
-The summary on stderr lists each written path and its EIP-55 checksummed address. Import the JSON into geth (`account import` / datadir keystore drop-in), Foundry (`cast wallet import` / `decrypt-keystore`), or MetaMask (*Import account → JSON File*) using the same keystore passphrase. Keep the mnemonic offline and offline-only.
+Stderr summary lists each path and **EIP-55** address. Import with the same keystore passphrase:
+
+| Tool | How |
+|---|---|
+| **Foundry** | `cast wallet import` / `cast wallet decrypt-keystore` / `cast wallet address --keystore …` |
+| **geth** | Drop the `UTC--…` file into `<datadir>/keystore/` (standard scrypt `n=262144`) |
+| **MetaMask** | *Import account → JSON File* |
+
+Keep the mnemonic offline only.
 
 ---
 
@@ -778,7 +787,7 @@ The two-phase design supports air-gapping the signing machine entirely:
   ethernal send ...
 ```
 
-1. **Air-gapped (recommended for mainnet)** — create BLS keystores with `ethernal key new` (TTY ceremony), transfer only the encrypted keystores (and later pubkeys) off the machine. Or generate keystores online if you accept the risk.
+1. **Air-gapped (recommended for mainnet)** — create BLS keystores with `ethernal key new` (TTY ceremony; see [Create BLS validator keys](#create-bls-validator-keys-ethernal-key)), transfer only the encrypted keystores (and later pubkeys) off the machine. Or generate keystores online if you accept the risk.
 2. **Online machine** — generate deposit data and the unsigned transaction:
    ```bash
    ethernal gen ... --withdrawal-address 0x... --output-dir ./out
@@ -863,15 +872,15 @@ It does NOT protect:
 - A compromised machine. If your build/sign machine is compromised, the unsigned tx data field (which encodes the deposit) could be silently altered. Verify on the Ledger screen before pressing confirm. A compromised keygen machine can capture the mnemonic at generation time — prefer air-gapped `key new` / `account new` for high-value keys.
 - Network-level interception of the broadcast (not a concern for signed transactions — they cannot be modified without invalidating the signature).
 - Keystore confidentiality. The keystore passphrase is your responsibility; use a strong one and clear `KEYSTORE_PASS` from your shell after use.
-- A raw `--mnemonic-passphrase VALUE` on the command line (visible in `ps` and shell history) — see [Step 0](#step-0--create-validator-keys-ethernal-key) and [Create EOA keystores](#create-eoa-keystores-ethernal-account).
+- A raw `--mnemonic-passphrase VALUE` on the command line (visible in `ps` and shell history) — see [Create BLS validator keys](#create-bls-validator-keys-ethernal-key) and [Create EOA keystores](#create-eoa-keystores-ethernal-account).
 
 ### Key handling rules
 
-- **BLS mnemonic (`key new` / `key recover`)** — write it down offline during the ceremony; store it offline only. Never commit it, pipe `key new` (refused), or paste it into tickets/chat. Prefer air-gapped generation for high-value validators.
-- **EOA mnemonic (`account new` / `account recover`)** — same ceremony and offline rules as BLS; produces Web3 v3 keystores (not EIP-2335). Prefer air-gapped generation for high-value EOAs. Never pipe `account new` (refused).
+- **BLS mnemonic (`key new` / `key recover`)** — write it down offline during the ceremony; store it offline only. Never commit it, pipe `key new` (refused), or paste it into tickets/chat. Prefer air-gapped generation for high-value validators. Full guide: [Create BLS validator keys](#create-bls-validator-keys-ethernal-key).
+- **EOA mnemonic (`account new` / `account recover`)** — same ceremony and offline rules as BLS; produces Web3 v3 keystores (not EIP-2335). Prefer air-gapped generation for high-value EOAs. Never pipe `account new` (refused). Full guide: [Create EOA keystores](#create-eoa-keystores-ethernal-account).
 - **Mnemonic passphrase (BIP-39 "25th word")** — prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (prompt). **Do not** use raw `--mnemonic-passphrase VALUE` for high-value mnemonics: the value is visible in the process table (`ps`) and shell history. A mistyped 25th word yields keys you cannot recover from the mnemonic alone. Applies to both `key` and `account`.
-- **Keystore passphrase (`key` / EIP-2335)** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 bytes after EIP-2335 **NFKD** normalization. There is no raw-argv form (unlike the mnemonic passphrase). Env vars persist for the shell lifetime (and `export VAR=secret` can land in shell history) — use a dedicated session and `unset` when done (see [Step 0](#step-0--create-validator-keys-ethernal-key)).
-- **Keystore passphrase (`account` / Web3 v3)** — same CLI surface (env or TTY prompt-with-confirm; min 8 bytes; no raw-argv form), but encryption uses the passphrase as **raw UTF-8** (no NFKD) for geth/MetaMask interop — see [Create EOA keystores](#create-eoa-keystores-ethernal-account).
+- **Keystore passphrase (`key` / EIP-2335)** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 bytes after EIP-2335 **NFKD** normalization. There is no raw-argv form (unlike the mnemonic passphrase). Env vars persist for the shell lifetime (and `export VAR=secret` can land in shell history) — use a dedicated session and `unset` when done.
+- **Keystore passphrase (`account` / Web3 v3)** — same CLI surface (env or TTY prompt-with-confirm; min 8 bytes; no raw-argv form), but encryption uses the passphrase as **raw UTF-8** (no NFKD) for geth/MetaMask interop.
 - `ETHERNAL_TX_PRIVATE_KEY` — env var only. There is NO `--private-key` flag. The env-var-name flag (`--private-key-env`) is validated to match `^[A-Z_][A-Z0-9_]*$` to prevent users from accidentally passing the key value.
 - `LocalSigner` zeroizes the key bytes in memory when `Close()` is called (end of every `sign` / `run` invocation).
 - For mainnet: use Ledger for the deposit-tx signer. The local signer is explicitly tagged "for development only" in its docs and is not recommended for any real-fund deposit.
@@ -998,15 +1007,47 @@ done
 ### Recipe 5 — Recover additional indices from an existing mnemonic
 
 ```bash
-# You already have indices 0..2; derive the next three
+# BLS: you already have indices 0..2; derive the next three
 echo "$MNEMONIC" | ethernal key recover \
   --output-dir ./keystores \
   --start-index 3 \
   --count 3 \
   --passphrase-env KEYSTORE_PASS
+
+# EOA: same idea for BIP-44 address indices
+echo "$MNEMONIC" | ethernal account recover \
+  --output-dir ./eoa-keys \
+  --start-index 3 \
+  --count 1 \
+  --passphrase-env KEYSTORE_PASS
 ```
 
-### Recipe 6 — Pipe between commands
+### Recipe 6 — One mnemonic → BLS and EOA keystores
+
+The same BIP-39 seed feeds both HD trees. Create (or recover) once, reuse the mnemonic carefully:
+
+```bash
+export KEYSTORE_PASS=...   # or use different passphrases per format if you prefer
+mkdir -p ./keystores ./eoa-keys
+
+# Option A — fresh mnemonic via BLS ceremony; write the phrase down, then recover EOA
+ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+# (after writing the mnemonic offline)
+echo "$MNEMONIC" | ethernal account recover \
+  --output-dir ./eoa-keys --count 1 --passphrase-env KEYSTORE_PASS
+
+# Option B — recover both from an existing mnemonic (no ceremony)
+echo "$MNEMONIC" | ethernal key recover \
+  --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+echo "$MNEMONIC" | ethernal account recover \
+  --output-dir ./eoa-keys --count 1 --passphrase-env KEYSTORE_PASS
+
+unset KEYSTORE_PASS
+```
+
+If you used a BIP-39 mnemonic passphrase (25th word) for one tree, pass the **same** form to the other. BLS and EOA keystore files still differ (EIP-2335 vs Web3 v3) and must stay in separate directories.
+
+### Recipe 7 — Pipe between commands
 
 ```bash
 ethernal gen --network hoodi ... --withdrawal-address 0x... --dry-run | \
@@ -1014,7 +1055,7 @@ ethernal gen --network hoodi ... --withdrawal-address 0x... --dry-run | \
   jq '.'   # pretty-print the unsigned tx
 ```
 
-### Recipe 7 — Verify a signed tx independently
+### Recipe 8 — Verify a signed tx independently
 
 ```bash
 # Decode and inspect with cast
@@ -1050,7 +1091,7 @@ cast decode-typed-tx "$RAW"
 | Invalid mnemonic / checksum (exit 2, `account recover`) | Check word count (12/15/18/21/24), spelling against the English wordlist, and that the full phrase matches what you wrote down (including any mnemonic passphrase). |
 | Ceremony re-entry mismatch → abort (exit 4) | You declined retry after a wrong re-entry, or sent SIGINT. Run `account new` again; the previous mnemonic was never written to disk. |
 | Keystore passphrase too short (exit 2) | Keystore passphrase must be at least 8 bytes. For v3 encryption the bytes are used **raw** (no NFKD) — see [Create EOA keystores](#create-eoa-keystores-ethernal-account). |
-| Imported keystore unlocks in neither geth nor MetaMask | Confirm you used the same passphrase string (raw UTF-8) and a v3 file from `account`, not an EIP-2335 file from `key`. |
+| Imported keystore unlocks in neither geth nor MetaMask | Confirm you used the same passphrase string (raw UTF-8) and a v3 file from `account`, not an EIP-2335 file from `key`. See [Create EOA keystores](#create-eoa-keystores-ethernal-account). |
 
 ### `ethernal gen` errors
 

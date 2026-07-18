@@ -19,6 +19,12 @@ history.
 Full command reference, security guidance, air-gapped recipes, and
 troubleshooting: **[User Guide](docs/USER-GUIDE.md)**.
 
+Key creation:
+
+- [Create BLS validator keys](docs/USER-GUIDE.md#create-bls-validator-keys-ethernal-key) (`key new` / `key recover`)
+- [Create EOA keystores](docs/USER-GUIDE.md#create-eoa-keystores-ethernal-account) (`account new` / `account recover`)
+- [Key creation overview](docs/USER-GUIDE.md#key-creation-overview) (when to use which)
+
 ## Install
 
 ```bash
