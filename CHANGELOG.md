@@ -45,6 +45,29 @@ its release notes remain on GitHub).
 > env vars now use the `ethernal` product name. Sections below that still say
 > `eth-deposit` are historical (pre-rename) unless noted.
 
+### ethernal (unreleased) — CLI namespace restructure
+
+#### Breaking Changes
+
+Top-level verbs are nested under four namespaces: **`validator`**, **`account`**,
+**`deposit`**, and **`tx`**. Flags, defaults, exit codes, stdin/stdout contracts,
+and fixture/golden behavior are unchanged. **No back-compat aliases** ship for
+the old top-level paths (D5) — scripts must use the nested commands.
+
+| Old | New |
+|---|---|
+| `gen` | `deposit gen` |
+| `build` | `deposit build` |
+| `sign` | `tx sign` |
+| `send` | `tx send` |
+| `run` | `tx run` |
+| `key` (`new` / `recover`) | `validator` (`new` / `recover`) |
+
+`account` stays top-level (already namespaced). Group help: bare `deposit` /
+`tx` / `validator` / `account` print the group's subcommands and require a leaf.
+
+---
+
 ### ethernal (unreleased) — rename eth-deposit → ethernal
 
 #### Breaking
@@ -111,13 +134,15 @@ Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
 
 #### Added
 
-- **`ethernal key new`** — generates a fresh 24-word BIP-39 mnemonic (OS CSPRNG),
-  runs a TTY-only display-once + full re-entry ceremony, then writes EIP-2335 v4
-  scrypt signing keystores (`m/12381/3600/i/0/0`) under `--output-dir`. Non-TTY
-  stdin/stdout → exit 2 before any entropy is drawn.
-- **`ethernal key recover`** — rebuilds keystores from an existing 12–24-word
-  mnemonic (interactive TTY prompt or piped stdin). Supports `--start-index` /
-  `--count` for partial ranges. No ceremony (mnemonic already exists).
+- **`key new`** (top-level at the time; later `validator new`) — generates a
+  fresh 24-word BIP-39 mnemonic (OS CSPRNG), runs a TTY-only display-once + full
+  re-entry ceremony, then writes EIP-2335 v4 scrypt signing keystores
+  (`m/12381/3600/i/0/0`) under `--output-dir`. Non-TTY stdin/stdout → exit 2
+  before any entropy is drawn.
+- **`key recover`** (top-level at the time; later `validator recover`) — rebuilds
+  keystores from an existing 12–24-word mnemonic (interactive TTY prompt or
+  piped stdin). Supports `--start-index` / `--count` for partial ranges. No
+  ceremony (mnemonic already exists).
 - **Three-form BIP-39 mnemonic passphrase** on both key subcommands: raw
   `--mnemonic-passphrase VALUE`, `--mnemonic-passphrase-env VAR`, bare
   `--mnemonic-passphrase` (prompt; double-entry confirm on `key new`), or omit
@@ -132,9 +157,9 @@ Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
 
 #### Breaking
 
-- **`gen` requires an explicit withdrawal choice.** Invoking `ethernal gen`
-  without `--withdrawal-address` exits 2 with a clear message (require-choice
-  gate). There is no default / placeholder credential path for operators. Update
+- **`gen` requires an explicit withdrawal choice.** Invoking `gen` without
+  `--withdrawal-address` exits 2 with a clear message (require-choice gate).
+  There is no default / placeholder credential path for operators. Update
   scripts and goldens that previously called `gen` without the flag.
 
 #### Changed (hardening)
@@ -231,7 +256,7 @@ to do it.
 - `go/Makefile`: single `build` target (`bin/eth-deposit`) replaces `build`
   (gen) + `build-tx` (tx).
 - `go/docs/USER-GUIDE.md`: updated throughout to the merged command shape
-  (`ethernal gen`, `ethernal build`, etc.).
+  (top-level `gen`, `build`, etc. at the time of the merge).
 
 ---
 
