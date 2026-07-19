@@ -425,7 +425,7 @@ Consolidated here so Stage 6 does not re-open them:
 - [x] **M3/E3** — T-3 green on every PR (recover → `decrypt_v3` round-trip + address). → G1 (recover),
   G5 (recover-path hardening reachable this stage).
 - [x] **M4/E4** — T-12·recover green. → G5.
-- [ ] **M5/E5** — T-7/T-8/T-19 green. → G6.
+- [x] **M5/E5** — T-7/T-8/T-19 green. → G6.
 - [ ] **M6/E6** — T-6 + T-13 green locally + via a manual CI dispatch (anvil-in-CI proven). → G3, G4.
 - [ ] **M7a/E7** — two-tier CI wired; live workflow scheduled/release-gated and green; hermetic tier
   unchanged and PR-gating. → G3, G7.

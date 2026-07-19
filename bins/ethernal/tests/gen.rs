@@ -76,6 +76,47 @@ fn gen_dry_run_real_pipeline_emits_json() {
     );
 }
 
+// T-19 / E5-3: gen --parallel must produce the same deposit JSON as the serial path
+// (byte-identical to the T-7 hoodi golden). Guards ordering/nondeterminism in the
+// concurrent keystore-decryption path.
+#[test]
+fn gen_parallel_matches_hoodi_golden() {
+    let out = ethernal()
+        .env(PASS_ENV, hoodi_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--parallel",
+            "2",
+            "--passphrase-env",
+            PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen --parallel");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let want = std::fs::read(hoodi_expected_deposit_data()).expect("read hoodi golden");
+    assert_eq!(
+        out.stdout,
+        want,
+        "gen --parallel dry-run stdout must be byte-identical to testdata/hoodi/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&want)
+    );
+}
+
 // The non-dry-run pipeline writes deposit_data-<ts>.json into --output-dir.
 #[test]
 fn gen_writes_output_file() {
