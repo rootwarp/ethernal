@@ -17,7 +17,7 @@ use ethernal_keystore::{
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
-use crate::validator_cmd::MnemonicSource;
+use crate::keygen::MnemonicSource;
 
 // ---------------------------------------------------------------------------
 // Process-wide env lock

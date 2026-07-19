@@ -21,6 +21,7 @@ mod errors;
 mod fs_util;
 mod gen_cli;
 mod gen_cmd;
+mod keygen;
 mod keystore_cli;
 mod logging;
 mod run_cmd;

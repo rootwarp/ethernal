@@ -5,8 +5,9 @@
 //! full flow with [`FixedEntropy`] (test-only), scripted line sources, fixed
 //! [`Timestamp`], and buffers — no real terminal required.
 //!
-//! Differs from [`crate::validator_cmd::ValidatorDeps`] in the address-based summary and the
+//! Differs from validator keygen in the address-based summary and the
 //! nanos-carrying [`Timestamp`] (geth `UTC--` filenames need 9-digit nanos).
+//! Shared ceremony/mnemonic neutrals live in [`crate::keygen`].
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -27,12 +28,12 @@ use crate::account_cli::AccountConfig;
 use crate::errors::AppError;
 use crate::fs_util::{open_tty_writer, stderr_is_tty};
 use crate::gen_cmd::Progress;
-use crate::keystore_cli::{write_with_retry, START_INDEX_OVERFLOW_MSG};
-use crate::logging::{Format, Level, Logger};
-use crate::validator_cmd::{
+use crate::keygen::{
     check_cancel, resolve_mnemonic_passphrase, run_ceremony, MinLenPassphrase, MnemonicSource,
     RecoverMnemonicSource, StdinMnemonicSource,
 };
+use crate::keystore_cli::{write_with_retry, START_INDEX_OVERFLOW_MSG};
+use crate::logging::{Format, Level, Logger};
 
 // ---------------------------------------------------------------------------
 // Injectable seams

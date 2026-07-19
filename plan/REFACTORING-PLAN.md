@@ -115,7 +115,7 @@ conventions) and an **executable process** (phases, gates, backlog).
 | Area | Status | Notes |
 |------|--------|-------|
 | Production pipelines | **Strong** | Depend on traits; OS/TTY/env wired at the edge. |
-| Bin module graph | **Weak** | `account_cmd → validator_cmd` for shared ceremony/mnemonic code inverts the intended “neutral shared ← domain” direction. Fix: hoist neutrals to `keystore_cli` (or a `keygen` module). |
+| Bin module graph | **Strong** | Neutrals live in `keygen`; `account_cmd` and `validator_cmd` both depend on `keygen` only (T2.3). |
 
 ### SOLID → backlog mapping
 
@@ -195,14 +195,14 @@ Relocating `#[cfg(test)]` to sibling `*_tests.rs` (T2.7) is pure packaging — n
 | Dead field | `Params::default_rpc_url` always `""` | T1.8a |
 | Version string leak | `Box::leak` in `root_command` | `LazyLock` (T1.8c) |
 | Error mapper noise | Identical wrappers + hand-rolled `Display` | T1.4, T2.9 |
-| Cross-namespace import | `account_cmd` → `validator_cmd` | T2.3 |
+| Cross-namespace import | ~~`account_cmd` → `validator_cmd`~~ → both → `keygen` | ✅ T2.3 |
 | Test scaffolding drift | 8× `Tmp`, 2× `ENV_LOCK` | T1.1 |
 
 ### 4.3 Target conventions (after refactor)
 
 1. **Visibility:** bin items are `pub(crate)` unless integration tests need them via a future `lib.rs` (not planned). Library crates keep intentional `pub` API.
 2. **Naming:** CLI namespace names match runtime (`run_validator_*`, `ValidatorDeps`). Parser functions use `parse_*`; secret materializers use `resolve_*` / `read_*`.
-3. **Shared homes:** neutral keygen → `keystore_cli` (or `keygen` module); fs probes → `fs_util`; atomic overwrite writes → `core::output`; test-only → `test_support`.
+3. **Shared homes:** neutral keygen → `keygen` module (T2.3); CLI forms/flags → `keystore_cli`; fs probes → `fs_util`; atomic overwrite writes → `core::output`; test-only → `test_support`.
 4. **Error mapping:** use `?` + `From` when the variant maps 1:1; keep explicit mappers only when exit code **differs** from `From` (e.g. keystore write → exit 3).
 5. **Tests:** shared fixtures in `test_support`; large white-box suites in sibling `*_tests.rs`; domain listers (`keystore-*.json` vs `UTC--*`) stay distinct.
 6. **No secret-path DRY:** never share code that touches passphrase normalization or encrypt entry points across BLS/v3 without an explicit security review.
@@ -290,7 +290,7 @@ T2.2 (write_with_retry)             ── independent (or after T2.1)
 |----|--------|:------:|:----:|
 | T2.1 | `atomic_write_file` → `core::output` overwrite-allowed API ✅ | M | low |
 | T2.2 | ✅ Extract `write_with_retry` for keystore write skeleton | M | low |
-| T2.3 | Hoist ceremony/mnemonic neutrals out of `validator_cmd` | M | low |
+| T2.3 | ✅ Hoist ceremony/mnemonic neutrals to `keygen` module | M | low |
 | T2.4 | `KeygenConfig` + aliases for validator/account | M | low |
 | T2.5 | Shared keygen banner writer (folds into T2.4 if same PR) | S | low |
 | T2.6 | Shared `map_*_err` where safe; keep domain mappers local | S | low |
@@ -517,11 +517,11 @@ remain: `validator_cmd::write_keystore_at` (path + `now_unix` / `+1`) and `accou
 
 **Risk:** low. **Effort:** M.
 
-#### T2.3 — Fix sideways dependency (`account` → `validator`)
+#### T2.3 — Fix sideways dependency (`account` → `validator`) — ✅ done
 
-**Evidence.** `account_cmd` imports `check_cancel`, `resolve_mnemonic_passphrase`, `run_ceremony`, `MnemonicSource`, … from `validator_cmd`.
+**Evidence.** `account_cmd` imported `check_cancel`, `resolve_mnemonic_passphrase`, `run_ceremony`, `MnemonicSource`, … from `validator_cmd`.
 
-**Change.** Move neutrals to `keystore_cli` (or new `keygen` module). Genericize ceremony display error string so account does not emit `"validator new: …"`. Preserve all `Zeroizing` paths.
+**Change (landed).** New `keygen` module owns neutrals (`MnemonicSource`, `StdinMnemonicSource`, `RecoverMnemonicSource`, `MinLenPassphrase`, `resolve_mnemonic_passphrase`, `run_ceremony`, `check_cancel`, `zeroizing_trim`, `CLEAR_SCROLLBACK_TWICE`). Ceremony display error is namespace-generic (`failed to display mnemonic on controlling terminal: …`). `account_cmd` and `validator_cmd` both import `keygen` only; Zeroizing paths preserved. Domain encrypt tails remain separate.
 
 **Risk:** low. **Effort:** M.
 
@@ -634,3 +634,4 @@ Trivial wrappers; intentional stack separation.
 | 2026-07-19 | T1.1 landed: shared `test_support` (`Tmp`, `ENV_LOCK`, keygen fakes) |
 | 2026-07-19 | T1.2 landed: TTY helpers centralized in `fs_util` |
 | 2026-07-19 | T1.3–T1.8 landed: `validate_output_dir` hoist, map collapse, discard_logger removal, `run_validator_*`/`ValidatorDeps`, parser rename, local cleanups a–f |
+| 2026-07-19 | T2.3 landed: neutrals hoisted to `keygen`; `account_cmd` no longer imports `validator_cmd`; ceremony error namespace-generic |

@@ -121,7 +121,7 @@ pub(crate) fn require_tty_for_new() -> Result<(), AppError> {
 /// - `--mnemonic-passphrase-env VAR` → read env (unset → exit 2; empty OK) → [`Env`]
 /// - neither → [`Empty`]
 ///
-/// Distinct from the secret-resolving [`crate::validator_cmd::resolve_mnemonic_passphrase`].
+/// Distinct from the secret-resolving [`crate::keygen::resolve_mnemonic_passphrase`].
 pub(crate) fn parse_mnemonic_passphrase_form(
     m: &ArgMatches,
 ) -> Result<MnemonicPassphraseForm, AppError> {
