@@ -10,6 +10,7 @@ use clap::{Arg, ArgMatches};
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
+use crate::fs_util::{stdin_is_tty, stdout_is_tty};
 
 /// The three-form BIP-39 mnemonic passphrase input (F-12 / architecture design
 /// note (c)). Distinct from the keystore passphrase (`--passphrase-env`).
@@ -97,10 +98,7 @@ pub(crate) fn shared_args() -> Vec<Arg> {
 
 /// Rejects non-interactive `new` (validator or account); stdin and stdout must both be TTYs.
 pub fn require_tty_for_new() -> Result<(), AppError> {
-    // SAFETY: isatty is async-signal-safe and has no preconditions.
-    let stdin_tty = unsafe { libc::isatty(0) == 1 };
-    let stdout_tty = unsafe { libc::isatty(1) == 1 };
-    if stdin_tty && stdout_tty {
+    if stdin_is_tty() && stdout_is_tty() {
         return Ok(());
     }
     Err(AppError::exit2(

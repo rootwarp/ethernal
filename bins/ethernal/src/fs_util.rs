@@ -1,12 +1,43 @@
-//! Shared filesystem probes for CLI validation.
+//! Shared filesystem probes and TTY helpers for CLI validation.
 //!
 //! The writability probe must not follow a pre-planted symlink at the probe
 //! name (K3-L4 / H5): use exclusive create (`O_EXCL` / `create_new`) so an
 //! existing symlink fails instead of truncating its target.
+//!
+//! TTY helpers (`stdin_is_tty` / `stdout_is_tty` / `stderr_is_tty` /
+//! `open_tty_writer`) are the single home for fd isatty checks and the
+//! controlling-terminal open used by keygen mnemonic display (S-2).
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+// ---------------------------------------------------------------------------
+// TTY helpers (single home — T1.2)
+// ---------------------------------------------------------------------------
+
+/// Reports whether stdin (fd 0) is connected to a terminal.
+pub(crate) fn stdin_is_tty() -> bool {
+    // SAFETY: isatty is async-signal-safe and has no preconditions.
+    unsafe { libc::isatty(0) == 1 }
+}
+
+/// Reports whether stdout (fd 1) is connected to a terminal.
+pub(crate) fn stdout_is_tty() -> bool {
+    // SAFETY: isatty is async-signal-safe and has no preconditions.
+    unsafe { libc::isatty(1) == 1 }
+}
+
+/// Reports whether stderr (fd 2) is connected to a terminal.
+pub(crate) fn stderr_is_tty() -> bool {
+    // SAFETY: isatty is async-signal-safe and has no preconditions.
+    unsafe { libc::isatty(2) == 1 }
+}
+
+/// Opens `/dev/tty` for the mnemonic display only. **No stderr fallback** (S-2).
+pub(crate) fn open_tty_writer() -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).open("/dev/tty")
+}
 
 /// If `dir`'s FINAL component is a symlink, returns its fully-resolved real path.
 /// `None` for a normal directory on ANY platform — including macOS temp dirs

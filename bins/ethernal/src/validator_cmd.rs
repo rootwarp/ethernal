@@ -22,6 +22,7 @@ use ethernal_keystore::{
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
+use crate::fs_util::{open_tty_writer, stderr_is_tty, stdin_is_tty};
 use crate::gen_cmd::Progress;
 use crate::keystore_cli::MnemonicPassphraseForm;
 use crate::logging::{Format, Level, Logger};
@@ -182,21 +183,6 @@ pub fn run_key_recover(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<()
         scrypt: ScryptParams::STANDARD,
     };
     run_key_recover_with_deps(&mut deps, cancel)
-}
-
-/// Opens `/dev/tty` for the mnemonic display only. **No stderr fallback** (S-2).
-fn open_tty_writer() -> io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().write(true).open("/dev/tty")
-}
-
-fn stderr_is_tty() -> bool {
-    // SAFETY: isatty is async-signal-safe and has no preconditions.
-    unsafe { libc::isatty(2) == 1 }
-}
-
-fn stdin_is_tty() -> bool {
-    // SAFETY: isatty is async-signal-safe and has no preconditions.
-    unsafe { libc::isatty(0) == 1 }
 }
 
 // ---------------------------------------------------------------------------

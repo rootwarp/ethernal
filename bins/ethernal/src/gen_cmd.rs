@@ -18,6 +18,7 @@ use ethernal_keystore::{
 };
 
 use crate::errors::AppError;
+use crate::fs_util::stderr_is_tty;
 use crate::gen_cli::GenConfig;
 use crate::logging::{Format, Level, Logger};
 
@@ -458,12 +459,6 @@ pub fn build_gen_logger(verbose: bool, json_logs: bool) -> Logger {
         Format::Text
     };
     Logger::stderr(level, format)
-}
-
-/// Reports whether stderr is connected to a terminal.
-fn stderr_is_tty() -> bool {
-    // SAFETY: isatty is async-signal-safe and has no preconditions.
-    unsafe { libc::isatty(2) == 1 }
 }
 
 /// The production entry point for the gen subcommand (port of runGen):

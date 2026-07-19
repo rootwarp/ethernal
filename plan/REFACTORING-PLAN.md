@@ -258,13 +258,13 @@ Phase 4  Judgment          Tier 3 only if still wanted after 1–3
 **Order inside phase:**
 
 1. **T1.1** shared `test_support` (unblocks clean later work) — **done**
-2. **T1.2** TTY helpers
+2. **T1.2** TTY helpers — **done**
 3. **T1.3–T1.8** remaining cleanups (can be one PR or split rename T1.6 alone)
 
 | ID | Change | Effort | Risk |
 |----|--------|:------:|:----:|
 | T1.1 | ✅ `#[cfg(test)] mod test_support` — `Tmp`, `ENV_LOCK`, keygen fakes | M | low |
-| T1.2 | Shared `stderr_is_tty` / `stdin_is_tty` / `open_tty_writer` | S | low |
+| T1.2 | ✅ Shared `stderr_is_tty` / `stdin_is_tty` / `open_tty_writer` | S | low |
 | T1.3 | Single `validate_output_dir` in `fs_util` | S | low |
 | T1.4 | Collapse identical `map_*` pairs per file | S | low |
 | T1.5 | Drop `discard_logger` wrappers | S | low |
@@ -347,7 +347,7 @@ T2.2 (write_with_retry)             ── independent (or after T2.1)
 | `account_cmd` → `validator_cmd` imports | yes | none |
 | `run_key_*` / `KeyDeps` names | present | gone |
 | Bin files >1500 LOC with >50% tests | 3 | 0 (tests relocated) |
-| Identical TTY helpers | 3 copies | 1 module |
+| Identical TTY helpers | 3 copies | 1 module — **achieved** |
 | `make lint` / `make test` | green | stay green |
 
 ---
@@ -390,11 +390,18 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 
 **Risk:** low. **Effort:** M.
 
-#### T1.2 — Deduplicate TTY helpers
+#### T1.2 — Deduplicate TTY helpers ✅ **done**
 
 **Evidence.** `stderr_is_tty` in `gen_cmd`, `validator_cmd`, `account_cmd`; `open_tty_writer` in validator/account; `isatty` also open-coded in `keystore_cli::require_tty_for_new`.
 
 **Change.** One `pub(crate)` home (`fs_util` or `keystore_cli`). Preserve SAFETY comments and S-2 no-stderr-fallback docs verbatim.
+
+**Acceptance criteria:**
+- [x] Single home for TTY helpers (`pub(crate)` in `fs_util`)
+- [x] No duplicate `stderr_is_tty` / `open_tty_writer` bodies across gen/validator/account
+- [x] SAFETY / S-2 docs preserved
+- [x] `make lint` and `make test` green
+- [x] No production behavior change
 
 **Risk:** low. **Effort:** S.
 
@@ -586,3 +593,4 @@ Trivial wrappers; intentional stack separation.
 | 2026-07-19 | Initial detailed tier plan |
 | 2026-07-19 | Added SOLID assessment, conventions baseline, phased process, success metrics; re-validated evidence against tree (`Tmp`×8, sideways import, `run_key_*`, `Box::leak`, dead `default_rpc_url`) |
 | 2026-07-19 | T1.1 landed: shared `test_support` (`Tmp`, `ENV_LOCK`, keygen fakes) |
+| 2026-07-19 | T1.2 landed: TTY helpers centralized in `fs_util` |

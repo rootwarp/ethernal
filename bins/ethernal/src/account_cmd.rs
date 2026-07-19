@@ -25,6 +25,7 @@ use zeroize::Zeroizing;
 
 use crate::account_cli::AccountConfig;
 use crate::errors::AppError;
+use crate::fs_util::{open_tty_writer, stderr_is_tty};
 use crate::gen_cmd::Progress;
 use crate::logging::{Format, Level, Logger};
 use crate::validator_cmd::{
@@ -176,16 +177,6 @@ pub fn run_account_recover(cfg: &AccountConfig, cancel: &CancelToken) -> Result<
         scrypt: ScryptParams::STANDARD,
     };
     run_account_recover_with_deps(&mut deps, cancel)
-}
-
-/// Opens `/dev/tty` for the mnemonic display only. **No stderr fallback** (S-2).
-fn open_tty_writer() -> io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().write(true).open("/dev/tty")
-}
-
-fn stderr_is_tty() -> bool {
-    // SAFETY: isatty is async-signal-safe and has no preconditions.
-    unsafe { libc::isatty(2) == 1 }
 }
 
 fn wall_clock_timestamp() -> Timestamp {
