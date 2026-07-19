@@ -17,7 +17,7 @@ fn local_signer_happy_path() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
@@ -49,7 +49,7 @@ fn local_signer_happy_path() {
 fn local_signer_stdout_output() {
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--private-key-env", KEY_ENV])
         .output()
@@ -71,7 +71,7 @@ fn local_signer_keep_unsigned() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
@@ -104,7 +104,7 @@ fn local_signer_raw_output() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
@@ -132,7 +132,7 @@ fn local_signer_raw_output() {
 #[test]
 fn missing_signer_flag() {
     let out = ethernal()
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
         .expect("run");
@@ -143,7 +143,7 @@ fn missing_signer_flag() {
 #[test]
 fn ledger_no_device() {
     let out = ethernal()
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "ledger"])
         .output()
@@ -164,7 +164,7 @@ fn invalid_input() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(&bad)
         .args(["--signer", "local", "--private-key-env", KEY_ENV])
         .output()
@@ -177,7 +177,7 @@ fn invalid_input() {
 fn bad_key() {
     let out = ethernal()
         .env(KEY_ENV, "0xdeadbeefnotahexkey")
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--private-key-env", KEY_ENV])
         .output()
@@ -195,7 +195,7 @@ fn atomic_write_on_rename_failure() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_dir)
@@ -224,7 +224,7 @@ fn atomic_write_on_rename_failure() {
 fn keep_unsigned_requires_output_file() {
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--signer",
@@ -246,7 +246,7 @@ fn output_file_permissions() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
@@ -268,7 +268,7 @@ fn output_dash_is_stdout() {
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
         .current_dir(dir.path())
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--signer",
@@ -297,7 +297,10 @@ fn output_dash_is_stdout() {
 // Go: TestRunSubcommand_Help
 #[test]
 fn run_subcommand_help() {
-    let out = ethernal().args(["run", "--help"]).output().expect("run");
+    let out = ethernal()
+        .args(["tx", "run", "--help"])
+        .output()
+        .expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("signer"), "run --help missing --signer");
     assert!(

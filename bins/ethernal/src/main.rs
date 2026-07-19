@@ -1,5 +1,5 @@
 //! Entry point for ethernal, ported from `cmd/ethernal/main.go`.
-//! Wires the gen, build, sign, run, send, key, and account subcommands.
+//! Wires the key, account, deposit (gen/build), and tx (sign/run/send) namespaces.
 //!
 //! Exit codes:
 //!
@@ -84,23 +84,37 @@ fn root_command() -> Command {
         .long_about(
             "ethernal takes BLS validator keystores all the way through to a broadcast\n\
              Ethereum deposit transaction for the Beacon Chain deposit contract.\n\n\
-             It supports a secure workflow:\n\
-             \x20 key    - Generate or recover EIP-2335 BLS validator keystores from a BIP-39 mnemonic\n\
-             \x20 gen    - Generate Launchpad-compatible deposit_data JSON from BLS validator keystores\n\
-             \x20 build  - Construct an unsigned transaction (supports offline/air-gapped mode)\n\
-             \x20 sign   - Sign the transaction, with Ledger hardware as the primary method\n\
-             \x20 run    - Convenience: build + sign in one step (same machine, no serialization to disk)\n\
-             \x20 send   - Broadcast a signed tx via JSON-RPC (requires explicit network-name confirmation)\n\n\
+             It supports a secure workflow under four namespaces:\n\
+             \x20 key     - Generate or recover EIP-2335 BLS validator keystores from a BIP-39 mnemonic\n\
+             \x20 account - Generate or recover EIP-155 secp256k1 execution-layer keystores\n\
+             \x20 deposit - Beacon-chain deposit workflow: deposit_data JSON and deposit-tx construction\n\
+             \x20          (gen, build)\n\
+             \x20 tx      - Sign, run (build+sign), and broadcast Ethereum transactions\n\
+             \x20          (sign, run, send)\n\n\
              The tool produces standard hex-encoded RLP output ready for eth_sendRawTransaction.\n\n\
              Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=user abort, 5=broadcast/RPC error.",
         )
         .subcommand(key_cli::command())
         .subcommand(account_cli::command())
-        .subcommand(gen_cli::command())
-        .subcommand(build_cmd::command())
-        .subcommand(sign_cmd::command())
-        .subcommand(run_cmd::command())
-        .subcommand(send_cmd::command())
+        .subcommand(
+            Command::new("deposit")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .about(
+                    "Beacon-chain deposit workflow: deposit_data JSON and deposit-tx construction",
+                )
+                .subcommand(gen_cli::command())
+                .subcommand(build_cmd::command()),
+        )
+        .subcommand(
+            Command::new("tx")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .about("Sign, run (build+sign), and broadcast Ethereum transactions")
+                .subcommand(sign_cmd::command())
+                .subcommand(send_cmd::command())
+                .subcommand(run_cmd::command()),
+        )
 }
 
 fn main() {
@@ -128,14 +142,22 @@ fn main() {
             // subcommand_required(true) on the account group; clap rejects bare `account`.
             _ => unreachable!("account requires a subcommand"),
         },
-        Some(("gen", sub)) => {
-            let mut stderr = std::io::stderr();
-            gen_cli::load_config(sub, &mut stderr).and_then(|cfg| gen_cmd::run_gen(&cfg, cancel))
-        }
-        Some(("build", sub)) => build_cmd::run(sub, cancel),
-        Some(("sign", sub)) => sign_cmd::run(sub, cancel),
-        Some(("run", sub)) => run_cmd::run(sub, cancel),
-        Some(("send", sub)) => send_cmd::run(sub, cancel),
+        Some(("deposit", sub)) => match sub.subcommand() {
+            Some(("gen", m)) => {
+                let mut stderr = std::io::stderr();
+                gen_cli::load_config(m, &mut stderr).and_then(|cfg| gen_cmd::run_gen(&cfg, cancel))
+            }
+            Some(("build", m)) => build_cmd::run(m, cancel),
+            // subcommand_required(true) on the deposit group; clap rejects bare `deposit`.
+            _ => unreachable!("deposit requires a subcommand"),
+        },
+        Some(("tx", sub)) => match sub.subcommand() {
+            Some(("sign", m)) => sign_cmd::run(m, cancel),
+            Some(("send", m)) => send_cmd::run(m, cancel),
+            Some(("run", m)) => run_cmd::run(m, cancel),
+            // subcommand_required(true) on the tx group; clap rejects bare `tx`.
+            _ => unreachable!("tx requires a subcommand"),
+        },
         _ => {
             // No subcommand: print help and exit 0 (urfave/cli behavior).
             let _ = root_command().print_help();

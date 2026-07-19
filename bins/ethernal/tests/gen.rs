@@ -37,7 +37,7 @@ const WITHDRAWAL_CREDS_HEX: &str =
 fn gen_dry_run_real_pipeline_emits_json() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -84,7 +84,7 @@ fn gen_dry_run_real_pipeline_emits_json() {
 fn gen_parallel_matches_hoodi_golden() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -124,7 +124,7 @@ fn gen_writes_output_file() {
     let out_dir = TempDir::new("gen-out");
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -202,7 +202,7 @@ fn verify_with_deposit_cli_passes() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .env("PATH", path_with(cli_dir.path()))
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -238,7 +238,7 @@ fn verify_with_deposit_cli_fails_exit3() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .env("PATH", path_with(cli_dir.path()))
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -275,7 +275,7 @@ fn verify_with_deposit_cli_not_found_exit2() {
 
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -312,7 +312,7 @@ fn verify_with_deposit_cli_skipped_in_dry_run() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
         .env("PATH", path_with(cli_dir.path()))
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -340,7 +340,7 @@ fn verify_with_deposit_cli_skipped_in_dry_run() {
 fn gen_without_withdrawal_address_exit2() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -370,7 +370,7 @@ fn gen_withdrawal_address_lowercase_exit2() {
     let lower = WITHDRAWAL_ADDR.to_ascii_lowercase();
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -410,7 +410,7 @@ fn gen_withdrawal_address_checksum_mismatch_exit2() {
 
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -444,7 +444,7 @@ fn gen_withdrawal_address_checksum_mismatch_exit2() {
 fn gen_withdrawal_address_zero_exit2() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -482,7 +482,7 @@ fn gen_withdrawal_address_zero_exit2() {
 fn gen_banner_echoes_withdrawal_address_and_credentials() {
     let out = ethernal()
         .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -518,7 +518,7 @@ fn gen_banner_echoes_withdrawal_address_and_credentials() {
 fn gen_mainnet_without_ack_exit2() {
     let out = ethernal()
         .env(MAINNET_PASS_ENV, mainnet_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(mainnet_keystores())
         .args([
             "--pubkeys",
@@ -551,7 +551,7 @@ fn gen_mainnet_without_ack_exit2() {
 fn gen_mainnet_with_ack_matches_golden() {
     let out = ethernal()
         .env(MAINNET_PASS_ENV, mainnet_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(mainnet_keystores())
         .args([
             "--pubkeys",
@@ -599,7 +599,7 @@ fn gen_mainnet_with_ack_matches_golden() {
 #[test]
 fn gen_pipe_without_passphrase_env_exit2() {
     let out = ethernal_no_tty()
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",

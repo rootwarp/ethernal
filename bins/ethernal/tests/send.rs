@@ -32,7 +32,7 @@ fn happy_path() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes"])
         .output()
@@ -66,7 +66,7 @@ fn confirm_prompt_accept() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let mut child = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
         .stdin(Stdio::piped())
@@ -91,7 +91,7 @@ fn confirm_prompt_case_insensitive() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let mut child = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
         .stdin(Stdio::piped())
@@ -115,7 +115,7 @@ fn confirm_prompt_reject() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let mut child = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
         .stdin(Stdio::piped())
@@ -139,7 +139,7 @@ fn confirm_prompt_eof() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let mut child = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url])
         .stdin(Stdio::piped())
@@ -170,7 +170,7 @@ fn chain_id_mismatch() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes"])
         .output()
@@ -198,7 +198,7 @@ fn rpc_failure() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes"])
         .output()
@@ -213,7 +213,7 @@ fn rpc_dial_failure() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", "http://127.0.0.1:1", "--yes"])
         .output()
@@ -232,7 +232,7 @@ fn missing_rpc() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--yes"])
         .output()
@@ -244,7 +244,7 @@ fn missing_rpc() {
 #[test]
 fn missing_input() {
     let out = ethernal()
-        .args(["send", "--rpc-url", "http://localhost:8545", "--yes"])
+        .args(["tx", "send", "--rpc-url", "http://localhost:8545", "--yes"])
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(2));
@@ -258,7 +258,7 @@ fn invalid_input() {
     let bad = dir.write("bad.json", b"not json");
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&bad)
         .args(["--rpc-url", &stub.url, "--yes"])
         .output()
@@ -288,7 +288,7 @@ fn broadcast_receipt_write() {
     let rec_file = rec_dir.join("receipt.json");
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes", "--receipt-output"])
         .arg(&rec_file)
@@ -324,7 +324,7 @@ fn wait_for_receipt_timeout() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args([
             "--rpc-url",
@@ -347,7 +347,10 @@ fn wait_for_receipt_timeout() {
 // Go: TestSendSubcommand_Help
 #[test]
 fn send_subcommand_help() {
-    let out = ethernal().args(["send", "--help"]).output().expect("run");
+    let out = ethernal()
+        .args(["tx", "send", "--help"])
+        .output()
+        .expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("rpc-url"), "send --help missing --rpc-url");
     assert!(s.contains("yes"), "send --help missing --yes");

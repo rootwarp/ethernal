@@ -28,7 +28,7 @@ fn local_signer_success() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .arg("--output")
         .arg(&out_file)
@@ -56,7 +56,7 @@ fn local_signer_missing_env_key() {
 
     let out = ethernal()
         // KEY_ENV intentionally not set.
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--private-key-env", KEY_ENV])
         .output()
@@ -81,7 +81,7 @@ fn local_signer_bad_key() {
 
     let out = ethernal()
         .env(KEY_ENV, "0xdeadbeefnotahexkey")
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--private-key-env", KEY_ENV])
         .output()
@@ -100,7 +100,7 @@ fn invalid_signer() {
     let in_file = unsigned_input(&dir);
 
     let out = ethernal()
-        .args(["sign", "--signer", "foo", "--input"])
+        .args(["tx", "sign", "--signer", "foo", "--input"])
         .arg(&in_file)
         .output()
         .expect("run");
@@ -111,7 +111,7 @@ fn invalid_signer() {
 #[test]
 fn missing_input() {
     let out = ethernal()
-        .args(["sign", "--signer", "local"])
+        .args(["tx", "sign", "--signer", "local"])
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(2));
@@ -125,7 +125,7 @@ fn invalid_input_json() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&bad)
         .args(["--private-key-env", KEY_ENV])
         .output()
@@ -142,7 +142,9 @@ fn local_signer_stdin_input() {
 
     let mut child = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input", "-", "--output"])
+        .args([
+            "tx", "sign", "--signer", "local", "--input", "-", "--output",
+        ])
         .arg(&out_file)
         .args(["--private-key-env", KEY_ENV])
         .stdin(Stdio::piped())
@@ -169,7 +171,7 @@ fn local_signer_stdout_output() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--private-key-env", KEY_ENV])
         .output()
@@ -190,7 +192,7 @@ fn ledger_not_supported_exit3() {
     let in_file = unsigned_input(&dir);
 
     let out = ethernal()
-        .args(["sign", "--signer", "ledger", "--input"])
+        .args(["tx", "sign", "--signer", "ledger", "--input"])
         .arg(&in_file)
         .output()
         .expect("run");
@@ -209,7 +211,7 @@ fn invalid_env_var_name_lowercase() {
     let in_file = unsigned_input(&dir);
 
     let out = ethernal()
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--private-key-env", "my_lowercase_var"])
         .output()
@@ -224,7 +226,7 @@ fn invalid_env_var_name_key_passed_directly() {
     let in_file = unsigned_input(&dir);
 
     let out = ethernal()
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--private-key-env", PHASE3_KEY]) // a hex key passed as the var NAME
         .output()
@@ -248,7 +250,7 @@ fn output_write_error_exit2() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .arg("--output")
         .arg(&out_file)
@@ -274,7 +276,7 @@ fn output_file_permissions() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .arg("--output")
         .arg(&out_file)
@@ -294,7 +296,7 @@ fn output_dash_is_stdout() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .args(["--output", "-", "--private-key-env", KEY_ENV])
         .output()
@@ -313,7 +315,7 @@ fn phase3_local_signer_golden() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(common::phase3_unsigned())
         .arg("--output")
         .arg(&out_file)

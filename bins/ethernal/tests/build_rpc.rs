@@ -27,7 +27,7 @@ fn build_json(out: &std::process::Output) -> serde_json::Value {
 #[test]
 fn offline_defaults() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
         .expect("run");
@@ -52,7 +52,7 @@ fn rpc_resolves_unset_fields() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, tip, base_fee, fake_nonce, estimate);
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
         .output()
@@ -78,7 +78,7 @@ fn rpc_explicit_flags_win() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 0, 0, 0, 0);
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--rpc-url",
@@ -116,7 +116,7 @@ fn rpc_explicit_flags_win() {
 #[test]
 fn rpc_unreachable_exit5() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // Port 1 is reserved/closed; connect fails fast.
         .args(["--rpc-url", "http://127.0.0.1:1", "--from", TEST_FROM])
@@ -146,7 +146,7 @@ fn rpc_estimation_fails_exit5() {
     });
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
         .output()
@@ -166,7 +166,7 @@ fn rpc_chain_id_mismatch_exit2() {
     let stub = Stub::build_ok(1, 1_000_000_000, 10_000_000_000, 5, 200_000); // mainnet != holesky
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
         .output()
@@ -195,7 +195,7 @@ fn rpc_chain_id_call_error_warn_and_continue() {
     });
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &stub.url, "--from", TEST_FROM])
         .output()
@@ -215,7 +215,7 @@ fn rpc_url_env_var_override() {
 
     let out = ethernal()
         .env("ETHERNAL_TX_RPC_URL", &stub.url)
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // explicit nonce+gas+fees so only ChainID is contacted; no --from needed.
         .args([
@@ -251,7 +251,7 @@ fn rpc_url_flag_beats_env_var() {
 
     let out = ethernal()
         .env("ETHERNAL_TX_RPC_URL", &env_stub.url)
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &flag_stub.url])
         .args([
@@ -287,7 +287,7 @@ fn rpc_url_flag_beats_env_var() {
 #[test]
 fn rpc_requires_from_when_nonce_omitted() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // port 0 is never dialed: the gate fires first.
         .args(["--rpc-url", "http://127.0.0.1:0"])
@@ -313,7 +313,7 @@ fn from_not_required_with_nonce_and_gas() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 1_000_000_000, 10_000_000_000, 0, 0);
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--rpc-url",
@@ -353,7 +353,7 @@ fn from_env_var() {
 
     let out = ethernal()
         .env("ETHERNAL_TX_FROM", TEST_FROM)
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         // nonce+gas omitted → both PendingNonceAt and EstimateGas run with From.
         .args(["--rpc-url", &stub.url])

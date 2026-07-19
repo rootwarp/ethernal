@@ -25,7 +25,7 @@ fn local_signer_rpc_derives_from() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--rpc-url",
@@ -79,7 +79,7 @@ fn local_signer_rpc_derives_from_for_gas_with_explicit_nonce() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--rpc-url",
@@ -115,7 +115,7 @@ fn local_signer_rpc_derives_from_for_gas_with_explicit_nonce() {
 fn local_signer_rpc_bad_key_exit3() {
     let out = ethernal()
         .env(KEY_ENV, "0xdeadbeefnotahexkey")
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--rpc-url",
@@ -140,7 +140,7 @@ fn local_signer_rpc_bad_key_exit3() {
 #[test]
 fn ledger_signer_rpc_nonce_omitted_exit2() {
     let out = ethernal()
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", "http://node.example", "--signer", "ledger"])
         .output()
@@ -158,7 +158,7 @@ fn ledger_signer_rpc_nonce_omitted_exit2() {
 #[test]
 fn ledger_signer_rpc_gas_omitted_exit2() {
     let out = ethernal()
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--rpc-url",
@@ -184,7 +184,7 @@ fn ledger_signer_rpc_both_flags_passes_gate() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 0, 0, 0, 0);
 
     let out = ethernal()
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args([
             "--rpc-url",

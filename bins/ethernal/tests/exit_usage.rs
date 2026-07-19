@@ -22,30 +22,31 @@ fn assert_exit2(args: &[&str], name: &str) {
 #[test]
 fn build_missing_input_file() {
     assert_exit2(
-        &["build", "--network", "holesky"],
+        &["deposit", "build", "--network", "holesky"],
         "build missing --input-file",
     );
 }
 
 #[test]
 fn gen_missing_required_flags() {
-    assert_exit2(&["gen"], "gen missing required flags");
+    assert_exit2(&["deposit", "gen"], "gen missing required flags");
 }
 
 #[test]
 fn sign_missing_signer() {
-    assert_exit2(&["sign"], "sign missing --signer");
+    assert_exit2(&["tx", "sign"], "sign missing --signer");
 }
 
 #[test]
 fn run_missing_input_file() {
-    assert_exit2(&["run"], "run missing --input-file");
+    assert_exit2(&["tx", "run"], "run missing --input-file");
 }
 
 #[test]
 fn build_bad_index_value() {
     assert_exit2(
         &[
+            "deposit",
             "build",
             "--network",
             "holesky",
@@ -61,6 +62,27 @@ fn build_bad_index_value() {
 #[test]
 fn key_missing_subcommand() {
     assert_exit2(&["key"], "key missing subcommand");
+}
+
+#[test]
+fn deposit_missing_subcommand() {
+    // arg_required_else_help prints help and exits 2 (clap usage) for bare group.
+    assert_exit2(&["deposit"], "deposit missing subcommand");
+}
+
+#[test]
+fn tx_missing_subcommand() {
+    assert_exit2(&["tx"], "tx missing subcommand");
+}
+
+#[test]
+fn deposit_unknown_leaf() {
+    assert_exit2(&["deposit", "nope"], "deposit unknown leaf");
+}
+
+#[test]
+fn tx_unknown_leaf() {
+    assert_exit2(&["tx", "nope"], "tx unknown leaf");
 }
 
 #[test]

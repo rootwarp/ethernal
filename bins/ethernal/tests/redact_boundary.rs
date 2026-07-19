@@ -22,7 +22,7 @@ fn build_rpc_error_url_redacted_path_key() {
     let url = format!("http://127.0.0.1:1/v3/{SECRET}");
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &url, "--from", TEST_FROM])
         .output()
@@ -51,7 +51,7 @@ fn build_rpc_error_url_redacted_query_key() {
     let url = format!("http://127.0.0.1:1/?apikey={SECRET}");
 
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--rpc-url", &url, "--from", TEST_FROM])
         .output()
@@ -74,7 +74,7 @@ fn send_rpc_error_url_redacted() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &url, "--yes"])
         .output()

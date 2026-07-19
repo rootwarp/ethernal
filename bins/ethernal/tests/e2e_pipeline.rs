@@ -24,7 +24,7 @@ fn local_signer_full_pipeline_no_rpc() {
 
     let out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
@@ -65,7 +65,7 @@ fn local_signer_build_sign_send_mock() {
     // Step 1: sign the phase-3 unsigned tx.
     let sign_out = ethernal()
         .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(phase3_unsigned())
         .arg("--output")
         .arg(&signed_file)
@@ -86,7 +86,7 @@ fn local_signer_build_sign_send_mock() {
     });
 
     let send_out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed_file)
         .args(["--rpc-url", &stub.url, "--yes"])
         .output()
@@ -152,7 +152,7 @@ fn send_mock_receipt_polling() {
     let rec_file = rec_dir.join("receipt.json");
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes", "--receipt-output"])
         .arg(&rec_file)

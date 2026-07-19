@@ -268,7 +268,7 @@ fn key_recover_then_gen_deposit_data_byte_stable() {
     let ks_var = format!("ETHERNAL_K4_GEN_KS_{}", std::process::id());
     let out = ethernal()
         .env(&ks_var, KEYSTORE_PW)
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(dir.path())
         .args([
             "--pubkeys",
