@@ -8,9 +8,9 @@ transaction (hardware wallet recommended), and broadcast it. It can also create
 ordinary wallet (EOA) keystores that geth, Foundry, and MetaMask can import.
 
 ```text
-create keys  →  deposit data  →  unsigned tx  →  signed tx  →  broadcast
-  key new           gen            build           sign          send
-                                    └──────── run ────────┘
+create keys     →  deposit data  →  unsigned tx  →  signed tx  →  broadcast
+  validator new      deposit gen     deposit build    tx sign       tx send
+                                       └────────── tx run ──────────┘
 ```
 
 **New here? This page is the introduction — start below, then follow the
@@ -31,16 +31,16 @@ You'll want:
 - Rust installed (the tool builds from source — see below).
 
 Already have EIP-2335 validator keystores from another tool? Skip key creation
-and hand them straight to `ethernal gen`.
+and hand them straight to `ethernal deposit gen`.
 
 ## The pieces
 
 A validator deposit moves through three artifacts:
 
-1. **Keystores** — your encrypted BLS validator keys (`ethernal key new`).
-2. **Deposit data** — the Launchpad JSON, signed by your validator key (`ethernal gen`).
+1. **Keystores** — your encrypted BLS validator keys (`ethernal validator new`).
+2. **Deposit data** — the Launchpad JSON, signed by your validator key (`ethernal deposit gen`).
 3. **A signed transaction** — sends 32 ETH to the deposit contract, signed by
-   *your wallet* (`ethernal build` + `sign`, or `run`), then broadcast (`send`).
+   *your wallet* (`ethernal deposit build` + `tx sign`, or `tx run`), then broadcast (`tx send`).
 
 Two different keys are involved, and they never mix: the **BLS validator key**
 stays inside its keystore and only signs the deposit *message*; the
@@ -52,16 +52,29 @@ explains this model in full.
 
 | Command | What it does |
 |---------|--------------|
-| `ethernal key new` / `key recover` | Create / recover **BLS validator** keystores (EIP-2335) from a mnemonic |
+| `ethernal validator new` / `validator recover` | Create / recover **BLS validator** keystores (EIP-2335) from a mnemonic |
 | `ethernal account new` / `account recover` | Create / recover **wallet (EOA)** keystores (Web3 v3) for geth / Foundry / MetaMask |
-| `ethernal gen` | Keystores → Launchpad `deposit_data` JSON |
-| `ethernal build` | Deposit data → unsigned deposit transaction |
-| `ethernal sign` | Sign the transaction (Ledger, or a local key for testing) |
-| `ethernal run` | `build` + `sign` in one step |
-| `ethernal send` | Broadcast the signed transaction |
+| `ethernal deposit gen` | Keystores → Launchpad `deposit_data` JSON |
+| `ethernal deposit build` | Deposit data → unsigned deposit transaction |
+| `ethernal tx sign` | Sign the transaction (Ledger, or a local key for testing) |
+| `ethernal tx run` | `deposit build` + `tx sign` in one step |
+| `ethernal tx send` | Broadcast the signed transaction |
 
 Full flags, examples, and exit codes are in the
 [User Guide](docs/USER-GUIDE.md).
+
+## Command structure
+
+Commands are grouped into four namespaces:
+
+| Namespace | Groups |
+|-----------|--------|
+| `validator` | EIP-2335 BLS keystores by role (`new` / `recover`) |
+| `account` | Web3 v3 EOA keystores by role (`new` / `recover`) |
+| `deposit` | Launchpad `deposit_data` (`gen`) and unsigned deposit-tx construction (`build`) |
+| `tx` | Sign (`sign`), build+sign convenience (`run`), and broadcast (`send`) |
+
+Environment variable names such as `ETHERNAL_TX_PRIVATE_KEY` are unchanged.
 
 ## Install
 
@@ -89,17 +102,17 @@ feature will build. Platform-by-platform notes are in the
 
 The shortest path is the guide's **[Quick start
 (Hoodi)](docs/USER-GUIDE.md#quick-start-hoodi-testnet)** — create a keystore,
-generate deposit data, then `run` and `send`. Practice the whole flow on Hoodi
+generate deposit data, then `tx run` and `tx send`. Practice the whole flow on Hoodi
 before you ever point it at mainnet.
 
 A one-look preview of the core steps:
 
 ```bash
-ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
-ethernal gen  --network hoodi --keystore-dir ./keystores --pubkeys 0x<pubkey> \
+ethernal validator new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+ethernal deposit gen  --network hoodi --keystore-dir ./keystores --pubkeys 0x<pubkey> \
   --withdrawal-address 0x<your-eip55-address> --output-dir ./out --passphrase-env KEYSTORE_PASS
-ethernal run  --network hoodi --signer ledger --input-file ./out/deposit_data-*.json --output signed.json
-ethernal send --input signed.json --rpc-url https://your-hoodi-rpc
+ethernal tx run  --network hoodi --signer ledger --input-file ./out/deposit_data-*.json --output signed.json
+ethernal tx send --input signed.json --rpc-url https://your-hoodi-rpc
 ```
 
 `--signer ledger` needs the `--features ledger` build; to rehearse on testnet
@@ -110,9 +123,9 @@ guide's [local-signer note](docs/USER-GUIDE.md#option-a--local-private-key-testi
 
 `ethernal` has guardrails, but the irreversible parts are on you:
 
-- **Mainnet deposits cannot be undone.** `gen --network mainnet` refuses to run
+- **Mainnet deposits cannot be undone.** `deposit gen --network mainnet` refuses to run
   without `--i-understand-this-is-mainnet`. Rehearse on Hoodi first.
-- **Your mnemonic is the master key.** `key new` / `account new` show it once, on
+- **Your mnemonic is the master key.** `validator new` / `account new` show it once, on
   the terminal only, and clear the screen afterward. Write it down offline —
   never screenshot it, paste it into chat, or store it in the cloud.
 - **Verify on the Ledger screen before you confirm.** Check the chain ID, the
@@ -128,7 +141,7 @@ handling, and air-gapped signing.
 - **[User Guide](docs/USER-GUIDE.md)** — the comprehensive reference: full
   walkthrough, every command and flag, networks, exit codes, security, recipes,
   and troubleshooting.
-- Key creation: [BLS validator keys](docs/USER-GUIDE.md#create-bls-validator-keys-ethernal-key)
+- Key creation: [BLS validator keys](docs/USER-GUIDE.md#create-bls-validator-keys-ethernal-validator)
   · [EOA keystores](docs/USER-GUIDE.md#create-eoa-keystores-ethernal-account)
   · [which to use](docs/USER-GUIDE.md#key-creation-overview)
 - [CHANGELOG.md](CHANGELOG.md) — history, and divergences from the retired Go port.

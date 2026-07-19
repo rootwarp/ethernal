@@ -8,10 +8,10 @@ Comprehensive guide for `ethernal`, the CLI in this repository that takes a
 validator all the way from a BIP-39 mnemonic to a broadcast Ethereum deposit
 transaction, and (separately) creates Web3 v3 EOA keystores:
 
-- **`ethernal key new|recover`** — generates or recovers EIP-2335 BLS validator keystores from a BIP-39 mnemonic (the front of the deposit pipeline).
+- **`ethernal validator new|recover`** — generates or recovers EIP-2335 BLS validator keystores from a BIP-39 mnemonic (the front of the deposit pipeline).
 - **`ethernal account new|recover`** — generates or recovers Web3 Secret Storage **v3** secp256k1 EOA keystores (geth / Foundry / MetaMask-importable); not part of the deposit steps.
-- **`ethernal gen`** — produces Launchpad-compatible deposit data JSON (BLS signatures over the deposit message) from EIP-2335 validator keystores.
-- **`ethernal build|sign|run|send`** — builds, signs (Ledger or local key), and broadcasts the Ethereum transaction that submits the deposit to the Beacon Chain deposit contract.
+- **`ethernal deposit gen|build`** — produces Launchpad-compatible deposit data JSON (BLS signatures over the deposit message) and constructs the unsigned deposit transaction.
+- **`ethernal tx sign|run|send`** — signs (Ledger or local key), optionally builds+signs in one step, and broadcasts the Ethereum transaction that submits the deposit to the Beacon Chain deposit contract.
 
 **Status:** unreleased (`0.1.0`), pending the first tag under the merged name.
 `ethernal` is a Rust workspace that combines the formerly separate
@@ -23,22 +23,23 @@ for the merge, the Go→Rust port, and the documented divergences.
 ## Table of contents
 
 1. [Concepts and workflow model](#concepts-and-workflow-model)
-2. [Install](#install)
-3. [Quick start (Hoodi testnet)](#quick-start-hoodi-testnet)
-4. [Key creation overview](#key-creation-overview)
-5. [Create BLS validator keys (`ethernal key`)](#create-bls-validator-keys-ethernal-key)
-6. [Create EOA keystores (`ethernal account`)](#create-eoa-keystores-ethernal-account)
-7. [Step 1 — Generate deposit data (`ethernal gen`)](#step-1--generate-deposit-data-ethernal-gen)
-8. [Step 2 — Build the unsigned transaction (`ethernal build`)](#step-2--build-the-unsigned-transaction-ethernal-build)
-9. [Step 3 — Sign the transaction (`ethernal sign`)](#step-3--sign-the-transaction-ethernal-sign)
-10. [Step 4 — Broadcast (optional) (`ethernal send`)](#step-4--broadcast-optional-ethernal-send)
-11. [Convenience: `ethernal run` (build + sign in one shot)](#convenience-ethernal-run-build--sign-in-one-shot)
-12. [Air-gapped workflow](#air-gapped-workflow)
-13. [Networks](#networks)
-14. [Exit codes](#exit-codes)
-15. [Security](#security)
-16. [Recipes](#recipes)
-17. [Troubleshooting](#troubleshooting)
+2. [Command structure](#command-structure)
+3. [Install](#install)
+4. [Quick start (Hoodi testnet)](#quick-start-hoodi-testnet)
+5. [Key creation overview](#key-creation-overview)
+6. [Create BLS validator keys (`ethernal validator`)](#create-bls-validator-keys-ethernal-validator)
+7. [Create EOA keystores (`ethernal account`)](#create-eoa-keystores-ethernal-account)
+8. [Step 1 — Generate deposit data (`ethernal deposit gen`)](#step-1--generate-deposit-data-ethernal-deposit-gen)
+9. [Step 2 — Build the unsigned transaction (`ethernal deposit build`)](#step-2--build-the-unsigned-transaction-ethernal-deposit-build)
+10. [Step 3 — Sign the transaction (`ethernal tx sign`)](#step-3--sign-the-transaction-ethernal-tx-sign)
+11. [Step 4 — Broadcast (optional) (`ethernal tx send`)](#step-4--broadcast-optional-ethernal-tx-send)
+12. [Convenience: `ethernal tx run` (build + sign in one shot)](#convenience-ethernal-tx-run-build--sign-in-one-shot)
+13. [Air-gapped workflow](#air-gapped-workflow)
+14. [Networks](#networks)
+15. [Exit codes](#exit-codes)
+16. [Security](#security)
+17. [Recipes](#recipes)
+18. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -48,17 +49,39 @@ A validator deposit takes three artifacts:
 
 | Artifact | Produced by | Contains |
 |---|---|---|
-| **EIP-2335 keystores** | `ethernal key new` / `key recover` | Encrypted BLS signing keys (one JSON file per validator index) |
-| **Deposit data JSON** | `ethernal gen` | BLS-signed deposit message: validator pubkey, withdrawal credentials, signature, deposit_data_root, amount |
-| **Signed Ethereum transaction** | `ethernal build`/`sign`/`run` | EIP-1559 transaction calling the deposit contract's `deposit(bytes,bytes,bytes,bytes32)` with 32 ETH value, signed by the **sender's** secp256k1 key |
+| **EIP-2335 keystores** | `ethernal validator new` / `validator recover` | Encrypted BLS signing keys (one JSON file per validator index) |
+| **Deposit data JSON** | `ethernal deposit gen` | BLS-signed deposit message: validator pubkey, withdrawal credentials, signature, deposit_data_root, amount |
+| **Signed Ethereum transaction** | `ethernal deposit build` / `tx sign` / `tx run` | EIP-1559 transaction calling the deposit contract's `deposit(bytes,bytes,bytes,bytes32)` with 32 ETH value, signed by the **sender's** secp256k1 key |
 
-Separately, `ethernal account` produces **Web3 Secret Storage v3** keystores for ordinary Ethereum (EOA) accounts — the same format geth, Foundry (`cast`), and MetaMask import. These are **not** deposit-pipeline inputs; do not pass them to `gen`.
+Separately, `ethernal account` produces **Web3 Secret Storage v3** keystores for ordinary Ethereum (EOA) accounts — the same format geth, Foundry (`cast`), and MetaMask import. These are **not** deposit-pipeline inputs; do not pass them to `deposit gen`.
 
 Two distinct keys are involved in the deposit path:
-- **BLS validator key** (per validator) — held in EIP-2335 keystores created by `ethernal key` (or any compatible tool); used by `ethernal gen` to sign the deposit message. Never leaves the keystore decryption boundary. See [Create BLS validator keys](#create-bls-validator-keys-ethernal-key).
-- **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `ethernal sign`/`run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas. (You can also create a local EOA keystore with `account new` / `account recover` for testing or wallet import; see [Create EOA keystores](#create-eoa-keystores-ethernal-account).)
+- **BLS validator key** (per validator) — held in EIP-2335 keystores created by `ethernal validator` (or any compatible tool); used by `ethernal deposit gen` to sign the deposit message. Never leaves the keystore decryption boundary. See [Create BLS validator keys](#create-bls-validator-keys-ethernal-validator).
+- **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `ethernal tx sign` / `tx run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas. (You can also create a local EOA keystore with `account new` / `account recover` for testing or wallet import; see [Create EOA keystores](#create-eoa-keystores-ethernal-account).)
 
-The two-phase split (`build` then `sign`) supports air-gapped operation: build the unsigned tx on an online machine, transfer the JSON to a signing machine (which may be offline), sign there, transfer the signed JSON back online, broadcast. Prefer generating BLS keys (`key new`) on an air-gapped machine as well.
+The two-phase split (`deposit build` then `tx sign`) supports air-gapped operation: build the unsigned tx on an online machine, transfer the JSON to a signing machine (which may be offline), sign there, transfer the signed JSON back online, broadcast. Prefer generating BLS keys (`validator new`) on an air-gapped machine as well.
+
+---
+
+## Command structure
+
+Commands are grouped into four namespaces:
+
+| Namespace | What it groups |
+|---|---|
+| `validator` | EIP-2335 BLS keystores by role (`new` / `recover`) |
+| `account` | Web3 v3 EOA keystores by role (`new` / `recover`) |
+| `deposit` | Launchpad `deposit_data` (`gen`) and unsigned deposit-tx construction (`build`) |
+| `tx` | Sign (`sign`), build+sign convenience (`run`), and broadcast (`send`) |
+
+Typical pipeline:
+
+```text
+validator new  →  deposit gen  →  deposit build  →  tx sign  →  tx send
+                                     └──────────── tx run ────────────┘
+```
+
+Environment variable names such as `ETHERNAL_TX_PRIVATE_KEY` (and other `ETHERNAL_TX_*` names) are retained unchanged.
 
 ---
 
@@ -104,40 +127,40 @@ End-to-end deposit on Hoodi using a Ledger:
 #    (tmux: `tmux clear-history`; screen: C-a : then `scrollback 0`).
 mkdir -p ./keystores ./out
 export KEYSTORE_PASS=my-keystore-passphrase
-ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+ethernal validator new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
 # note the pubkey printed in the summary, then:
 
 # 1. Generate deposit data (withdrawal address must be EIP-55 checksummed)
-ethernal gen \
+ethernal deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
-  --pubkeys 0x<pubkey-from-key-new-summary> \
+  --pubkeys 0x<pubkey-from-validator-new-summary> \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out \
   --passphrase-env KEYSTORE_PASS
 unset KEYSTORE_PASS
 
 # 2. Build unsigned tx (use --nonce explicitly if sender has prior txs)
-ethernal build \
+ethernal deposit build \
   --network hoodi \
   --input-file ./out/deposit_data-*.json \
   --nonce 0 \
   --output ./out/unsigned_tx.json
 
 # 3. Sign with Ledger (confirm on device)
-ethernal sign \
+ethernal tx sign \
   --signer ledger \
   --input ./out/unsigned_tx.json \
   --output ./out/signed_tx.json
 
 # 4. Broadcast (will prompt to type "hoodi" to confirm)
-ethernal send \
+ethernal tx send \
   --input ./out/signed_tx.json \
   --rpc-url https://your-hoodi-rpc-url \
   --wait-for-receipt
 ```
 
-If you already have EIP-2335 keystores from another tool, skip BLS key creation and pass those paths to `gen`. For a local-key dev flow, see the [recipes](#recipes) below.
+If you already have EIP-2335 keystores from another tool, skip BLS key creation and pass those paths to `deposit gen`. For a local-key dev flow, see the [recipes](#recipes) below.
 
 ---
 
@@ -147,7 +170,7 @@ If you already have EIP-2335 keystores from another tool, skip BLS key creation 
 
 | | **BLS validator keys** | **EOA account keys** |
 |---|---|---|
-| Commands | `ethernal key new` / `key recover` | `ethernal account new` / `account recover` |
+| Commands | `ethernal validator new` / `validator recover` | `ethernal account new` / `account recover` |
 | Curve / use | BLS12-381 validator signing | secp256k1 execution address (EOA) |
 | HD path | EIP-2334 `m/12381/3600/i/0/0` | BIP-44 `m/44'/60'/0'/0/i` |
 | Keystore format | EIP-2335 **v4** scrypt | Web3 Secret Storage **v3** scrypt |
@@ -155,8 +178,8 @@ If you already have EIP-2335 keystores from another tool, skip BLS key creation 
 | Passphrase KDF | EIP-2335 **NFKD**-normalized | **Raw UTF-8** (no NFKD) — geth/MetaMask |
 | File mode | `0o600` | `0o600` |
 | Summary prints | 96-hex BLS **pubkey** | EIP-55 **address** |
-| Use with | Validator clients, `ethernal gen` | geth, Foundry (`cast`), MetaMask, wallets |
-| **Not** for | Wallet import / deposit-tx signing | `ethernal gen` or validator clients |
+| Use with | Validator clients, `ethernal deposit gen` | geth, Foundry (`cast`), MetaMask, wallets |
+| **Not** for | Wallet import / deposit-tx signing | `ethernal deposit gen` or validator clients |
 
 **Same mnemonic, two trees.** One BIP-39 seed (plus optional 25th-word mnemonic passphrase) can derive **both** BLS and EOA keys. The secrets are unrelated; only the seed is shared. See [Recipe 6](#recipe-6--one-mnemonic--bls-and-eoa-keystores).
 
@@ -178,14 +201,14 @@ They are never interchangeable. Prefer a dedicated shell session for keygen work
 
 ---
 
-## Create BLS validator keys (`ethernal key`)
+## Create BLS validator keys (`ethernal validator`)
 
-Use this when you need **EIP-2335** keystores for validators and the deposit pipeline (`ethernal gen`). English BIP-39 only.
+Use this when you need **EIP-2335** keystores for validators and the deposit pipeline (`ethernal deposit gen`). English BIP-39 only.
 
 | Subcommand | Purpose | I/O |
 |---|---|---|
-| `key new` | Fresh 24-word mnemonic + keystores | **TTY only** |
-| `key recover` | Keystores from an existing mnemonic | TTY prompt **or** piped stdin |
+| `validator new` | Fresh 24-word mnemonic + keystores | **TTY only** |
+| `validator recover` | Keystores from an existing mnemonic | TTY prompt **or** piped stdin |
 
 Each run writes one file per index into `--output-dir` (directory must already exist and be writable):
 
@@ -204,19 +227,19 @@ Derivation: signing path `m/12381/3600/i/0/0` (EIP-2333/2334).
 | `--passphrase-env VAR` | Env var for **keystore** encryption passphrase (min 8 bytes after EIP-2335 normalization). Omit → TTY prompt-with-confirm | TTY prompt |
 | `--mnemonic-passphrase [VALUE]` | Optional BIP-39 25th word. Bare → prompt; with `VALUE` → raw argv; omit → empty | empty |
 | `--mnemonic-passphrase-env VAR` | Env var for the 25th word (empty string valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
-| `--start-index N` | **`key recover` only.** First HD index; produces `[start, start+count)` | `0` |
+| `--start-index N` | **`validator recover` only.** First HD index; produces `[start, start+count)` | `0` |
 
-`key new` always starts at index `0` (no `--start-index`).
+`validator new` always starts at index `0` (no `--start-index`).
 
 ### Security notes (BLS)
 
-- **Raw `--mnemonic-passphrase VALUE`** is visible in `ps` and shell history. Prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (on `key new`, bare form is **double-entry** confirm). Scripting convenience only — not for high-value mnemonics.
+- **Raw `--mnemonic-passphrase VALUE`** is visible in `ps` and shell history. Prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (on `validator new`, bare form is **double-entry** confirm). Scripting convenience only — not for high-value mnemonics.
 - Keystore passphrase is **NFKD-normalized** for EIP-2335 (different from EOA v3 — see [EOA interop note](#interop-note--v3-keystore-passphrase-is-raw-no-nfkd)).
 
-### `key new` — create a new BLS key set
+### `validator new` — create a new BLS key set
 
 ```bash
-ethernal key new --output-dir DIR [--count N] [--passphrase-env VAR] \
+ethernal validator new --output-dir DIR [--count N] [--passphrase-env VAR] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
 
@@ -237,14 +260,14 @@ mkdir -p ./keystores
 export KEYSTORE_PASS=my-keystore-passphrase
 
 # One validator
-ethernal key new \
+ethernal validator new \
   --output-dir ./keystores \
   --count 1 \
   --passphrase-env KEYSTORE_PASS
 
 # Two validators + optional 25th word (env form preferred)
 export MNEMONIC_PW=...
-ethernal key new \
+ethernal validator new \
   --output-dir ./keystores \
   --count 2 \
   --mnemonic-passphrase-env MNEMONIC_PW \
@@ -252,10 +275,10 @@ ethernal key new \
 unset MNEMONIC_PW KEYSTORE_PASS
 ```
 
-### `key recover` — recreate BLS keys from a mnemonic
+### `validator recover` — recreate BLS keys from a mnemonic
 
 ```bash
-ethernal key recover --output-dir DIR [--count N] [--start-index N] \
+ethernal validator recover --output-dir DIR [--count N] [--start-index N] \
   [--passphrase-env VAR] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
@@ -264,20 +287,20 @@ No display/re-entry ceremony — the mnemonic already exists. Accepts **12 / 15 
 
 ```bash
 # Interactive
-ethernal key recover \
+ethernal validator recover \
   --output-dir ./keystores \
   --count 3 \
   --start-index 0 \
   --passphrase-env KEYSTORE_PASS
 
 # Piped (automation)
-echo "$MNEMONIC" | ethernal key recover \
+echo "$MNEMONIC" | ethernal validator recover \
   --output-dir ./keystores \
   --count 1 \
   --passphrase-env KEYSTORE_PASS
 
 # Extend an existing set (e.g. next index after 0..2)
-ethernal key recover --output-dir ./keystores --start-index 3 --count 1 \
+ethernal validator recover --output-dir ./keystores --start-index 3 --count 1 \
   --passphrase-env KEYSTORE_PASS
 ```
 
@@ -286,7 +309,7 @@ ethernal key recover --output-dir ./keystores --start-index 3 --count 1 \
 Stderr summary lists each path and its **96-hex-char BLS pubkey**. Next steps for a deposit:
 
 1. Copy the pubkey(s) from the summary.
-2. Run [`ethernal gen`](#step-1--generate-deposit-data-ethernal-gen) with `--keystore-dir` and `--pubkeys`.
+2. Run [`ethernal deposit gen`](#step-1--generate-deposit-data-ethernal-deposit-gen) with `--keystore-dir` and `--pubkeys`.
 
 Keep the mnemonic offline only. Never paste it into chat, tickets, or cloud notes.
 
@@ -294,7 +317,7 @@ Keep the mnemonic offline only. Never paste it into chat, tickets, or cloud note
 
 ## Create EOA keystores (`ethernal account`)
 
-Use this when you need a **software EOA** encrypted as a standard Web3 **v3** keystore (geth / Foundry / MetaMask). This is **not** the deposit-pipeline keystore format — never pass these files to `ethernal gen`.
+Use this when you need a **software EOA** encrypted as a standard Web3 **v3** keystore (geth / Foundry / MetaMask). This is **not** the deposit-pipeline keystore format — never pass these files to `ethernal deposit gen`.
 
 | Subcommand | Purpose | I/O |
 |---|---|---|
@@ -324,8 +347,8 @@ Derivation: `m/44'/60'/0'/0/i` (Ethereum BIP-44; `account'` fixed at `0'`).
 
 ### Security notes (EOA)
 
-- **Raw `--mnemonic-passphrase VALUE`** — same `ps` / shell-history warning as `key`. Prefer env or bare prompt. On `account new`, bare form is **double-entry** confirm; on `account recover`, bare form is **single-entry**.
-- **Interop note — v3 keystore passphrase is raw (no NFKD):** scrypt consumes the keystore passphrase as **raw UTF-8 bytes** (no NFKD, no control-character strip). That matches geth and MetaMask. EIP-2335 (`key`) *does* normalize — do not assume one passphrase form unlocks both formats for non-ASCII secrets. Prefer ASCII unless you have verified unlock in the target wallet.
+- **Raw `--mnemonic-passphrase VALUE`** — same `ps` / shell-history warning as `validator`. Prefer env or bare prompt. On `account new`, bare form is **double-entry** confirm; on `account recover`, bare form is **single-entry**.
+- **Interop note — v3 keystore passphrase is raw (no NFKD):** scrypt consumes the keystore passphrase as **raw UTF-8 bytes** (no NFKD, no control-character strip). That matches geth and MetaMask. EIP-2335 (`validator`) *does* normalize — do not assume one passphrase form unlocks both formats for non-ASCII secrets. Prefer ASCII unless you have verified unlock in the target wallet.
 
 ### `account new` — create a new EOA key set
 
@@ -334,13 +357,13 @@ ethernal account new --output-dir DIR [--count N] [--passphrase-env VAR] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
 
-**Flow** (same ceremony shape as `key new`):
+**Flow** (same ceremony shape as `validator new`):
 
 1. **Non-TTY guard** → exit **2** before entropy.
 2. **Entropy →** 24-word BIP-39 mnemonic.
 3. **Mnemonic passphrase** → flag / env / confirm / empty.
 4. **Ceremony** → display once on `/dev/tty`, full re-entry; mismatch → exit **4**, nothing on disk.
-5. **Automatic scrollback clear** → same clear-on-confirm as `key new` (screen + scrollback, on confirm **and** abort; fail-open with a manual-clear warning if the ANSI write fails). **tmux/screen caveat:** multiplexers keep their own history that ANSI cannot reach — `tmux clear-history`; screen: C-a : then `scrollback 0`. Details under [`key new` Flow](#key-new--create-a-new-bls-key-set).
+5. **Automatic scrollback clear** → same clear-on-confirm as `validator new` (screen + scrollback, on confirm **and** abort; fail-open with a manual-clear warning if the ANSI write fails). **tmux/screen caveat:** multiplexers keep their own history that ANSI cannot reach — `tmux clear-history`; screen: C-a : then `scrollback 0`. Details under [`validator new` Flow](#validator-new--create-a-new-bls-key-set).
 6. **Keystore passphrase** → env or interactive confirm (min 8, **raw** bytes to KDF).
 7. **Derive → encrypt → write** → `m/44'/60'/0'/0/i`, Web3 v3 scrypt, `UTC--` names, mode `0o600`. Stderr summary lists path + **EIP-55 address**.
 
@@ -372,7 +395,7 @@ ethernal account recover --output-dir DIR [--count N] [--start-index N] \
   [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
 ```
 
-No ceremony. Same 12–24-word validation as `key recover` (bad word reported by **1-based position**, never the token). TTY or piped stdin.
+No ceremony. Same 12–24-word validation as `validator recover` (bad word reported by **1-based position**, never the token). TTY or piped stdin.
 
 ```bash
 # Interactive
@@ -407,12 +430,12 @@ Keep the mnemonic offline only.
 
 ---
 
-## Step 1 — Generate deposit data (`ethernal gen`)
+## Step 1 — Generate deposit data (`ethernal deposit gen`)
 
 ### Synopsis
 
 ```
-ethernal gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR \
+ethernal deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR \
   --withdrawal-address ADDR [options]
 ```
 
@@ -438,14 +461,14 @@ ethernal gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir D
 
 `--withdrawal-address` is **strict**: the address must be a correctly mixed-case EIP-55 checksum. All-lowercase, all-uppercase, or a mixed-case checksum mismatch is rejected with exit 2. This matches ethstaker/staking-deposit-cli and catches typos before they become irreversible withdrawal credentials.
 
-By contrast, `build`'s `--from` is **lenient**: any 0x-prefixed (or bare) 20-byte hex is accepted regardless of case — no checksum check. (`run` has no `--from`; it derives the sender from its signing key.) Do not expect the two flags to behave the same way.
+By contrast, `deposit build`'s `--from` is **lenient**: any 0x-prefixed (or bare) 20-byte hex is accepted regardless of case — no checksum check. (`tx run` has no `--from`; it derives the sender from its signing key.) Do not expect the two flags to behave the same way.
 
 ### Example — Hoodi single validator
 
 ```bash
 export KEYSTORE_PASS=my-keystore-passphrase
 
-ethernal gen \
+ethernal deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
   --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
@@ -457,7 +480,7 @@ ethernal gen \
 ### Example — multiple validators, parallel signing
 
 ```bash
-ethernal gen \
+ethernal deposit gen \
   --network hoodi \
   --keystore-dir ./keystores/ \
   --pubkeys 0xpub1...,0xpub2...,0xpub3...,0xpub4... \
@@ -474,7 +497,7 @@ Output JSON is a single array with one entry per pubkey, in the order you suppli
 Mainnet deposits are irreversible. The `--i-understand-this-is-mainnet` flag is required:
 
 ```bash
-ethernal gen \
+ethernal deposit gen \
   --network mainnet \
   --i-understand-this-is-mainnet \
   --keystore-dir ./keystores/ \
@@ -484,12 +507,12 @@ ethernal gen \
   --passphrase-env KEYSTORE_PASS
 ```
 
-Without the flag, `--network mainnet` exits with code 2. Without `--withdrawal-address`, `gen` exits with code 2 (require-choice gate — there is no default BLS-to-execution credential).
+Without the flag, `--network mainnet` exits with code 2. Without `--withdrawal-address`, `deposit gen` exits with code 2 (require-choice gate — there is no default BLS-to-execution credential).
 
 ### Example — dry-run preview
 
 ```bash
-ethernal gen ... --dry-run    # JSON to stdout, no file
+ethernal deposit gen ... --dry-run    # JSON to stdout, no file
 ```
 
 ### Output JSON shape
@@ -512,12 +535,12 @@ ethernal gen ... --dry-run    # JSON to stdout, no file
 
 ---
 
-## Step 2 — Build the unsigned transaction (`ethernal build`)
+## Step 2 — Build the unsigned transaction (`ethernal deposit build`)
 
 ### Synopsis
 
 ```
-ethernal build --input-file FILE --network NET [options]
+ethernal deposit build --input-file FILE --network NET [options]
 ```
 
 Produces an EIP-1559 unsigned transaction in JSON. No signing happens — runs fully offline.
@@ -544,7 +567,7 @@ Wei quantities (fees, value) are held as `u128`; a value ≥ 2^128 wei is reject
 Air-gapped build (all values explicit):
 
 ```bash
-ethernal build \
+ethernal deposit build \
   --network hoodi \
   --input-file ./out/deposit_data-1716000000.json \
   --gas-limit 300000 \
@@ -558,7 +581,7 @@ Multiple validators — produce a tx per validator by varying `--index`:
 
 ```bash
 for i in 0 1 2 3; do
-  ethernal build \
+  ethernal deposit build \
     --network hoodi \
     --input-file deposit_data.json \
     --index $i \
@@ -587,12 +610,12 @@ The `data` field is exactly 420 bytes (`0x` + 840 hex chars): the 4-byte `deposi
 
 ---
 
-## Step 3 — Sign the transaction (`ethernal sign`)
+## Step 3 — Sign the transaction (`ethernal tx sign`)
 
 ### Synopsis
 
 ```
-ethernal sign --signer local|ledger --input FILE [options]
+ethernal tx sign --signer local|ledger --input FILE [options]
 ```
 
 ### Flags
@@ -613,7 +636,7 @@ The private key MUST come from an environment variable. There is no CLI flag to 
 ```bash
 export ETHERNAL_TX_PRIVATE_KEY=0x0101010101010101010101010101010101010101010101010101010101010101  # synthetic test key
 
-ethernal sign \
+ethernal tx sign \
   --signer local \
   --input ./out/unsigned_tx.json \
   --output ./out/signed_tx.json
@@ -627,7 +650,7 @@ To use a different env-var name (e.g., for a hosted CI secret):
 
 ```bash
 export MY_DEPLOY_KEY=0x...
-ethernal sign --signer local --private-key-env MY_DEPLOY_KEY --input unsigned_tx.json --output signed_tx.json
+ethernal tx sign --signer local --private-key-env MY_DEPLOY_KEY --input unsigned_tx.json --output signed_tx.json
 ```
 
 ### Option B — Ledger Nano
@@ -640,7 +663,7 @@ Prerequisites:
 - Linux: `libusb-1.0` installed and Ledger udev rules in place (see [Install](#install))
 
 ```bash
-ethernal sign \
+ethernal tx sign \
   --signer ledger \
   --input ./out/unsigned_tx.json \
   --output ./out/signed_tx.json
@@ -681,12 +704,12 @@ Output files are created with `0o600` permissions (owner read/write only).
 
 ---
 
-## Step 4 — Broadcast (optional) (`ethernal send`)
+## Step 4 — Broadcast (optional) (`ethernal tx send`)
 
 ### Synopsis
 
 ```
-ethernal send --input FILE --rpc-url URL [options]
+ethernal tx send --input FILE --rpc-url URL [options]
 ```
 
 Broadcasts a signed transaction via JSON-RPC with a double-confirmation prompt and optional receipt polling.
@@ -729,7 +752,7 @@ send also fetches the chain ID from the RPC endpoint and refuses to broadcast if
 ### Example — with receipt
 
 ```bash
-ethernal send \
+ethernal tx send \
   --input ./out/signed_tx.json \
   --rpc-url https://holesky.example/rpc \
   --wait-for-receipt \
@@ -757,14 +780,14 @@ Note: `cast send` is wrong here — that constructs a new transaction. Use `cast
 
 ---
 
-## Convenience: `ethernal run` (build + sign in one shot)
+## Convenience: `ethernal tx run` (build + sign in one shot)
 
-When you're signing on the same machine that has the deposit data, `run` collapses build + sign into one command:
+When you're signing on the same machine that has the deposit data, `tx run` collapses `deposit build` + `tx sign` into one command:
 
 ```bash
 export ETHERNAL_TX_PRIVATE_KEY=0x...
 
-ethernal run \
+ethernal tx run \
   --network hoodi \
   --signer local \
   --input-file ./out/deposit_data-1716000000.json \
@@ -780,9 +803,9 @@ Outputs:
 
 Pass `--keep-unsigned` to also write the intermediate `unsigned_tx.json` (useful for auditing what was actually signed). Pass `--raw-output PATH` to override the auto-derived `.raw` filename.
 
-The same flags work for `--signer ledger` — `run` calls the Ledger flow internally.
+The same flags work for `--signer ledger` — `tx run` calls the Ledger flow internally.
 
-Use the two-step `build` → `sign` flow when the signing machine is air-gapped; use `run` for the convenience case.
+Use the two-step `deposit build` → `tx sign` flow when the signing machine is air-gapped; use `tx run` for the convenience case.
 
 ---
 
@@ -792,32 +815,32 @@ The two-phase design supports air-gapping the signing machine entirely:
 
 ```
 [ Online machine #1 ]                                 [ Air-gapped signing machine ]
-  ethernal gen ...           ─USB/QR transfer──>     ./signing-machine/in/
-                                                          ethernal sign --signer ledger ...
-  ethernal build ...                                 ./signing-machine/out/
+  ethernal deposit gen ...           ─USB/QR transfer──>     ./signing-machine/in/
+                                                          ethernal tx sign --signer ledger ...
+  ethernal deposit build ...                                 ./signing-machine/out/
                                 <─USB/QR transfer──     signed_tx.json
 [ Online machine #2 ]
-  ethernal send ...
+  ethernal tx send ...
 ```
 
-1. **Air-gapped (recommended for mainnet)** — create BLS keystores with `ethernal key new` (TTY ceremony; see [Create BLS validator keys](#create-bls-validator-keys-ethernal-key)), transfer only the encrypted keystores (and later pubkeys) off the machine. Or generate keystores online if you accept the risk.
+1. **Air-gapped (recommended for mainnet)** — create BLS keystores with `ethernal validator new` (TTY ceremony; see [Create BLS validator keys](#create-bls-validator-keys-ethernal-validator)), transfer only the encrypted keystores (and later pubkeys) off the machine. Or generate keystores online if you accept the risk.
 2. **Online machine** — generate deposit data and the unsigned transaction:
    ```bash
-   ethernal gen ... --withdrawal-address 0x... --output-dir ./out
-   ethernal build --network hoodi --input-file ./out/deposit_data-*.json --nonce N --output unsigned_tx.json
+   ethernal deposit gen ... --withdrawal-address 0x... --output-dir ./out
+   ethernal deposit build --network hoodi --input-file ./out/deposit_data-*.json --nonce N --output unsigned_tx.json
    ```
 3. **Transfer** `unsigned_tx.json` to the air-gapped machine (USB, QR code, etc.). It contains no secrets.
 4. **Air-gapped machine** — sign with the Ledger:
    ```bash
-   ethernal sign --signer ledger --input unsigned_tx.json --output signed_tx.json
+   ethernal tx sign --signer ledger --input unsigned_tx.json --output signed_tx.json
    ```
 5. **Transfer** `signed_tx.json` back to an online machine.
 6. **Online machine** — broadcast:
    ```bash
-   ethernal send --input signed_tx.json --rpc-url https://...
+   ethernal tx send --input signed_tx.json --rpc-url https://...
    ```
 
-Neither the unsigned nor the signed deposit-tx artifact contains the BLS private key. The Ledger never exports the secp256k1 key. Note that a merged `ethernal` binary on the air-gapped machine also carries the `gen`/`build`/`send` code paths it isn't using there — see `CHANGELOG.md` for that tradeoff.
+Neither the unsigned nor the signed deposit-tx artifact contains the BLS private key. The Ledger never exports the secp256k1 key. Note that a merged `ethernal` binary on the air-gapped machine also carries the `deposit gen` / `deposit build` / `tx send` code paths it isn't using there — see `CHANGELOG.md` for that tradeoff.
 
 ---
 
@@ -833,8 +856,8 @@ Supported by `ethernal` (see `crates/ethernal-core/src/network.rs`):
 | `holesky` | 17000 | `0x4242424242424242424242424242424242424242` | https://holesky.etherscan.io |
 
 Notes:
-- `gen` only supports `mainnet` and `hoodi` (BLS fork-version material).
-- `build`/`sign`/`run`/`send` support all four (they just need chain ID + deposit contract address).
+- `deposit gen` only supports `mainnet` and `hoodi` (BLS fork-version material).
+- `deposit build` / `tx sign` / `tx run` / `tx send` support all four (they just need chain ID + deposit contract address).
 - For testnet ETH: use the testnet faucets — Hoodi `https://hoodi-faucet.pk910.de/`, Sepolia `https://sepoliafaucet.com/`, Holesky `https://holesky-faucet.pk910.de/`.
 
 ---
@@ -847,15 +870,15 @@ All `ethernal` subcommands use a consistent set of exit codes you can script aro
 |---|---|
 | 0 | Success |
 | 1 | Unexpected internal error |
-| 2 | User / configuration error (bad input, missing/invalid flag, unknown network, missing `--withdrawal-address`, non-TTY `key new` / `account new`, missing `--from`/`--nonce`/`--gas-limit` for RPC mode, build-side RPC chain-ID mismatch) |
+| 2 | User / configuration error (bad input, missing/invalid flag, unknown network, missing `--withdrawal-address`, non-TTY `validator new` / `account new`, missing `--from`/`--nonce`/`--gas-limit` for RPC mode, build-side RPC chain-ID mismatch) |
 | 3 | Signer / crypto error (Ledger not found, Ethereum app not open, invalid key, signer-side chain-ID mismatch, BLS/SSZ failure) |
 | 4 | User abort (SIGINT, or rejected confirmation prompt) |
-| 5 | Broadcast / RPC error (RPC dial failure, gas/nonce estimation failure, broadcast-side chain-ID mismatch, node rejection) — `build`/`run` estimation and `send` broadcast |
+| 5 | Broadcast / RPC error (RPC dial failure, gas/nonce estimation failure, broadcast-side chain-ID mismatch, node rejection) — `deposit build` / `tx run` estimation and `tx send` broadcast |
 
 Script around these:
 
 ```bash
-if ethernal sign ...; then
+if ethernal tx sign ...; then
   echo "signed"
 else
   rc=$?
@@ -876,27 +899,27 @@ fi
 
 `ethernal` protects:
 
-- **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from env vars only; Ledger keys never leave the device. Mnemonics from `key new` / `account new` are shown only on the controlling terminal and never on stdout/stderr/logs.
+- **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from env vars only; Ledger keys never leave the device. Mnemonics from `validator new` / `account new` are shown only on the controlling terminal and never on stdout/stderr/logs.
 - **Signed artifacts and keystores are written with restricted perms** (0o600; receiver can verify a signed tx by recovering the sender and checking the tx hash).
 - **Broadcast is gated by chain-ID match and operator confirmation.** A signed-for-Holesky transaction will not be broadcast to a mainnet RPC endpoint.
 - **RPC credentials are redacted from error messages by construction.** API keys embedded in an `--rpc-url` are stripped before any error is logged or printed.
 
 It does NOT protect:
 
-- A compromised machine. If your build/sign machine is compromised, the unsigned tx data field (which encodes the deposit) could be silently altered. Verify on the Ledger screen before pressing confirm. A compromised keygen machine can capture the mnemonic at generation time — prefer air-gapped `key new` / `account new` for high-value keys.
+- A compromised machine. If your build/sign machine is compromised, the unsigned tx data field (which encodes the deposit) could be silently altered. Verify on the Ledger screen before pressing confirm. A compromised keygen machine can capture the mnemonic at generation time — prefer air-gapped `validator new` / `account new` for high-value keys.
 - Network-level interception of the broadcast (not a concern for signed transactions — they cannot be modified without invalidating the signature).
 - Keystore confidentiality. The keystore passphrase is your responsibility; use a strong one and clear `KEYSTORE_PASS` from your shell after use.
-- A raw `--mnemonic-passphrase VALUE` on the command line (visible in `ps` and shell history) — see [Create BLS validator keys](#create-bls-validator-keys-ethernal-key) and [Create EOA keystores](#create-eoa-keystores-ethernal-account).
+- A raw `--mnemonic-passphrase VALUE` on the command line (visible in `ps` and shell history) — see [Create BLS validator keys](#create-bls-validator-keys-ethernal-validator) and [Create EOA keystores](#create-eoa-keystores-ethernal-account).
 
 ### Key handling rules
 
-- **BLS mnemonic (`key new` / `key recover`)** — write it down offline during the ceremony; store it offline only. Never commit it, pipe `key new` (refused), or paste it into tickets/chat. Prefer air-gapped generation for high-value validators. Full guide: [Create BLS validator keys](#create-bls-validator-keys-ethernal-key).
+- **BLS mnemonic (`validator new` / `validator recover`)** — write it down offline during the ceremony; store it offline only. Never commit it, pipe `validator new` (refused), or paste it into tickets/chat. Prefer air-gapped generation for high-value validators. Full guide: [Create BLS validator keys](#create-bls-validator-keys-ethernal-validator).
 - **EOA mnemonic (`account new` / `account recover`)** — same ceremony and offline rules as BLS; produces Web3 v3 keystores (not EIP-2335). Prefer air-gapped generation for high-value EOAs. Never pipe `account new` (refused). Full guide: [Create EOA keystores](#create-eoa-keystores-ethernal-account).
-- **Mnemonic passphrase (BIP-39 "25th word")** — prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (prompt). **Do not** use raw `--mnemonic-passphrase VALUE` for high-value mnemonics: the value is visible in the process table (`ps`) and shell history. A mistyped 25th word yields keys you cannot recover from the mnemonic alone. Applies to both `key` and `account`.
-- **Keystore passphrase (`key` / EIP-2335)** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 bytes after EIP-2335 **NFKD** normalization. There is no raw-argv form (unlike the mnemonic passphrase). Env vars persist for the shell lifetime (and `export VAR=secret` can land in shell history) — use a dedicated session and `unset` when done.
+- **Mnemonic passphrase (BIP-39 "25th word")** — prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (prompt). **Do not** use raw `--mnemonic-passphrase VALUE` for high-value mnemonics: the value is visible in the process table (`ps`) and shell history. A mistyped 25th word yields keys you cannot recover from the mnemonic alone. Applies to both `validator` and `account`.
+- **Keystore passphrase (`validator` / EIP-2335)** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 bytes after EIP-2335 **NFKD** normalization. There is no raw-argv form (unlike the mnemonic passphrase). Env vars persist for the shell lifetime (and `export VAR=secret` can land in shell history) — use a dedicated session and `unset` when done.
 - **Keystore passphrase (`account` / Web3 v3)** — same CLI surface (env or TTY prompt-with-confirm; min 8 bytes; no raw-argv form), but encryption uses the passphrase as **raw UTF-8** (no NFKD) for geth/MetaMask interop.
 - `ETHERNAL_TX_PRIVATE_KEY` — env var only. There is NO `--private-key` flag. The env-var-name flag (`--private-key-env`) is validated to match `^[A-Z_][A-Z0-9_]*$` to prevent users from accidentally passing the key value.
-- `LocalSigner` zeroizes the key bytes in memory when `Close()` is called (end of every `sign` / `run` invocation).
+- `LocalSigner` zeroizes the key bytes in memory when `Close()` is called (end of every `tx sign` / `tx run` invocation).
 - For mainnet: use Ledger for the deposit-tx signer. The local signer is explicitly tagged "for development only" in its docs and is not recommended for any real-fund deposit.
 - The synthetic test key in `testdata/phase3/holesky/private_key.txt` is `0x0101010101010101010101010101010101010101010101010101010101010101` (obvious pattern). Never use it with real funds; it's for tests only.
 
@@ -913,7 +936,7 @@ Reject on the device if anything is off. The CLI exits with code 4 and no broadc
 
 ### Exit codes as a security tool
 
-The typed exit codes let your automation distinguish between "operator rejected" (code 4 — likely intentional), "signer/crypto problem" (code 3 — investigate), and "RPC / broadcast error" (code 5). Code 5 covers an endpoint dial or gas/nonce estimation failure (`build`/`run`) and, on `send`, the broadcast safety guard tripping on a chain-ID mismatch — treat a send-side chain-ID mismatch as "wrong network, do not retry blindly".
+The typed exit codes let your automation distinguish between "operator rejected" (code 4 — likely intentional), "signer/crypto problem" (code 3 — investigate), and "RPC / broadcast error" (code 5). Code 5 covers an endpoint dial or gas/nonce estimation failure (`deposit build` / `tx run`) and, on `tx send`, the broadcast safety guard tripping on a chain-ID mismatch — treat a send-side chain-ID mismatch as "wrong network, do not retry blindly".
 
 ---
 
@@ -926,17 +949,17 @@ export KEYSTORE_PASS=test-passphrase
 export ETHERNAL_TX_PRIVATE_KEY=0x0101...   # synthetic; never real
 mkdir -p ./keystores ./out
 
-# Interactive key new (or recover from a fixed test mnemonic via stdin)
-ethernal key new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
+# Interactive validator new (or recover from a fixed test mnemonic via stdin)
+ethernal validator new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
 # copy pubkey from the summary:
 
-ethernal gen \
+ethernal deposit gen \
   --network hoodi --keystore-dir ./keystores/ \
   --pubkeys 0x... \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out --passphrase-env KEYSTORE_PASS
 
-ethernal run \
+ethernal tx run \
   --network hoodi --signer local \
   --input-file ./out/deposit_data-*.json \
   --nonce 0 --output ./out/signed_tx.json
@@ -949,17 +972,17 @@ unset KEYSTORE_PASS ETHERNAL_TX_PRIVATE_KEY
 ```bash
 export KEYSTORE_PASS=...
 
-ethernal gen ... \
+ethernal deposit gen ... \
   --withdrawal-address 0x... \
   --output-dir ./out --passphrase-env KEYSTORE_PASS
 
-ethernal run \
+ethernal tx run \
   --network hoodi --signer ledger \
   --input-file ./out/deposit_data-*.json \
   --nonce 17 --output ./out/signed_tx.json
 # (confirm on Ledger)
 
-ethernal send \
+ethernal tx send \
   --input ./out/signed_tx.json \
   --rpc-url https://your-hoodi-rpc \
   --wait-for-receipt --receipt-output ./out/receipt.json
@@ -973,37 +996,37 @@ unset KEYSTORE_PASS
 ```bash
 # Air-gapped machine B — generate BLS keys (TTY only)
 mkdir -p ./keystores
-ethernal key new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
+ethernal validator new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
 # transfer keystores (encrypted) + note the pubkeys to online machine A
 # keep the mnemonic offline only
 
 # Online machine A
-ethernal gen --network mainnet --i-understand-this-is-mainnet \
+ethernal deposit gen --network mainnet --i-understand-this-is-mainnet \
   --keystore-dir ./keystores/ --pubkeys 0x... \
   --withdrawal-address 0xYourChecksummedExecutionAddress \
   --output-dir ./out --passphrase-env KEYSTORE_PASS
-ethernal build --network mainnet \
+ethernal deposit build --network mainnet \
   --input-file ./out/deposit_data-*.json \
   --nonce ${NONCE} --output unsigned_tx.json
 # transfer unsigned_tx.json via USB/QR to air-gapped machine
 
 # Air-gapped machine B (no network)
-ethernal sign --signer ledger \
+ethernal tx sign --signer ledger \
   --input unsigned_tx.json --output signed_tx.json
 # (confirm on Ledger; verify on-device fields per Security section)
 # transfer signed_tx.json back via USB/QR
 
 # Online machine A
-ethernal send --input signed_tx.json --rpc-url https://your-mainnet-rpc
+ethernal tx send --input signed_tx.json --rpc-url https://your-mainnet-rpc
 # (type "mainnet" to confirm)
 ```
 
 ### Recipe 4 — Multiple validators in one shot
 
 ```bash
-ethernal key new --output-dir ./keystores --count 3 --passphrase-env KEYSTORE_PASS
+ethernal validator new --output-dir ./keystores --count 3 --passphrase-env KEYSTORE_PASS
 
-ethernal gen --network hoodi --keystore-dir ./keystores/ \
+ethernal deposit gen --network hoodi --keystore-dir ./keystores/ \
   --pubkeys 0xpub1...,0xpub2...,0xpub3... \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out --passphrase-env KEYSTORE_PASS --parallel 4
@@ -1011,7 +1034,7 @@ ethernal gen --network hoodi --keystore-dir ./keystores/ \
 # One sign per validator, increment nonce
 BASE_NONCE=17
 for i in 0 1 2; do
-  ethernal run --network hoodi --signer ledger \
+  ethernal tx run --network hoodi --signer ledger \
     --input-file ./out/deposit_data-*.json --index $i \
     --nonce $((BASE_NONCE + i)) \
     --output ./out/signed_${i}.json
@@ -1022,7 +1045,7 @@ done
 
 ```bash
 # BLS: you already have indices 0..2; derive the next three
-echo "$MNEMONIC" | ethernal key recover \
+echo "$MNEMONIC" | ethernal validator recover \
   --output-dir ./keystores \
   --start-index 3 \
   --count 3 \
@@ -1045,13 +1068,13 @@ export KEYSTORE_PASS=...   # or use different passphrases per format if you pref
 mkdir -p ./keystores ./eoa-keys
 
 # Option A — fresh mnemonic via BLS ceremony; write the phrase down, then recover EOA
-ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+ethernal validator new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
 # (after writing the mnemonic offline)
 echo "$MNEMONIC" | ethernal account recover \
   --output-dir ./eoa-keys --count 1 --passphrase-env KEYSTORE_PASS
 
 # Option B — recover both from an existing mnemonic (no ceremony)
-echo "$MNEMONIC" | ethernal key recover \
+echo "$MNEMONIC" | ethernal validator recover \
   --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
 echo "$MNEMONIC" | ethernal account recover \
   --output-dir ./eoa-keys --count 1 --passphrase-env KEYSTORE_PASS
@@ -1064,8 +1087,8 @@ If you used a BIP-39 mnemonic passphrase (25th word) for one tree, pass the **sa
 ### Recipe 7 — Pipe between commands
 
 ```bash
-ethernal gen --network hoodi ... --withdrawal-address 0x... --dry-run | \
-  ethernal build --network hoodi --input-file - --nonce 0 | \
+ethernal deposit gen --network hoodi ... --withdrawal-address 0x... --dry-run | \
+  ethernal deposit build --network hoodi --input-file - --nonce 0 | \
   jq '.'   # pretty-print the unsigned tx
 ```
 
@@ -1084,49 +1107,49 @@ cast decode-typed-tx "$RAW"
 
 ## Troubleshooting
 
-### `ethernal key` errors
+### `ethernal validator` errors
 
 | Symptom | Cause / fix |
 |---|---|
-| `key new requires an interactive terminal ...` (exit 2) | `key new` is TTY-only. Run it in a real terminal; do not pipe or redirect stdin/stdout. Use `key recover` for scripted mnemonic input. |
+| `new requires an interactive terminal ...` (exit 2) | `validator new` is TTY-only. Run it in a real terminal; do not pipe or redirect stdin/stdout. Use `validator recover` for scripted mnemonic input. |
 | `--output-dir: directory "..." does not exist` / `not writable` (exit 2) | Create the directory first (`mkdir -p`) and ensure write permission. |
 | `--count: value 0 is invalid` (exit 2) | Pass `--count` ≥ 1. |
-| Invalid mnemonic / checksum (exit 2, `key recover`) | Check word count (12/15/18/21/24), spelling against the English wordlist, and that the full phrase matches what you wrote down (including any mnemonic passphrase). |
-| Ceremony re-entry mismatch → abort (exit 4) | You declined retry after a wrong re-entry, or sent SIGINT. Run `key new` again; the previous mnemonic was never written to disk. |
+| Invalid mnemonic / checksum (exit 2, `validator recover`) | Check word count (12/15/18/21/24), spelling against the English wordlist, and that the full phrase matches what you wrote down (including any mnemonic passphrase). |
+| Ceremony re-entry mismatch → abort (exit 4) | You declined retry after a wrong re-entry, or sent SIGINT. Run `validator new` again; the previous mnemonic was never written to disk. |
 | Keystore passphrase too short (exit 2) | Keystore passphrase must be at least 8 bytes (after EIP-2335 normalization). |
 
 ### `ethernal account` errors
 
 | Symptom | Cause / fix |
 |---|---|
-| interactive terminal / non-TTY refusal (exit 2) | `account new` is TTY-only (shares the same gate as `key new`). Run it in a real terminal; do not pipe or redirect stdin/stdout. Use `account recover` for scripted mnemonic input. |
+| interactive terminal / non-TTY refusal (exit 2) | `account new` is TTY-only (shares the same gate as `validator new`). Run it in a real terminal; do not pipe or redirect stdin/stdout. Use `account recover` for scripted mnemonic input. |
 | `--output-dir: directory "..." does not exist` / `not writable` (exit 2) | Create the directory first (`mkdir -p`) and ensure write permission. |
 | `--count: value 0 is invalid` (exit 2) | Pass `--count` ≥ 1. |
 | Invalid mnemonic / checksum (exit 2, `account recover`) | Check word count (12/15/18/21/24), spelling against the English wordlist, and that the full phrase matches what you wrote down (including any mnemonic passphrase). |
 | Ceremony re-entry mismatch → abort (exit 4) | You declined retry after a wrong re-entry, or sent SIGINT. Run `account new` again; the previous mnemonic was never written to disk. |
 | Keystore passphrase too short (exit 2) | Keystore passphrase must be at least 8 bytes. For v3 encryption the bytes are used **raw** (no NFKD) — see [Create EOA keystores](#create-eoa-keystores-ethernal-account). |
-| Imported keystore unlocks in neither geth nor MetaMask | Confirm you used the same passphrase string (raw UTF-8) and a v3 file from `account`, not an EIP-2335 file from `key`. See [Create EOA keystores](#create-eoa-keystores-ethernal-account). |
+| Imported keystore unlocks in neither geth nor MetaMask | Confirm you used the same passphrase string (raw UTF-8) and a v3 file from `account`, not an EIP-2335 file from `validator`. See [Create EOA keystores](#create-eoa-keystores-ethernal-account). |
 
-### `ethernal gen` errors
+### `ethernal deposit gen` errors
 
 | Symptom | Cause / fix |
 |---|---|
 | `--withdrawal-address: required flag not set` (exit 2) | Pass `--withdrawal-address` with an EIP-55 checksummed execution address. There is no default. |
-| `--withdrawal-address: ... EIP-55 checksum mismatch` (exit 2) | Address must be correctly mixed-case EIP-55 (not all-lowercase). Tools like `cast to-check-sum-address` can re-checksum. Note: `build`'s `--from` is lenient and does **not** require EIP-55 — only `--withdrawal-address` is strict. |
+| `--withdrawal-address: ... EIP-55 checksum mismatch` (exit 2) | Address must be correctly mixed-case EIP-55 (not all-lowercase). Tools like `cast to-check-sum-address` can re-checksum. Note: `deposit build`'s `--from` is lenient and does **not** require EIP-55 — only `--withdrawal-address` is strict. |
 | `mainnet selected; pass --i-understand-this-is-mainnet to acknowledge` (exit 2) | Add the flag. Mainnet is irreversible. |
 | `pubkey ... not found in keystore directory` (exit 2) | The pubkey listed in `--pubkeys` has no matching keystore file. Check the keystore directory contents. |
 | `decrypt: invalid passphrase` (exit 3) | Wrong `KEYSTORE_PASS`. The passphrase decrypts every keystore — all must share it. |
 | `staking-deposit-cli not found in PATH` (exit 3, only with `--verify-with-deposit-cli`) | Either install `staking-deposit-cli >= 2.7.0`, set `--deposit-cli-path`, or drop the verify flag. |
 
-### `ethernal build` errors
+### `ethernal deposit build` errors
 
 | Symptom | Cause / fix |
 |---|---|
 | `--index N: out of bounds (file has M entries)` (exit 2) | Your deposit data JSON has fewer entries than the index you requested. |
-| `deposit entry validation: ...` (exit 2) | The deposit data JSON is malformed (zero pubkey, bad withdrawal credentials prefix, etc.). Regenerate with `ethernal gen`. |
+| `deposit entry validation: ...` (exit 2) | The deposit data JSON is malformed (zero pubkey, bad withdrawal credentials prefix, etc.). Regenerate with `ethernal deposit gen`. |
 | `value mismatch ...` (exit 2) | The entry's `amount` is not 32 ETH in Gwei. Only 32 ETH first deposits are currently supported. |
 
-### `ethernal sign` errors
+### `ethernal tx sign` errors
 
 | Symptom | Cause / fix |
 |---|---|
@@ -1138,7 +1161,7 @@ cast decode-typed-tx "$RAW"
 | `user rejected signing on Ledger` (exit 4) | You pressed the reject button on the device. Retry if intentional was confirm. |
 | `ledger support requires the 'ledger' cargo feature; rebuild with --features ledger` (exit 3) | The binary was built without the Ledger transport. Rebuild with `cargo build --release --features ledger`. |
 
-### `ethernal send` errors
+### `ethernal tx send` errors
 
 | Symptom | Cause / fix |
 |---|---|
@@ -1152,4 +1175,4 @@ cast decode-typed-tx "$RAW"
 
 - If `make e2e-mock` passes but real testnet broadcast fails, the gap is usually nonce or insufficient funds.
 - For Ledger error-string mismatches (the heuristics aren't real-hardware-validated), file an issue with the exact error text.
-- For everything else, run with `--verbose` and `--json-logs` (`ethernal gen`) to get structured diagnostics.
+- For everything else, run with `--verbose` and `--json-logs` (`ethernal deposit gen`) to get structured diagnostics.
