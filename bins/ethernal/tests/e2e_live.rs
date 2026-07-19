@@ -5,7 +5,7 @@
 //! `anvil` binary is a green no-op under `--ignored` (D-3).
 //!
 //! E6-1: anvil harness smoke. E6-2: live gen|build|sign|send pipe chain (T-6).
-//! E6-3 extends this file with hybrid RPC probes.
+//! E6-3: hybrid RPC probes — nonce resolution + wrong-network interactive send (T-13).
 
 mod common;
 
@@ -17,7 +17,10 @@ use std::process::Stdio;
 #[cfg(unix)]
 use common::anvil::Anvil;
 #[cfg(unix)]
-use common::{ethernal, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, PHASE3_KEY};
+use common::{
+    ethernal, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase, hoodi_pubkey,
+    write_temp_signed_tx, PHASE3_KEY,
+};
 
 /// Hoodi chain id (A-3 / verify skill).
 #[cfg(unix)]
@@ -184,6 +187,91 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
         bal_after, want,
         "deposit-contract {deposit_to} balance did not grow by 32 ETH per deposit \
          (before={bal_before}, after={bal_after}, want={want})"
+    );
+
+    drop(anvil);
+}
+
+/// T-13(a) / E6-3: `build --rpc-url <anvil> --from <addr>` with nonce/gas omitted
+/// resolves nonce from the real node. Real-node analog of
+/// `build_rpc::rpc_resolves_unset_fields`.
+#[cfg(unix)]
+#[test]
+#[ignore = "live tier: needs the anvil binary; run via `make e2e-live`"]
+fn e2e_live_build_resolves_nonce_from_anvil() {
+    let Some(anvil) = Anvil::try_spawn(HOODI_CHAIN_ID) else {
+        return;
+    };
+
+    // Fund sender so eth_estimateGas can clear a 32 ETH value transfer.
+    anvil.set_balance(PHASE3_SENDER, FUND_WEI_HEX);
+
+    // Seed a nonzero pending nonce; build must pick this up (not default 0).
+    let want_nonce: u64 = 42;
+    anvil.set_nonce(PHASE3_SENDER, want_nonce);
+
+    let out = ethernal()
+        .args(["build", "--network", "hoodi", "--input-file"])
+        .arg(hoodi_expected_deposit_data())
+        .args(["--rpc-url", anvil.url(), "--from", PHASE3_SENDER])
+        .output()
+        .expect("spawn build");
+    assert!(
+        out.status.success(),
+        "build failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let tx: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("build stdout is valid JSON");
+    assert_eq!(
+        tx["nonce"], want_nonce,
+        "built tx nonce must match anvil_setNonce value; tx={tx}"
+    );
+
+    drop(anvil);
+}
+
+/// T-13(b) / E6-3: interactive `send` (no `--yes`) against anvil with the wrong
+/// network name → exit 4. Real-node analog of `send::confirm_prompt_reject`.
+///
+/// Uses holesky chain-id + the phase-3 signed golden so the chain-id check passes
+/// and the confirm prompt is reached.
+#[cfg(unix)]
+#[test]
+#[ignore = "live tier: needs the anvil binary; run via `make e2e-live`"]
+fn e2e_live_send_wrong_network_name_exit4() {
+    const HOLESKY_CHAIN_ID: u64 = 17000;
+
+    let Some(anvil) = Anvil::try_spawn(HOLESKY_CHAIN_ID) else {
+        return;
+    };
+
+    let (_dir, signed) = write_temp_signed_tx();
+
+    let mut child = ethernal()
+        .args(["send", "--input"])
+        .arg(&signed)
+        .args(["--rpc-url", anvil.url()])
+        // no --yes → interactive confirm
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn send");
+    {
+        let mut w = child.stdin.take().expect("stdin piped");
+        // Wrong network name (signed tx is holesky).
+        w.write_all(b"mainnet\n").expect("write wrong network name");
+    }
+    let out = child.wait_with_output().expect("wait send");
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "wrong-network confirm must exit 4; stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 
     drop(anvil);
