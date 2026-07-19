@@ -13,7 +13,7 @@ use ethernal_core::bip39::{self, Bip39Error};
 use ethernal_core::cancel::CancelToken;
 use ethernal_core::entropy::{Entropy, EntropyError, OsEntropy};
 use ethernal_core::hd::{self, KeyPath};
-use ethernal_core::output::{write_new_0600, OutputError};
+use ethernal_core::output::OutputError;
 use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput, ScryptParams};
 use ethernal_keystore::{
     require_min_len, EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource,
@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 use crate::errors::AppError;
 use crate::fs_util::{open_tty_writer, stderr_is_tty, stdin_is_tty};
 use crate::gen_cmd::Progress;
-use crate::keystore_cli::{MnemonicPassphraseForm, START_INDEX_OVERFLOW_MSG};
+use crate::keystore_cli::{write_with_retry, MnemonicPassphraseForm, START_INDEX_OVERFLOW_MSG};
 use crate::logging::{Format, Level, Logger};
 use crate::validator_cli::ValidatorConfig;
 
@@ -631,25 +631,19 @@ fn map_write_err(e: OutputError) -> AppError {
 ///
 /// On [`OutputError::AlreadyExists`] for `now_unix`, retries once at
 /// `now_unix + 1`. A collision at both timestamps propagates `AlreadyExists`.
+/// Domain filename + bump stay here; shared control flow is [`write_with_retry`].
 fn write_keystore_at(
     out_dir: &Path,
     path_str: &str,
     now_unix: i64,
     json: &[u8],
 ) -> Result<std::path::PathBuf, OutputError> {
-    let filename = keystore_filename(path_str, now_unix);
-    let final_path = out_dir.join(&filename);
-    match write_new_0600(&final_path, json) {
-        Ok(()) => Ok(final_path),
-        Err(OutputError::AlreadyExists) => {
-            let retry_ts = now_unix + 1;
-            let filename = keystore_filename(path_str, retry_ts);
-            let final_path = out_dir.join(&filename);
-            write_new_0600(&final_path, json)?;
-            Ok(final_path)
-        }
-        Err(e) => Err(e),
-    }
+    write_with_retry(
+        out_dir,
+        json,
+        || keystore_filename(path_str, now_unix),
+        || keystore_filename(path_str, now_unix + 1),
+    )
 }
 
 // ---------------------------------------------------------------------------

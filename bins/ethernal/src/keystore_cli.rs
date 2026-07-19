@@ -1,11 +1,14 @@
 //! Shared keystore-CLI helpers used by both the `validator` and `account` namespaces.
 //!
-//! Neutral home for flags, validation, and the three-form BIP-39 mnemonic
-//! passphrase input so neither namespace owns the other's helpers.
+//! Neutral home for flags, validation, the three-form BIP-39 mnemonic
+//! passphrase input, and the write-once-retry keystore write skeleton so
+//! neither namespace owns the other's helpers.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgMatches};
+use ethernal_core::output::{write_new_0600, OutputError};
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
@@ -149,6 +152,38 @@ pub(crate) fn parse_mnemonic_passphrase_form(
     }
 
     Ok(MnemonicPassphraseForm::Empty)
+}
+
+// ---------------------------------------------------------------------------
+// write_with_retry — shared keystore write skeleton (T2.2)
+// ---------------------------------------------------------------------------
+
+/// Write `json` to `out_dir` under a domain-chosen filename, retrying once on
+/// collision.
+///
+/// Control flow only: tries [`write_new_0600`] at `primary_filename()`, and on
+/// [`OutputError::AlreadyExists`] retries once at `retry_filename()`. Other
+/// errors and a second collision propagate as `OutputError`.
+///
+/// Domain filename schemas and bump policy stay in the closures (EIP-2335
+/// path+secs vs geth `UTC--` address+secs/nanos). Call sites map the result to
+/// exit 3 via their own `map_write_err` — this helper does not encode exit codes.
+pub(crate) fn write_with_retry(
+    out_dir: &Path,
+    json: &[u8],
+    primary_filename: impl FnOnce() -> String,
+    retry_filename: impl FnOnce() -> String,
+) -> Result<PathBuf, OutputError> {
+    let final_path = out_dir.join(primary_filename());
+    match write_new_0600(&final_path, json) {
+        Ok(()) => Ok(final_path),
+        Err(OutputError::AlreadyExists) => {
+            let final_path = out_dir.join(retry_filename());
+            write_new_0600(&final_path, json)?;
+            Ok(final_path)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]

@@ -142,7 +142,7 @@ conventions) and an **executable process** (phases, gates, backlog).
 | `map_encrypt_err` ≡ `map_passphrase_err` | per file | Collapse within file (T1.4); shared mappers later (T2.6) |
 | `discard_logger` wrappers | 3 | Call `Logger::discard()` (T1.5) |
 | `ValidatorConfig` / `AccountConfig` + load/banner | twin | `KeygenConfig` + namespace label (T2.4–T2.5) |
-| write-once-retry keystore write | 2 | `write_with_retry` skeleton (T2.2) |
+| write-once-retry keystore write | 2 | ✅ `write_with_retry` skeleton (T2.2) |
 | Redundant `.map_err(map_bip39_err)?` | many | Bare `?` where `From` exists (T2.9 A) |
 
 ### 3.2 Apparent duplication (do **not** “simplify”)
@@ -289,7 +289,7 @@ T2.2 (write_with_retry)             ── independent (or after T2.1)
 | ID | Change | Effort | Risk |
 |----|--------|:------:|:----:|
 | T2.1 | `atomic_write_file` → `core::output` overwrite-allowed API ✅ | M | low |
-| T2.2 | Extract `write_with_retry` for keystore write skeleton | M | low |
+| T2.2 | ✅ Extract `write_with_retry` for keystore write skeleton | M | low |
 | T2.3 | Hoist ceremony/mnemonic neutrals out of `validator_cmd` | M | low |
 | T2.4 | `KeygenConfig` + aliases for validator/account | M | low |
 | T2.5 | Shared keygen banner writer (folds into T2.4 if same PR) | S | low |
@@ -504,11 +504,16 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 
 **Risk:** low. **Effort:** M.
 
-#### T2.2 — `write_with_retry` skeleton
+#### T2.2 — `write_with_retry` skeleton — **done**
 
 **Evidence.** `write_keystore_at` / `write_v3_at` share control flow; differ only in filename + bump.
 
 **Change.** Shared helper taking two filename closures; domain schemas stay in closures. Exit-3 mapping stays at call site.
+
+**Done.** `keystore_cli::write_with_retry(out_dir, json, primary_filename, retry_filename)` owns the
+try → `AlreadyExists` → retry-once → propagate control flow via `write_new_0600`. Domain wrappers
+remain: `validator_cmd::write_keystore_at` (path + `now_unix` / `+1`) and `account_cmd::write_v3_at`
+(address + secs/nanos / `nanos.wrapping_add(1)`). Call sites still `map_write_err` → exit 3.
 
 **Risk:** low. **Effort:** M.
 

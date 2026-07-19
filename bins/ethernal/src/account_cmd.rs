@@ -15,7 +15,7 @@ use ethernal_core::bip39::{self, Bip39Error};
 use ethernal_core::cancel::CancelToken;
 use ethernal_core::entropy::{Entropy, EntropyError, OsEntropy};
 use ethernal_core::hd_secp256k1::{self, Bip32Error, Bip44Path};
-use ethernal_core::output::{write_new_0600, OutputError};
+use ethernal_core::output::OutputError;
 use ethernal_keystore::encrypt_v3::{encrypt_v3, v3_filename, EncryptV3Input, ScryptParams};
 use ethernal_keystore::{
     EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource, KEYSTORE_PASSPHRASE_MIN_LEN,
@@ -27,7 +27,7 @@ use crate::account_cli::AccountConfig;
 use crate::errors::AppError;
 use crate::fs_util::{open_tty_writer, stderr_is_tty};
 use crate::gen_cmd::Progress;
-use crate::keystore_cli::START_INDEX_OVERFLOW_MSG;
+use crate::keystore_cli::{write_with_retry, START_INDEX_OVERFLOW_MSG};
 use crate::logging::{Format, Level, Logger};
 use crate::validator_cmd::{
     check_cancel, resolve_mnemonic_passphrase, run_ceremony, MinLenPassphrase, MnemonicSource,
@@ -482,25 +482,19 @@ fn map_write_err(e: OutputError) -> AppError {
 ///
 /// On [`OutputError::AlreadyExists`] for `ts`, retries once at `nanos + 1`.
 /// A collision at both timestamps propagates `AlreadyExists` (→ exit 3).
+/// Domain filename + bump stay here; shared control flow is [`write_with_retry`].
 fn write_v3_at(
     out_dir: &Path,
     address: &[u8; 20],
     ts: Timestamp,
     json: &[u8],
 ) -> Result<std::path::PathBuf, OutputError> {
-    let filename = v3_filename(address, ts.unix_secs, ts.nanos);
-    let final_path = out_dir.join(&filename);
-    match write_new_0600(&final_path, json) {
-        Ok(()) => Ok(final_path),
-        Err(OutputError::AlreadyExists) => {
-            let retry_nanos = ts.nanos.wrapping_add(1);
-            let filename = v3_filename(address, ts.unix_secs, retry_nanos);
-            let final_path = out_dir.join(&filename);
-            write_new_0600(&final_path, json)?;
-            Ok(final_path)
-        }
-        Err(e) => Err(e),
-    }
+    write_with_retry(
+        out_dir,
+        json,
+        || v3_filename(address, ts.unix_secs, ts.nanos),
+        || v3_filename(address, ts.unix_secs, ts.nanos.wrapping_add(1)),
+    )
 }
 
 // ---------------------------------------------------------------------------
