@@ -853,12 +853,13 @@ impl MnemonicSource for RecoverMnemonicSource {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
+    use crate::test_support::{
+        CancelOnFill, FixedEntropy, FixedPassphrase, ScriptedLines, ShortPassphrase, Tmp, ENV_LOCK,
+    };
     use crate::validator_cli::ValidatorMode;
     use ethernal_core::hd::derive_path;
     use ethernal_keystore::{KeyLoader, Loader};
-    use std::collections::VecDeque;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
 
     /// All-zero 32-byte entropy → `abandon` × 23 + `art` (24 words).
@@ -867,150 +868,6 @@ mod tests {
     /// BIP-39 vector: 12-word abandon…about + TREZOR.
     const TREZOR_SEED_HEX: &str = "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";
     const ABANDON_12: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
-    // --- FixedEntropy (test-only; never in release binary — S-4) ---
-
-    /// Deterministic entropy: pops pre-queued exact fills, then zeros.
-    struct FixedEntropy {
-        queue: Mutex<VecDeque<Vec<u8>>>,
-    }
-
-    impl FixedEntropy {
-        fn new(chunks: Vec<Vec<u8>>) -> Self {
-            Self {
-                queue: Mutex::new(chunks.into()),
-            }
-        }
-
-        /// Mnemonic entropy all-zero (24-word abandon…art), then zeros for
-        /// salt/iv/uuid of every keystore.
-        fn zero_mnemonic() -> Self {
-            Self::new(vec![vec![0u8; 32]])
-        }
-    }
-
-    impl Entropy for FixedEntropy {
-        fn fill(&self, buf: &mut [u8]) -> Result<(), EntropyError> {
-            let mut q = self.queue.lock().expect("entropy queue lock");
-            if let Some(next) = q.pop_front() {
-                assert_eq!(
-                    next.len(),
-                    buf.len(),
-                    "FixedEntropy chunk len {} != buf {}",
-                    next.len(),
-                    buf.len()
-                );
-                buf.copy_from_slice(&next);
-            } else {
-                buf.fill(0);
-            }
-            Ok(())
-        }
-    }
-
-    /// Cancels `token` on the Nth `fill` call (1-based), then fills zeros.
-    struct CancelOnFill {
-        n: usize,
-        count: AtomicUsize,
-        token: CancelToken,
-    }
-
-    impl Entropy for CancelOnFill {
-        fn fill(&self, buf: &mut [u8]) -> Result<(), EntropyError> {
-            let c = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-            if c == 1 {
-                // First fill: all-zero mnemonic entropy.
-                buf.fill(0);
-            } else {
-                buf.fill(0xab);
-            }
-            if c == self.n {
-                self.token.cancel();
-            }
-            Ok(())
-        }
-    }
-
-    // --- fakes ---
-
-    struct FixedPassphrase(Vec<u8>);
-
-    impl PassphraseSource for FixedPassphrase {
-        fn read(&self) -> Result<Vec<u8>, KeystoreError> {
-            Ok(self.0.clone())
-        }
-    }
-
-    struct ShortPassphrase;
-
-    impl PassphraseSource for ShortPassphrase {
-        fn read(&self) -> Result<Vec<u8>, KeystoreError> {
-            // Simulate env path with require_min_len applied by MinLenPassphrase.
-            let pw = b"short7c".to_vec();
-            require_min_len(&pw, KEYSTORE_PASSPHRASE_MIN_LEN)?;
-            Ok(pw)
-        }
-    }
-
-    struct ScriptedLines {
-        lines: Mutex<VecDeque<String>>,
-    }
-
-    impl ScriptedLines {
-        fn new(lines: Vec<&str>) -> Self {
-            Self {
-                lines: Mutex::new(lines.into_iter().map(str::to_string).collect()),
-            }
-        }
-    }
-
-    impl MnemonicSource for ScriptedLines {
-        fn read_line(&self, _prompt: &str) -> Result<Zeroizing<String>, AppError> {
-            let mut q = self.lines.lock().expect("lines lock");
-            let line = q
-                .pop_front()
-                .ok_or_else(|| AppError::Internal("no more scripted lines".into()))?;
-            Ok(Zeroizing::new(line))
-        }
-    }
-
-    struct Tmp(PathBuf);
-
-    impl Tmp {
-        fn new() -> Self {
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let p =
-                std::env::temp_dir().join(format!("validator-cmd-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-
-        fn str(&self) -> &str {
-            self.0.to_str().unwrap()
-        }
-
-        fn keystore_files(&self) -> Vec<PathBuf> {
-            std::fs::read_dir(&self.0)
-                .unwrap()
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.extension().and_then(|x| x.to_str()) == Some("json")
-                        && p.file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|n| n.starts_with("keystore-"))
-                            .unwrap_or(false)
-                })
-                .collect()
-        }
-    }
-
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     fn base_cfg(dir: &str, count: u32) -> ValidatorConfig {
         ValidatorConfig {
@@ -1094,7 +951,7 @@ mod tests {
 
     #[test]
     fn happy_path_writes_n_keystores_loader_round_trip() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 2);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1158,7 +1015,7 @@ mod tests {
 
     #[test]
     fn twenty_four_words_from_256_bit_entropy() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1174,7 +1031,7 @@ mod tests {
 
     #[test]
     fn ceremony_mismatch_retry_then_abort_exit4_no_files() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1199,7 +1056,7 @@ mod tests {
 
     #[test]
     fn ceremony_mismatch_immediate_abort() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1223,7 +1080,7 @@ mod tests {
             }
         }
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1254,7 +1111,7 @@ mod tests {
 
     #[test]
     fn ceremony_retry_then_match_writes() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1428,7 +1285,7 @@ mod tests {
 
     #[test]
     fn short_passphrase_exit2_no_files() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = ShortPassphrase;
@@ -1440,7 +1297,7 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_prompt_confirm_mismatch_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let mut cfg = base_cfg(dir.str(), 1);
         cfg.mnemonic_passphrase = MnemonicPassphraseForm::Prompt;
         let entropy = FixedEntropy::zero_mnemonic();
@@ -1502,7 +1359,7 @@ mod tests {
 
     #[test]
     fn happy_path_with_trezor_mnemonic_passphrase_24_word() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let mut cfg = base_cfg(dir.str(), 1);
         cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
         let entropy = FixedEntropy::zero_mnemonic();
@@ -1530,7 +1387,7 @@ mod tests {
 
     #[test]
     fn cancel_before_start_leaves_zero_files() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 2);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1550,7 +1407,7 @@ mod tests {
         //   write key0
         //   5: key1 salt → cancel here
         //   before write key1 → Aborted; 1 file remains.
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 2);
         let cancel = CancelToken::new();
         let entropy = CancelOnFill {
@@ -1577,7 +1434,7 @@ mod tests {
 
     #[test]
     fn cancel_during_ceremony_leaves_zero() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1610,7 +1467,7 @@ mod tests {
 
     #[test]
     fn same_second_collision_retries_ts_plus_1() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1649,7 +1506,7 @@ mod tests {
 
     #[test]
     fn double_timestamp_collision_exit3() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         // Pre-plant both ts and ts+1 so the one-bump retry still collides.
         let at_ts = dir.0.join("keystore-m_12381_3600_0_0_0-1700000000.json");
@@ -1675,7 +1532,7 @@ mod tests {
 
     #[test]
     fn signing_path_and_filename_shape() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = base_cfg(dir.str(), 1);
         let entropy = FixedEntropy::zero_mnemonic();
         let pw = FixedPassphrase(b"password1".to_vec());
@@ -1698,6 +1555,7 @@ mod tests {
 
     #[test]
     fn min_len_passphrase_wrapper() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let env_name = format!("ETHERNAL_TEST_KS_PW_{}", std::process::id());
         // Short value.
         std::env::set_var(&env_name, "short7c");
@@ -1743,7 +1601,7 @@ mod tests {
 
     #[test]
     fn recover_12_word_loader_round_trip() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = recover_cfg(dir.str(), 1, 0);
         // No ceremony: first scripted line is the mnemonic itself.
         let lines = ScriptedLines::new(vec![ABANDON_12]);
@@ -1782,7 +1640,7 @@ mod tests {
 
     #[test]
     fn recover_24_word_loader_round_trip() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = recover_cfg(dir.str(), 1, 0);
         let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
         let entropy = FixedEntropy::new(vec![]);
@@ -1800,7 +1658,7 @@ mod tests {
 
     #[test]
     fn recover_bad_word_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = recover_cfg(dir.str(), 1, 0);
         let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon notaword";
         let lines = ScriptedLines::new(vec![bad]);
@@ -1819,7 +1677,7 @@ mod tests {
 
     #[test]
     fn recover_bad_checksum_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = recover_cfg(dir.str(), 1, 0);
         // 12× abandon — wrong checksum (valid ends with about).
         let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
@@ -1834,7 +1692,7 @@ mod tests {
 
     #[test]
     fn recover_start_index_range_filenames() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         // indices 5, 6, 7
         let cfg = recover_cfg(dir.str(), 3, 5);
         let lines = ScriptedLines::new(vec![ABANDON_12]);
@@ -1882,7 +1740,7 @@ mod tests {
 
     #[test]
     fn recover_no_ceremony_tty_empty() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let cfg = recover_cfg(dir.str(), 1, 0);
         let lines = ScriptedLines::new(vec![ABANDON_12]);
         let entropy = FixedEntropy::new(vec![]);
@@ -1897,7 +1755,7 @@ mod tests {
 
     #[test]
     fn recover_mnemonic_passphrase_prompt_single_entry() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let mut cfg = recover_cfg(dir.str(), 1, 0);
         cfg.mnemonic_passphrase = MnemonicPassphraseForm::Prompt;
         // mnemonic, then single passphrase (no confirm).
@@ -1920,8 +1778,8 @@ mod tests {
     fn recover_same_shape_as_key_new() {
         // Same fixed mnemonic (24-word abandon…art), empty mnemonic-pass,
         // same FixedEntropy salt/iv/uuid zeros and now_unix → identical JSON.
-        let dir_new = Tmp::new();
-        let dir_rec = Tmp::new();
+        let dir_new = Tmp::new("validator-cmd-test");
+        let dir_rec = Tmp::new("validator-cmd-test");
         let cfg_new = base_cfg(dir_new.str(), 1);
         let cfg_rec = recover_cfg(dir_rec.str(), 1, 0);
 
@@ -1971,7 +1829,7 @@ mod tests {
     /// appear in summary/logger; mnemonic display is only on `tty_writer`.
     #[test]
     fn secret_hygiene_key_new_buffers() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let mut cfg = base_cfg(dir.str(), 1);
         // Distinct mnemonic passphrase so we can grep for it.
         cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
@@ -2094,7 +1952,7 @@ mod tests {
     /// Recover path: no tty display; secrets still absent from summary/logger.
     #[test]
     fn secret_hygiene_key_recover_buffers() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cmd-test");
         let mut cfg = recover_cfg(dir.str(), 1, 0);
         cfg.mnemonic_passphrase = MnemonicPassphraseForm::Raw(Zeroizing::new("TREZOR".into()));
         let keystore_pw_plain = "password1";

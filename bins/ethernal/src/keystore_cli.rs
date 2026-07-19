@@ -170,32 +170,11 @@ pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    /// A temp directory that removes itself on drop.
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn new() -> Tmp {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let p =
-                std::env::temp_dir().join(format!("keystore-cli-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-        fn str(&self) -> &str {
-            self.0.to_str().unwrap()
-        }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::Tmp;
 
     #[test]
     fn validate_output_dir_negative() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("keystore-cli-test");
         let missing = dir.0.join("missing");
         let err = validate_output_dir(missing.to_str().unwrap()).unwrap_err();
         assert!(err.contains("does not exist"), "{err}");

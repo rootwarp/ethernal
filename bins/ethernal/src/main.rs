@@ -29,6 +29,9 @@ mod sign_cmd;
 mod validator_cli;
 mod validator_cmd;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use std::sync::OnceLock;
 
 use clap::Command;

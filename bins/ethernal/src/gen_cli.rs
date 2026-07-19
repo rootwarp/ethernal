@@ -414,8 +414,8 @@ fn print_banner(w: &mut dyn Write, cfg: &GenConfig) {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
+    use crate::test_support::Tmp;
     use ethernal_core::bls::{self, Signer};
-    use std::path::PathBuf;
 
     // Port of `internal/cli/cli_test.go` (validation + banner) and
     // `cli_fuzz_test.go`. Go drove the app with a NO-OP run callback, so these
@@ -452,26 +452,6 @@ mod tests {
         secret[0] = seed;
         let signer = bls::new_signer(&secret).expect("new_signer");
         hex::encode(signer.public_key().expect("public_key"))
-    }
-
-    /// A temp directory that removes itself on drop.
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn new() -> Tmp {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!("gen-cli-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-        fn str(&self) -> &str {
-            self.0.to_str().unwrap()
-        }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
     }
 
     /// Runs parse + validate + banner, mirroring Go's no-op-callback app.
@@ -554,8 +534,8 @@ mod tests {
     // Go: TestSinglePubkeyHappyPath
     #[test]
     fn single_pubkey_happy_path() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let pk_hex = format!("0x{pk}");
         let (cfg, banner) = run(&with_wd(&[
@@ -582,8 +562,8 @@ mod tests {
     // Go: TestBannerFormat / TestMultiPubkeyHappyPath / TestUnprefixedPubkeys.
     #[test]
     fn banner_format_multi_pubkey() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let pk2 = valid_pubkey(2);
         let pks = format!("0x{pk},0x{pk2}");
@@ -623,8 +603,8 @@ mod tests {
     // (non-clap-required) --output-dir is rejected by load_config with exit 2.
     #[test]
     fn missing_required_flags() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         // Missing clap-required flags → parse error.
         assert!(run(&with_wd(&[
@@ -684,8 +664,8 @@ mod tests {
     // Go: TestInvalidNetwork / TestNetworkParsedBeforeOtherWork.
     #[test]
     fn invalid_network() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let base_ok = |net: &str| {
             run(&with_wd(&[
@@ -723,8 +703,8 @@ mod tests {
     // Go: TestErrorIsExitCoder — invalid pubkeys → exit 2.
     #[test]
     fn invalid_pubkeys_is_exit2() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let err = load_err(&with_wd(&[
             "--keystore-dir",
             ks.str(),
@@ -741,8 +721,8 @@ mod tests {
     // Go: TestMainnetWithoutAck — exit 2, "mainnet selected", banner NOT emitted.
     #[test]
     fn mainnet_without_ack() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         // The banner writer captures nothing because the gate fires before it.
         let mut argv = vec!["gen"];
@@ -771,8 +751,8 @@ mod tests {
     // Go: TestMainnetWithAck — MAINNET banner (uppercase), ack set.
     #[test]
     fn mainnet_with_ack() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
@@ -794,8 +774,8 @@ mod tests {
     // Go: TestHoodiWithAckFlag — a harmless ack flag on hoodi shows lowercase.
     #[test]
     fn hoodi_with_ack_flag() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
@@ -818,8 +798,8 @@ mod tests {
     // TestVerifyWithDepositCLIFlag / TestDepositCLIPathFlag / TestPassphraseEnvOptional.
     #[test]
     fn boolean_and_string_flags_propagate() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let base = |extra: &[&str]| -> GenConfig {
             let mut a = with_wd(&[
@@ -859,8 +839,8 @@ mod tests {
     // Go: TestParallelFlag — default 1, valid N propagates, invalid rejected exit 2.
     #[test]
     fn parallel_flag() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let ok = |extra: &[&str]| -> Result<(GenConfig, String), String> {
             let mut a = with_wd(&[
@@ -904,8 +884,8 @@ mod tests {
     // Go: TestKeystoreDirValidation / TestNonexistentOutputDir / TestOutputDirIsFile.
     #[test]
     fn dir_validation() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
 
         // nonexistent keystore-dir → err.
@@ -969,7 +949,7 @@ mod tests {
     // outside --dry-run.
     #[test]
     fn output_dir_conditional_requiredness() {
-        let ks = Tmp::new();
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let invalid = std::env::temp_dir().join("gen-cli-does-not-exist-xyz");
 
@@ -1029,8 +1009,8 @@ mod tests {
     // K5-2: require-choice gate — absent --withdrawal-address → exit 2.
     #[test]
     fn withdrawal_address_required() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let err = load_err(&[
             "--keystore-dir",
@@ -1068,8 +1048,8 @@ mod tests {
     // K5-2: lowercase / checksum-mismatch / bad hex → exit 2 via validate_eip55_address.
     #[test]
     fn withdrawal_address_eip55_rejects() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let base = |addr: &str| -> AppError {
             load_err(&[
@@ -1121,8 +1101,8 @@ mod tests {
     // H2 / K5-L1: zero address self-checksums under EIP-55 but is refused by CLI policy.
     #[test]
     fn withdrawal_address_zero_rejected() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let err = load_err(&[
             "--keystore-dir",

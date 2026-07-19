@@ -511,6 +511,7 @@ pub fn run_gen(cfg: &GenConfig, cancel: &CancelToken) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
+    use crate::test_support::Tmp;
     use ethernal_core::bls::Signer;
     use ethernal_core::output::OutputError;
     use ethernal_keystore::{Key, KeystoreError};
@@ -611,23 +612,6 @@ mod tests {
         }
     }
 
-    /// A temp dir removed on drop.
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn new() -> Tmp {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!("gen-cmd-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     fn discard_logger() -> Logger {
         Logger::new(Level::Error, Format::Text, Box::new(std::io::sink()))
     }
@@ -646,7 +630,7 @@ mod tests {
     /// Writes `{"pubkey":...}` files for `pks` into a fresh temp dir and returns
     /// a real `DirectoryIndex` over them (mapping pubkey → path).
     fn index_over(pks: &[[u8; 48]]) -> (Tmp, DirectoryIndex) {
-        let dir = Tmp::new();
+        let dir = Tmp::new("gen-cmd-test");
         for (i, pk) in pks.iter().enumerate() {
             let content = format!("{{\"pubkey\":\"{}\"}}", hex::encode(pk));
             std::fs::write(dir.0.join(format!("{i}.json")), content).unwrap();

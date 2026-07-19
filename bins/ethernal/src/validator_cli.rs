@@ -221,33 +221,8 @@ fn print_banner(w: &mut dyn Write, cfg: &ValidatorConfig) {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
+    use crate::test_support::{Tmp, ENV_LOCK};
     use zeroize::Zeroizing;
-
-    /// Serializes tests that mutate process environment.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// A temp directory that removes itself on drop.
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn new() -> Tmp {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let p =
-                std::env::temp_dir().join(format!("validator-cli-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-        fn str(&self) -> &str {
-            self.0.to_str().unwrap()
-        }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     fn parse_new(args: &[&str]) -> Result<ArgMatches, String> {
         let mut argv = vec!["validator", "new"];
@@ -312,7 +287,7 @@ mod tests {
 
     #[test]
     fn validator_new_and_recover_parse() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         assert!(parse_new(&["--output-dir", dir.str()]).is_ok());
         assert!(parse_recover(&["--output-dir", dir.str()]).is_ok());
     }
@@ -321,7 +296,7 @@ mod tests {
 
     #[test]
     fn count_defaults_to_one() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, banner) = load_new(&["--output-dir", dir.str()]).expect("ok");
         assert_eq!(cfg.count, 1);
         assert_eq!(cfg.mode, ValidatorMode::New);
@@ -335,7 +310,7 @@ mod tests {
 
     #[test]
     fn count_and_passphrase_env_propagate() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, _) = load_new(&[
             "--output-dir",
             dir.str(),
@@ -351,7 +326,7 @@ mod tests {
 
     #[test]
     fn recover_start_index_default_and_set() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, banner) = load_recover(&["--output-dir", dir.str()]).expect("ok");
         assert_eq!(cfg.start_index, 0);
         assert_eq!(cfg.mode, ValidatorMode::Recover);
@@ -375,7 +350,7 @@ mod tests {
     #[test]
     fn new_ignores_start_index_flag_absence() {
         // `validator new` has no --start-index; config always reports 0.
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, _) = load_new(&["--output-dir", dir.str()]).unwrap();
         assert_eq!(cfg.start_index, 0);
         assert!(parse_new(&["--output-dir", dir.str(), "--start-index", "1"]).is_err());
@@ -385,7 +360,7 @@ mod tests {
 
     #[test]
     fn bad_count_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let err = load_new_err(&["--output-dir", dir.str(), "--count", "0"]);
         assert_eq!(exit_code_for(&err), 2);
         assert!(err.to_string().contains("--count"));
@@ -395,7 +370,7 @@ mod tests {
 
     #[test]
     fn start_index_plus_count_overflow_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         // start=u32::MAX, count=2 → last index overflows.
         let err = load_recover_err(&[
             "--output-dir",
@@ -415,7 +390,7 @@ mod tests {
     #[test]
     fn start_index_max_with_count_one_ok() {
         // Inclusive last index is MAX; does not overflow.
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, _) = load_recover(&[
             "--output-dir",
             dir.str(),
@@ -439,7 +414,7 @@ mod tests {
 
     #[test]
     fn nonexistent_output_dir_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let missing = dir.0.join("no-such");
         let err = load_new_err(&["--output-dir", missing.to_str().unwrap()]);
         assert_eq!(exit_code_for(&err), 2);
@@ -448,7 +423,7 @@ mod tests {
 
     #[test]
     fn file_as_output_dir_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let file = dir.0.join("a-file");
         std::fs::write(&file, b"x").unwrap();
         let err = load_new_err(&["--output-dir", file.to_str().unwrap()]);
@@ -461,7 +436,7 @@ mod tests {
     fn recover_load_config_warns_on_symlinked_output_dir() {
         use std::os::unix::fs::symlink;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let real = dir.0.join("real-out");
         std::fs::create_dir(&real).unwrap();
         let link = dir.0.join("link-out");
@@ -512,7 +487,7 @@ mod tests {
     fn unwritable_output_dir_is_exit2() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let locked = dir.0.join("locked");
         std::fs::create_dir(&locked).unwrap();
         // Drop write bit for owner/group/other; exclusive probe create must fail.
@@ -537,14 +512,14 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_absent_is_empty() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, _) = load_new(&["--output-dir", dir.str()]).unwrap();
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
     }
 
     #[test]
     fn mnemonic_passphrase_raw_value() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, _) =
             load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase", "TREZOR"]).unwrap();
         assert_eq!(
@@ -555,7 +530,7 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_bare_is_prompt() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let (cfg, _) = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase"]).unwrap();
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Prompt);
     }
@@ -563,7 +538,7 @@ mod tests {
     #[test]
     fn mnemonic_passphrase_env_reads_value() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let var = format!("ETHERNAL_TEST_MNEMONIC_PW_{}", std::process::id());
         std::env::set_var(&var, "from-env");
         let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
@@ -581,7 +556,7 @@ mod tests {
     #[test]
     fn mnemonic_passphrase_env_empty_value_accepted() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let var = format!("ETHERNAL_TEST_MNEMONIC_PW_EMPTY_{}", std::process::id());
         std::env::set_var(&var, "");
         let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
@@ -614,7 +589,7 @@ mod tests {
     #[test]
     fn mnemonic_passphrase_env_unset_is_exit2() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let var = format!("ETHERNAL_TEST_MNEMONIC_PW_UNSET_{}", std::process::id());
         std::env::remove_var(&var);
         let m = parse_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]).unwrap();
@@ -626,7 +601,7 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_raw_and_env_conflict() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let err = parse_new(&[
             "--output-dir",
             dir.str(),
@@ -640,7 +615,7 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_bare_and_env_conflict() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("validator-cli-test");
         let err = parse_new(&[
             "--output-dir",
             dir.str(),

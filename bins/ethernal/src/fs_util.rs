@@ -77,48 +77,11 @@ pub(crate) fn probe_dir_writable(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    struct Tmp(PathBuf);
-
-    impl Tmp {
-        fn new() -> Self {
-            static N: AtomicU64 = AtomicU64::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!(
-                "ethernal-fs-util-{}-{}-{n}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-    }
-
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            // Best-effort restore write bits so remove_dir_all can succeed
-            // after read-only tests.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&self.0) {
-                    let mut perms = meta.permissions();
-                    perms.set_mode(0o755);
-                    let _ = std::fs::set_permissions(&self.0, perms);
-                }
-            }
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::Tmp;
 
     #[test]
     fn probe_happy_path() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         probe_dir_writable(&dir.0).expect("writable dir");
         // No leftover probe.
         assert!(!probe_path(&dir.0).exists());
@@ -129,7 +92,7 @@ mod tests {
     fn symlink_probe_does_not_touch_canary_target() {
         use std::os::unix::fs::symlink;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let canary = dir.0.join("canary-target");
         std::fs::write(&canary, b"do-not-truncate").unwrap();
 
@@ -154,7 +117,7 @@ mod tests {
     fn unwritable_dir_probe_fails() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let locked = dir.0.join("locked");
         std::fs::create_dir(&locked).unwrap();
         let mut perms = std::fs::metadata(&locked).unwrap().permissions();
@@ -177,7 +140,7 @@ mod tests {
         // Create ok, then lose write on the parent so unlink fails. Exercise
         // the same create→remove sequence as probe_dir_writable with a gap
         // between the steps so we can assert remove errors are not discarded.
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let probe = probe_path(&dir.0);
         create_exclusive_0600(&probe).unwrap();
 
@@ -208,7 +171,7 @@ mod tests {
 
     #[test]
     fn real_dir_is_not_symlinked_output_dir() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         assert!(symlinked_output_dir(&dir.0).is_none());
 
         let mut buf = Vec::new();
@@ -225,7 +188,7 @@ mod tests {
     fn symlinked_output_dir_detects_final_component_link() {
         use std::os::unix::fs::symlink;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let real = dir.0.join("real-out");
         std::fs::create_dir(&real).unwrap();
         let link = dir.0.join("link-out");

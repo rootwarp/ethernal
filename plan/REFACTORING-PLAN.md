@@ -257,13 +257,13 @@ Phase 4  Judgment          Tier 3 only if still wanted after 1–3
 
 **Order inside phase:**
 
-1. **T1.1** shared `test_support` (unblocks clean later work)
+1. **T1.1** shared `test_support` (unblocks clean later work) — **done**
 2. **T1.2** TTY helpers
 3. **T1.3–T1.8** remaining cleanups (can be one PR or split rename T1.6 alone)
 
 | ID | Change | Effort | Risk |
 |----|--------|:------:|:----:|
-| T1.1 | `#[cfg(test)] mod test_support` — `Tmp`, `ENV_LOCK`, keygen fakes | M | low |
+| T1.1 | ✅ `#[cfg(test)] mod test_support` — `Tmp`, `ENV_LOCK`, keygen fakes | M | low |
 | T1.2 | Shared `stderr_is_tty` / `stdin_is_tty` / `open_tty_writer` | S | low |
 | T1.3 | Single `validate_output_dir` in `fs_util` | S | low |
 | T1.4 | Collapse identical `map_*` pairs per file | S | low |
@@ -343,7 +343,7 @@ T2.2 (write_with_retry)             ── independent (or after T2.1)
 
 | Metric | Today | Target after Phases 1–3 |
 |--------|-------|-------------------------|
-| Duplicate `struct Tmp` in bin | 8 | 1 (`test_support`) |
+| Duplicate `struct Tmp` in bin | 8 | 1 (`test_support`) — **achieved** |
 | `account_cmd` → `validator_cmd` imports | yes | none |
 | `run_key_*` / `KeyDeps` names | present | gone |
 | Bin files >1500 LOC with >50% tests | 3 | 0 (tests relocated) |
@@ -366,7 +366,7 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 
 ### Tier 1 — Mechanical, high-confidence
 
-#### T1.1 — Shared `#[cfg(test)] mod test_support`
+#### T1.1 — Shared `#[cfg(test)] mod test_support` ✅ **done**
 
 **What.** Bin has no shared test-support module; every inline test re-declares scaffolding.
 
@@ -378,6 +378,15 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 **Change.** Declare `#[cfg(test)] pub(crate) mod test_support` from `main.rs`. Canonical `Tmp::new(prefix)` with **always-on** 0o755 restore before `remove_dir_all` (superset of `fs_util` behavior). Single `ENV_LOCK`. Shared fakes. Keep `keystore_files()` vs `v3_files()` domain listers **distinct**.
 
 **Strictly test-scoped.** Do not fold production `PassphraseSource` / NFKD paths into this module.
+
+**Acceptance criteria:**
+- [x] Single `test_support` module declared under bin with `#[cfg(test)]`
+- [x] All duplicate `struct Tmp` in bin replaced by shared `Tmp`
+- [x] Single `ENV_LOCK` used by env-mutating bin tests (CLI + residual cmd wrappers)
+- [x] Keygen test doubles shared (not duplicated in validator_cmd and account_cmd)
+- [x] Domain listers remain distinct (`keystore_files` vs `v3_files`)
+- [x] `make lint` and `make test` green
+- [x] No production behavior change
 
 **Risk:** low. **Effort:** M.
 
@@ -576,3 +585,4 @@ Trivial wrappers; intentional stack separation.
 |------|------|
 | 2026-07-19 | Initial detailed tier plan |
 | 2026-07-19 | Added SOLID assessment, conventions baseline, phased process, success metrics; re-validated evidence against tree (`Tmp`×8, sideways import, `run_key_*`, `Box::leak`, dead `default_rpc_url`) |
+| 2026-07-19 | T1.1 landed: shared `test_support` (`Tmp`, `ENV_LOCK`, keygen fakes) |
