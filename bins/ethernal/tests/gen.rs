@@ -17,8 +17,9 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 
 use common::{
-    ethernal, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase, hoodi_pubkey,
-    mainnet_expected_deposit_data, mainnet_keystores, mainnet_passphrase, mainnet_pubkey, TempDir,
+    ethernal, ethernal_no_tty, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase,
+    hoodi_pubkey, mainnet_expected_deposit_data, mainnet_keystores, mainnet_passphrase,
+    mainnet_pubkey, TempDir,
 };
 
 const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
@@ -589,12 +590,15 @@ fn gen_mainnet_with_ack_matches_golden() {
     );
 }
 
-// T-8 / E5-2: gen without --passphrase-env under piped (non-TTY) stdio → exit 2.
-// `.output()` pipes stdin/stdout/stderr so /dev/tty is the only prompt surface;
-// TermPromptSource fails NoTty and the message names --passphrase-env.
+// T-8 / E5-2: gen without --passphrase-env when there is no controlling TTY →
+// exit 2 naming --passphrase-env.
+//
+// Must use `ethernal_no_tty` (setsid): plain `.output()` still inherits the
+// runner's controlling terminal, so under interactive `make test` the child
+// would open /dev/tty and block forever on the passphrase prompt.
 #[test]
 fn gen_pipe_without_passphrase_env_exit2() {
-    let out = ethernal()
+    let out = ethernal_no_tty()
         .args(["gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([

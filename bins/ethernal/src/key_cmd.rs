@@ -14,7 +14,7 @@ use ethernal_core::cancel::CancelToken;
 use ethernal_core::entropy::{Entropy, EntropyError, OsEntropy};
 use ethernal_core::hd::{self, KeyPath};
 use ethernal_core::output::{write_new_0600, OutputError};
-use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput};
+use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput, ScryptParams};
 use ethernal_keystore::{
     require_min_len, EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource,
     KEYSTORE_PASSPHRASE_MIN_LEN,
@@ -68,6 +68,9 @@ pub struct KeyDeps<'a> {
     pub logger: &'a Logger,
     /// Unix seconds for keystore filenames (injectable for deterministic tests).
     pub now_unix: i64,
+    /// scrypt cost for EIP-2335 encrypt. Production: [`ScryptParams::STANDARD`].
+    /// Unit tests inject [`ScryptParams::FAST`] so the suite stays snappy.
+    pub scrypt: ScryptParams,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +128,7 @@ pub fn run_key_new(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError
         progress,
         logger: &logger,
         now_unix,
+        scrypt: ScryptParams::STANDARD,
     };
     run_key_new_with_deps(&mut deps, cancel)
 }
@@ -174,6 +178,7 @@ pub fn run_key_recover(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppE
         progress,
         logger: &logger,
         now_unix,
+        scrypt: ScryptParams::STANDARD,
     };
     run_key_recover_with_deps(&mut deps, cancel)
 }
@@ -359,6 +364,7 @@ fn finish_from_mnemonic(
             salt,
             iv,
             uuid_bytes,
+            scrypt: deps.scrypt,
         })
         .map_err(map_encrypt_err)?;
 
@@ -1039,6 +1045,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
         };
         run_key_new_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -1075,6 +1082,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
         };
         run_key_recover_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -1231,6 +1239,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
         };
         let err = run_key_new_with_deps(&mut deps, &CancelToken::new()).unwrap_err();
         assert_eq!(exit_code_for(&err), 2, "err={err}");
@@ -1680,7 +1689,9 @@ mod tests {
         assert_eq!(v["version"], 4);
         assert_eq!(v["path"], "m/12381/3600/0/0/0");
         assert_eq!(v["crypto"]["kdf"]["function"], "scrypt");
-        assert_eq!(v["crypto"]["kdf"]["params"]["n"], 262_144);
+        // Unit helpers inject FAST; production N is gated by key e2e + encrypt
+        // EIP-2335 spec-vector (STANDARD).
+        assert_eq!(v["crypto"]["kdf"]["params"]["n"], ScryptParams::FAST.n);
     }
 
     #[test]
@@ -1984,6 +1995,7 @@ mod tests {
                 progress: Progress::Tty,
                 logger: &logger,
                 now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
             };
             run_key_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }
@@ -2105,6 +2117,7 @@ mod tests {
                 progress: Progress::NonTty,
                 logger: &logger,
                 now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
             };
             run_key_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }

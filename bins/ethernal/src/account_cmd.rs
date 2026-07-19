@@ -69,6 +69,9 @@ pub struct AccountDeps<'a> {
     pub logger: &'a Logger,
     /// Wall-clock for `UTC--` filenames (injectable for deterministic tests).
     pub timestamp: Timestamp,
+    /// scrypt cost for v3 encrypt. Production: [`ScryptParams::STANDARD`].
+    /// Unit tests inject [`ScryptParams::FAST`] so the suite stays snappy.
+    pub scrypt: ScryptParams,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +126,7 @@ pub fn run_account_new(cfg: &AccountConfig, cancel: &CancelToken) -> Result<(), 
         progress,
         logger: &logger,
         timestamp,
+        scrypt: ScryptParams::STANDARD,
     };
     run_account_new_with_deps(&mut deps, cancel)
 }
@@ -169,6 +173,7 @@ pub fn run_account_recover(cfg: &AccountConfig, cancel: &CancelToken) -> Result<
         progress,
         logger: &logger,
         timestamp,
+        scrypt: ScryptParams::STANDARD,
     };
     run_account_recover_with_deps(&mut deps, cancel)
 }
@@ -365,7 +370,7 @@ fn finish_from_mnemonic(
             salt,
             iv,
             uuid_bytes,
-            scrypt: ScryptParams::STANDARD,
+            scrypt: deps.scrypt,
         })
         .map_err(map_encrypt_err)?;
 
@@ -723,6 +728,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             timestamp: TS,
+            scrypt: ScryptParams::FAST,
         };
         run_account_new_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -759,6 +765,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             timestamp: TS,
+            scrypt: ScryptParams::FAST,
         };
         run_account_recover_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -831,7 +838,7 @@ mod tests {
             assert_eq!(val["address"], hex::encode(addr));
             assert_eq!(val["crypto"]["cipher"], "aes-128-ctr");
             assert_eq!(val["crypto"]["kdf"], "scrypt");
-            assert_eq!(val["crypto"]["kdfparams"]["n"], ScryptParams::STANDARD.n);
+            assert_eq!(val["crypto"]["kdfparams"]["n"], ScryptParams::FAST.n);
 
             // EIP-55 in summary.
             assert!(
@@ -847,7 +854,7 @@ mod tests {
                 salt,
                 iv,
                 uuid_bytes,
-                scrypt: ScryptParams::STANDARD,
+                scrypt: ScryptParams::FAST,
             })
             .unwrap();
             assert_eq!(body, expected, "keystore JSON mismatch at index {index}");
@@ -1226,7 +1233,7 @@ mod tests {
             salt,
             iv,
             uuid_bytes,
-            scrypt: ScryptParams::STANDARD,
+            scrypt: ScryptParams::FAST,
         })
         .unwrap();
         assert_eq!(body, expected);
@@ -1269,7 +1276,7 @@ mod tests {
             salt: [0u8; 32],
             iv: [0u8; 16],
             uuid_bytes: [0u8; 16],
-            scrypt: ScryptParams::STANDARD,
+            scrypt: ScryptParams::FAST,
         })
         .unwrap();
         assert_eq!(body, expected);
@@ -1699,6 +1706,7 @@ mod tests {
                 progress: Progress::Tty,
                 logger: &logger,
                 timestamp: TS,
+                scrypt: ScryptParams::FAST,
             };
             run_account_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }
@@ -1854,6 +1862,7 @@ mod tests {
                 progress: Progress::NonTty,
                 logger: &logger,
                 timestamp: TS,
+                scrypt: ScryptParams::FAST,
             };
             run_account_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }

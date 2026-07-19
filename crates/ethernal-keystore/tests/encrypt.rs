@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use ethernal_keystore::encrypt::{encrypt, EncryptInput};
+use ethernal_keystore::encrypt::{encrypt, EncryptInput, ScryptParams};
 use ethernal_keystore::{KeyLoader, KeystoreError, Loader};
 
 /// EIP-2335 scrypt test-vector password: mathematical-fraktur "testpassword" + 🔑.
@@ -51,6 +51,8 @@ fn encrypt_spec_vector() -> Vec<u8> {
         salt: SPEC_SALT,
         iv: SPEC_IV,
         uuid_bytes: SPEC_UUID_BYTES,
+        // Spec vector is N=2^18; must stay STANDARD for byte-identity.
+        scrypt: ScryptParams::STANDARD,
     })
     .expect("encrypt(spec vector)")
 }
@@ -137,15 +139,17 @@ fn encrypt_round_trip_through_loader() {
         salt,
         iv,
         uuid_bytes,
+        scrypt: ScryptParams::FAST,
     })
     .expect("encrypt");
 
-    // Real output shape.
+    // Real output shape (FAST profile — production N is gated by the EIP-2335
+    // spec-vector test and by key/account e2e production-path asserts).
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val["description"], "");
     assert_eq!(val["version"], 4);
     assert_eq!(val["crypto"]["kdf"]["function"], "scrypt");
-    assert_eq!(val["crypto"]["kdf"]["params"]["n"], 262144);
+    assert_eq!(val["crypto"]["kdf"]["params"]["n"], ScryptParams::FAST.n);
 
     let dir = TempDir::new("roundtrip");
     let path = dir.write("keystore.json", &bytes);
@@ -172,6 +176,7 @@ fn encrypt_wrong_passphrase_rejected() {
         salt: [0x33u8; 32],
         iv: [0x44u8; 16],
         uuid_bytes: [0x55u8; 16],
+        scrypt: ScryptParams::FAST,
     })
     .expect("encrypt");
 

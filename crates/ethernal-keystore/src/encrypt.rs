@@ -11,11 +11,9 @@ use zeroize::Zeroizing;
 use crate::crypto::{self, Aes128Ctr};
 use crate::error::KeystoreError;
 
-/// EIP-2335 scrypt profile used by staking-deposit-cli and the spec vector.
-const SCRYPT_N: u64 = 262_144;
-const SCRYPT_R: u32 = 8;
-const SCRYPT_P: u32 = 1;
-const SCRYPT_DKLEN: usize = 32;
+// Re-export so callers can depend on `encrypt::ScryptParams` without reaching
+// into the v3 module for a shared KDF profile type.
+pub use crate::encrypt_v3::ScryptParams;
 
 /// Inputs for [`encrypt`]. All randomness is caller-supplied so this function
 /// stays pure (no `Entropy`, no `keystore → core` edge).
@@ -31,6 +29,8 @@ const SCRYPT_DKLEN: usize = 32;
 /// - **Passphrase lifetime:** `password` is borrowed for the call only; keep
 ///   the source buffer in [`zeroize::Zeroizing`] (or equivalent) at the call
 ///   site so secret material is scrubbed after use.
+/// - **`scrypt`:** production must pass [`ScryptParams::STANDARD`] (N=2^18).
+///   Tests may inject [`ScryptParams::FAST`] to avoid multi-second suite times.
 pub struct EncryptInput<'a> {
     /// 32-byte BLS signing secret key (big-endian).
     pub secret: &'a [u8],
@@ -48,6 +48,8 @@ pub struct EncryptInput<'a> {
     /// 16 random bytes; formatted to a UUID v4 string inside [`encrypt`].
     /// **Must be unique and CSPRNG-fresh per keystore.**
     pub uuid_bytes: [u8; 16],
+    /// scrypt cost parameters (production: [`ScryptParams::STANDARD`]).
+    pub scrypt: ScryptParams,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,9 +101,11 @@ struct CipherParamsOut {
 
 /// Encrypts `input.secret` into an EIP-2335 v4 scrypt keystore JSON.
 ///
-/// Pipeline: normalize passphrase → scrypt `(n=262144,r=8,p=1,dklen=32)` →
-/// AES-128-CTR → `sha256(dk[16..32] ‖ ct)` checksum → serialize with fields in
-/// EIP-2335 order. `description` is always `""`; `version` is always `4`.
+/// Pipeline: normalize passphrase → scrypt `(n,r,p,dklen)` from
+/// [`EncryptInput::scrypt`] → AES-128-CTR → `sha256(dk[16..32] ‖ ct)` checksum
+/// → serialize with fields in EIP-2335 order. `description` is always `""`;
+/// `version` is always `4`. Production callers pass
+/// [`ScryptParams::STANDARD`] (`n=262144,r=8,p=1,dklen=32`).
 ///
 /// Rejects `secret` lengths other than 32 and `pubkey` lengths other than 48
 /// with [`KeystoreError::Encrypt`] (EIP-2335 BLS signing key shapes).
@@ -121,20 +125,18 @@ pub fn encrypt(input: &EncryptInput<'_>) -> Result<Vec<u8>, KeystoreError> {
         )));
     }
 
-    let normalized = crypto::normalize_passphrase(input.password);
-    let dk = crypto::derive_scrypt(
-        &normalized,
-        &input.salt,
-        SCRYPT_N,
-        SCRYPT_R,
-        SCRYPT_P,
-        SCRYPT_DKLEN,
-    )
-    .map_err(|e| encrypt_err(format!("kdf: {e}")))?;
+    let n = input.scrypt.n;
+    let r = input.scrypt.r;
+    let p = input.scrypt.p;
+    let dklen = input.scrypt.dklen;
 
-    // Belt-and-suspenders: `derive_scrypt` always returns `dklen` bytes and we
-    // pass `SCRYPT_DKLEN = 32`; kept for parity with the decrypt path where
-    // `dklen` is attacker-controlled via JSON.
+    let normalized = crypto::normalize_passphrase(input.password);
+    let dk = crypto::derive_scrypt(&normalized, &input.salt, n, r, p, dklen)
+        .map_err(|e| encrypt_err(format!("kdf: {e}")))?;
+
+    // Belt-and-suspenders: `derive_scrypt` always returns `dklen` bytes; kept
+    // for parity with the decrypt path where `dklen` is attacker-controlled
+    // via JSON.
     if dk.len() < 32 {
         return Err(encrypt_err(format!(
             "kdf: derived key too short: {} bytes, need at least 32",
@@ -155,10 +157,10 @@ pub fn encrypt(input: &EncryptInput<'_>) -> Result<Vec<u8>, KeystoreError> {
             kdf: ModuleOut {
                 function: "scrypt",
                 params: ScryptParamsOut {
-                    dklen: SCRYPT_DKLEN,
-                    n: SCRYPT_N,
-                    p: SCRYPT_P,
-                    r: SCRYPT_R,
+                    dklen,
+                    n,
+                    p,
+                    r,
                     salt: hex::encode(input.salt),
                 },
                 message: String::new(),
@@ -243,6 +245,7 @@ mod tests {
             salt: [0u8; 32],
             iv: [0u8; 16],
             uuid_bytes: [0u8; 16],
+            scrypt: ScryptParams::FAST,
         };
         let err = encrypt(&input).expect_err("short secret");
         match err {
@@ -266,6 +269,7 @@ mod tests {
             salt: [0u8; 32],
             iv: [0u8; 16],
             uuid_bytes: [0u8; 16],
+            scrypt: ScryptParams::FAST,
         };
         let err = encrypt(&input).expect_err("short pubkey");
         match err {

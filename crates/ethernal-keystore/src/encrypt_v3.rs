@@ -17,9 +17,10 @@ use crate::crypto::{self, Aes128Ctr};
 use crate::encrypt::format_uuid_v4;
 use crate::error::KeystoreError;
 
-/// scrypt cost parameters, injectable so the CI byte-gate (G3) runs at
-/// `n=8192` while production emits `n=262144` (both read-compatible — readers
-/// take `n` from JSON).
+/// scrypt cost parameters, injectable so tests/CI can use
+/// [`ScryptParams::FAST`] (`n=8192`) while production emits
+/// [`ScryptParams::STANDARD`] (`n=262144`). Both are read-compatible — readers
+/// take `n` from JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScryptParams {
     /// CPU/memory cost parameter (power of two).
@@ -33,10 +34,22 @@ pub struct ScryptParams {
 }
 
 impl ScryptParams {
-    /// geth-standard / repo profile (F-3). The CLI passes this; the byte-gate
-    /// injects `{n: 8192, r: 8, p: 1, dklen: 32}`.
+    /// geth-standard / repo profile (F-3). Production CLI encrypts with this;
+    /// readers accept any valid `n` from JSON.
     pub const STANDARD: ScryptParams = ScryptParams {
         n: 262_144,
+        r: 8,
+        p: 1,
+        dklen: 32,
+    };
+
+    /// Low-cost profile for unit/integration tests that exercise encrypt/decrypt
+    /// without paying ~1s+ per scrypt (N=2^18). Same shape as STANDARD so
+    /// production readers load the result; **never** use for real keystores.
+    ///
+    /// Matches the historical CI byte-gate `n=8192` profile.
+    pub const FAST: ScryptParams = ScryptParams {
+        n: 8192,
         r: 8,
         p: 1,
         dklen: 32,

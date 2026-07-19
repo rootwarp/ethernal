@@ -65,6 +65,35 @@ pub fn ethernal() -> Command {
     c
 }
 
+/// Like [`ethernal`], but the child runs in a **new session with no controlling
+/// terminal**.
+///
+/// Needed for tests that assert the interactive-prompt failure path
+/// (`TermPromptSource` / `NewKeystorePassphrase` open `/dev/tty`). Piping
+/// stdin/stdout via [`.output()`](std::process::Command::output) is **not**
+/// enough: the child still inherits the test runner's controlling TTY, so under
+/// an interactive `cargo test` / `make test` the prompt blocks forever waiting
+/// for a passphrase on the real terminal. `setsid(2)` drops that inheritance so
+/// `open("/dev/tty")` fails with ENXIO → `NoTty` → exit 2 naming
+/// `--passphrase-env`.
+#[cfg(unix)]
+pub fn ethernal_no_tty() -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut c = ethernal();
+    // SAFETY: pre_exec runs in the forked child between fork and exec; only
+    // async-signal-safe calls are allowed. setsid(2) is async-signal-safe.
+    unsafe {
+        c.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    c
+}
+
 // --- fixture paths ---
 
 /// The workspace `rust/testdata` directory (holds phase2/phase3/hoodi/mainnet).
