@@ -601,3 +601,58 @@ fn account_recover_help_has_no_entropy_or_time_flag() {
         "expected start-index in help: {help}"
     );
 }
+
+/// T-12·recover / E4-2 — symlinked `--output-dir` on the recover/stdin path
+/// emits the documented WARNING (`1736843`) and still writes keystores.
+#[cfg(unix)]
+#[test]
+fn account_recover_symlinked_output_dir_warns_and_writes() {
+    use std::os::unix::fs::symlink;
+
+    let base = TempDir::new("e4-2-account-symlink");
+    let real = base.join("real-out");
+    std::fs::create_dir(&real).expect("create real-out");
+    let link = base.join("link-out");
+    symlink(&real, &link).expect("symlink link-out -> real-out");
+    let resolved = std::fs::canonicalize(&real).expect("canonicalize real-out");
+
+    let (_stdout, stderr, ok) = run_account_recover(&link, 1);
+    assert!(ok, "account recover failed: stderr={stderr}");
+    assert!(
+        stderr.contains("ethernal account recover:"),
+        "banner missing: {stderr}"
+    );
+
+    let warning_lines: Vec<_> = stderr.lines().filter(|l| l.contains("WARNING")).collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "expected exactly one WARNING, got: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains("is a symlink")
+            && warning_lines[0].contains("keystores will be written to"),
+        "documented symlink warning text: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains(link.to_str().unwrap()),
+        "must name given path: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains(resolved.to_str().unwrap()),
+        "must name resolved path: {stderr}"
+    );
+
+    // Warn + still write (into the real dir via the symlink).
+    let files = v3_files(&real);
+    assert_eq!(
+        files.len(),
+        1,
+        "expected 1 keystore under real path, got {files:?}"
+    );
+    assert_eq!(
+        v3_files(&link).len(),
+        1,
+        "keystores must also be visible via symlink path"
+    );
+}
