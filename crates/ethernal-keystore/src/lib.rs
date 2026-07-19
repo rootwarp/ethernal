@@ -15,6 +15,11 @@ mod keystore;
 mod passphrase;
 mod scandir;
 
+#[cfg(feature = "test-support")]
+mod decrypt_v3;
+#[cfg(feature = "test-support")]
+pub use decrypt_v3::decrypt_v3;
+
 pub use error::KeystoreError;
 pub use keystore::{Key, KeyLoader, Loader};
 pub use passphrase::{

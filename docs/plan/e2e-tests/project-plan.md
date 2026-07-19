@@ -421,7 +421,7 @@ Consolidated here so Stage 6 does not re-open them:
 
 **v1 gate = E1–E7 merged green on `develop` (M1–M7a):**
 - [x] **M1/E1** — scrypt override in-tree; recover suite fast. → G7.
-- [ ] **M2/E2** — `decrypt_v3` merged + out-of-release invariant documented. → enables G1 (recover v3).
+- [x] **M2/E2** — `decrypt_v3` merged + out-of-release invariant documented. → enables G1 (recover v3).
 - [ ] **M3/E3** — T-3 green on every PR (recover → `decrypt_v3` round-trip + address). → G1 (recover),
   G5 (recover-path hardening reachable this stage).
 - [ ] **M4/E4** — T-12·recover green. → G5.

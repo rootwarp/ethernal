@@ -23,4 +23,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 rpassword = { workspace = true }
 
+[features]
+# Test-only surfaces (e.g. decrypt_v3). Empty feature: no extra deps.
+# Compiled out of release under resolver = "2" when enabled only via
+# consumers' [dev-dependencies] (see decrypt_v3 module header).
+test-support = []
+
 [dev-dependencies]
