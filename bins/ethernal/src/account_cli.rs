@@ -11,9 +11,10 @@ use ethernal_core::cancel::CancelToken;
 
 use crate::account_cmd;
 use crate::errors::AppError;
+use crate::fs_util;
 use crate::keystore_cli::{
-    require_tty_for_new, resolve_mnemonic_passphrase, shared_args, validate_output_dir,
-    MnemonicPassphraseForm,
+    parse_mnemonic_passphrase_form, require_tty_for_new, shared_args, MnemonicPassphraseForm,
+    START_INDEX_OVERFLOW_MSG,
 };
 
 /// Which `account` subcommand is being run.
@@ -164,7 +165,7 @@ pub fn load_config(
     // 2b. Index range must fit u32 before any ceremony/write.
     // Inclusive last index is start_index + count - 1; count ≥ 1 here.
     if start_index.checked_add(count - 1).is_none() {
-        return Err(AppError::exit2("--start-index + --count overflows u32"));
+        return Err(AppError::exit2(START_INDEX_OVERFLOW_MSG));
     }
 
     // 3. --output-dir: required existing writable directory.
@@ -175,11 +176,12 @@ pub fn load_config(
     if output_dir.is_empty() {
         return Err(AppError::exit2("--output-dir: required flag not set"));
     }
-    validate_output_dir(&output_dir).map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
-    crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
+    fs_util::validate_output_dir(&output_dir)
+        .map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
+    fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
 
     // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ env).
-    let mnemonic_passphrase = resolve_mnemonic_passphrase(m)?;
+    let mnemonic_passphrase = parse_mnemonic_passphrase_form(m)?;
 
     // 5. Keystore passphrase env var name (empty → runtime TTY prompt).
     let passphrase_env = m
@@ -459,15 +461,15 @@ mod tests {
     fn validate_output_dir_negative() {
         let dir = Tmp::new("account-cli-test");
         let missing = dir.0.join("missing");
-        let err = validate_output_dir(missing.to_str().unwrap()).unwrap_err();
+        let err = fs_util::validate_output_dir(missing.to_str().unwrap()).unwrap_err();
         assert!(err.contains("does not exist"), "{err}");
 
         let file = dir.0.join("not-dir");
         std::fs::write(&file, b"x").unwrap();
-        let err = validate_output_dir(file.to_str().unwrap()).unwrap_err();
+        let err = fs_util::validate_output_dir(file.to_str().unwrap()).unwrap_err();
         assert!(err.contains("not a directory"), "{err}");
 
-        assert!(validate_output_dir(dir.str()).is_ok());
+        assert!(fs_util::validate_output_dir(dir.str()).is_ok());
     }
 
     #[cfg(unix)]

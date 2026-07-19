@@ -1,6 +1,6 @@
 //! Secret-hygiene integration check for `validator recover` (K3-4 / S-2 / G5).
 //!
-//! Binary-level companion to the `KeyDeps` unit tests in `validator_cmd.rs`: pipe a
+//! Binary-level companion to the `ValidatorDeps` unit tests in `validator_cmd.rs`: pipe a
 //! fixed mnemonic, encrypt with `--passphrase-env`, and assert the mnemonic,
 //! seed hex, and both passphrases never appear on stderr (where progress,
 //! banner, and fatal logs go). Full injectible-logger coverage lives in the

@@ -32,7 +32,7 @@ mod validator_cmd;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use clap::Command;
 
@@ -55,6 +55,10 @@ const DATE: &str = match option_env!("ETHERNAL_DATE") {
     Some(v) => v,
     None => "unknown",
 };
+
+/// Full version string for clap (commit + build date). Built once; clap needs `&'static str`.
+static VERSION_LONG: LazyLock<String> =
+    LazyLock::new(|| format!("{VERSION} (commit={COMMIT}, built={DATE})"));
 
 /// The process-wide cancellation token, cancelled by the SIGINT handler.
 fn global_cancel() -> &'static CancelToken {
@@ -81,9 +85,7 @@ fn install_sigint_handler() {
 fn root_command() -> Command {
     Command::new("ethernal")
         .about("Generate, build, sign, and broadcast Ethereum Beacon Chain deposit transactions")
-        .version(&**Box::leak(Box::new(format!(
-            "{VERSION} (commit={COMMIT}, built={DATE})"
-        ))))
+        .version(VERSION_LONG.as_str())
         .long_about(
             "ethernal takes BLS validator keystores all the way through to a broadcast\n\
              Ethereum deposit transaction for the Beacon Chain deposit contract.\n\n\

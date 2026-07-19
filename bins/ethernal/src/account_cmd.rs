@@ -5,7 +5,7 @@
 //! full flow with [`FixedEntropy`] (test-only), scripted line sources, fixed
 //! [`Timestamp`], and buffers — no real terminal required.
 //!
-//! Differs from [`crate::validator_cmd::KeyDeps`] in the address-based summary and the
+//! Differs from [`crate::validator_cmd::ValidatorDeps`] in the address-based summary and the
 //! nanos-carrying [`Timestamp`] (geth `UTC--` filenames need 9-digit nanos).
 
 use std::io::{self, Write};
@@ -27,6 +27,7 @@ use crate::account_cli::AccountConfig;
 use crate::errors::AppError;
 use crate::fs_util::{open_tty_writer, stderr_is_tty};
 use crate::gen_cmd::Progress;
+use crate::keystore_cli::START_INDEX_OVERFLOW_MSG;
 use crate::logging::{Format, Level, Logger};
 use crate::validator_cmd::{
     check_cancel, resolve_mnemonic_passphrase, run_ceremony, MinLenPassphrase, MnemonicSource,
@@ -40,9 +41,9 @@ use crate::validator_cmd::{
 /// Wall-clock instant for geth-style `UTC--` keystore filenames.
 ///
 /// Nanos are load-bearing (9-digit fraction); this is why [`AccountDeps`] is
-/// not shared with `KeyDeps` (which only needs whole-second timestamps).
+/// not shared with `ValidatorDeps` (which only needs whole-second timestamps).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Timestamp {
+pub(crate) struct Timestamp {
     pub unix_secs: i64,
     pub nanos: u32,
 }
@@ -52,7 +53,7 @@ pub struct Timestamp {
 ///
 /// Production values come from [`run_account_new`] / [`run_account_recover`];
 /// tests replace any piece.
-pub struct AccountDeps<'a> {
+pub(crate) struct AccountDeps<'a> {
     pub cfg: &'a AccountConfig,
     /// CSPRNG for mnemonic entropy and per-keystore salt/iv/uuid.
     pub entropy: &'a dyn Entropy,
@@ -80,7 +81,7 @@ pub struct AccountDeps<'a> {
 // ---------------------------------------------------------------------------
 
 /// Production entry for `account new`: assembles real deps and runs the pipeline.
-pub fn run_account_new(cfg: &AccountConfig, cancel: &CancelToken) -> Result<(), AppError> {
+pub(crate) fn run_account_new(cfg: &AccountConfig, cancel: &CancelToken) -> Result<(), AppError> {
     let logger = Logger::stderr(Level::Info, Format::Text);
     let entropy = OsEntropy;
     let progress = if stderr_is_tty() {
@@ -133,7 +134,10 @@ pub fn run_account_new(cfg: &AccountConfig, cancel: &CancelToken) -> Result<(), 
 }
 
 /// Production entry for `account recover`: assembles real deps and runs the pipeline.
-pub fn run_account_recover(cfg: &AccountConfig, cancel: &CancelToken) -> Result<(), AppError> {
+pub(crate) fn run_account_recover(
+    cfg: &AccountConfig,
+    cancel: &CancelToken,
+) -> Result<(), AppError> {
     let logger = Logger::stderr(Level::Info, Format::Text);
     let entropy = OsEntropy;
     let progress = if stderr_is_tty() {
@@ -195,7 +199,7 @@ fn wall_clock_timestamp() -> Timestamp {
 
 /// Testable core of `account new`: entropy → mnemonic → mnemonic passphrase →
 /// ceremony → seed → derive/address/encrypt_v3/write per index.
-pub fn run_account_new_with_deps(
+pub(crate) fn run_account_new_with_deps(
     deps: &mut AccountDeps<'_>,
     cancel: &CancelToken,
 ) -> Result<(), AppError> {
@@ -261,7 +265,7 @@ pub fn run_account_new_with_deps(
 /// Testable core of `account recover`: read mnemonic (TTY/pipe) → validate →
 /// mnemonic passphrase (single-entry prompt) → seed → derive/address/encrypt/write.
 /// **No** display/re-entry ceremony (F-10).
-pub fn run_account_recover_with_deps(
+pub(crate) fn run_account_recover_with_deps(
     deps: &mut AccountDeps<'_>,
     cancel: &CancelToken,
 ) -> Result<(), AppError> {
@@ -315,7 +319,7 @@ fn finish_from_mnemonic(
     let cfg = deps.cfg;
 
     check_cancel(cancel)?;
-    let keystore_pass = Zeroizing::new(deps.keystore_pw.read().map_err(map_passphrase_err)?);
+    let keystore_pass = Zeroizing::new(deps.keystore_pw.read().map_err(map_encrypt_err)?);
 
     check_cancel(cancel)?;
     let seed = bip39::to_seed(mnemonic, mnemonic_pass).map_err(map_bip39_err)?;
@@ -330,7 +334,7 @@ fn finish_from_mnemonic(
 
         let index = start
             .checked_add(i as u32)
-            .ok_or_else(|| AppError::exit2("--start-index + --count overflows u32"))?;
+            .ok_or_else(|| AppError::exit2(START_INDEX_OVERFLOW_MSG))?;
         let path = Bip44Path::eoa(index);
         let path_str = path.to_string();
 
@@ -460,6 +464,8 @@ fn map_signer_err(e: SignerError) -> AppError {
     AppError::Signer(e)
 }
 
+/// Maps keystore/passphrase errors; exit code is selected in `exit_code_for`
+/// (encrypt → 3, passphrase validation → 2).
 fn map_encrypt_err(e: KeystoreError) -> AppError {
     AppError::Keystore(e)
 }
@@ -495,11 +501,6 @@ fn write_v3_at(
         }
         Err(e) => Err(e),
     }
-}
-
-fn map_passphrase_err(e: KeystoreError) -> AppError {
-    // PassphraseTooShort / Mismatch / EnvVarEmpty / NoTty → 2 via Keystore arm.
-    AppError::Keystore(e)
 }
 
 // ---------------------------------------------------------------------------
@@ -553,10 +554,6 @@ mod tests {
         }
     }
 
-    fn discard_logger() -> Logger {
-        Logger::discard()
-    }
-
     fn run_with(
         cfg: &AccountConfig,
         entropy: &dyn Entropy,
@@ -566,7 +563,7 @@ mod tests {
     ) -> Result<(Vec<u8>, Vec<u8>), AppError> {
         let mut tty = Vec::new();
         let mut summary = Vec::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let mut deps = AccountDeps {
             cfg,
             entropy,
@@ -603,7 +600,7 @@ mod tests {
     ) -> Result<(Vec<u8>, Vec<u8>), AppError> {
         let mut tty = Vec::new();
         let mut summary = Vec::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let mut deps = AccountDeps {
             cfg,
             entropy,

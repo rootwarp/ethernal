@@ -195,6 +195,9 @@ impl<'a> Generator<'a> {
 
         let mut entries = Vec::with_capacity(req.pubkeys.len());
 
+        // Signer pubkey is constant across the request; resolve once.
+        let signer_pub = self.signer.public_key()?;
+
         for (i, pk) in req.pubkeys.iter().enumerate() {
             // Step 0: honour cancellation before each unit of work.
             if cancel.is_cancelled() {
@@ -202,7 +205,6 @@ impl<'a> Generator<'a> {
             }
 
             // Step 1: assert that the signer's pubkey matches the requested pubkey.
-            let signer_pub = self.signer.public_key()?;
             if signer_pub != *pk {
                 return Err(DepositError::PubkeyMismatch {
                     index: i,

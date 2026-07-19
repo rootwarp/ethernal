@@ -14,6 +14,7 @@ use ethernal_core::network::{self, Network};
 use ethernal_signer::{eip55_checksum, validate_eip55_address};
 
 use crate::errors::AppError;
+use crate::fs_util;
 
 /// Holds the validated, parsed inputs from the CLI flags.
 /// Port of `cli.Config`.
@@ -219,9 +220,9 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
         if output_dir.is_empty() {
             return Err(AppError::exit2("--output-dir: required flag not set"));
         }
-        validate_output_dir(&output_dir)
+        fs_util::validate_output_dir(&output_dir)
             .map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
-        crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
+        fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
     }
 
     // 5. Validate --parallel: must be in [1, NumCPU*4].
@@ -356,24 +357,6 @@ fn validate_keystore_dir(dir: &str) -> Result<(), String> {
     std::fs::read_dir(dir)
         .map(|_| ())
         .map_err(|e| format!("cannot read keystore directory \"{dir}\": {e}"))
-}
-
-/// Checks that dir exists and the process can write to it via the shared
-/// exclusive create+remove probe ([`crate::fs_util::probe_dir_writable`]).
-fn validate_output_dir(dir: &str) -> Result<(), String> {
-    let meta = match std::fs::metadata(dir) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("directory \"{dir}\" does not exist"));
-        }
-        Err(e) => return Err(format!("cannot stat directory \"{dir}\": {e}")),
-    };
-    if !meta.is_dir() {
-        return Err(format!("\"{dir}\" is not a directory"));
-    }
-
-    crate::fs_util::probe_dir_writable(Path::new(dir))
-        .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
 }
 
 /// The network name for display in the banner. Mainnet is shown in uppercase

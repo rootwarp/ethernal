@@ -76,7 +76,7 @@ fn load_pubkeys_fixture() -> PubkeysFixture {
 }
 
 /// Run `validator recover` with the fixed mnemonic over stdin; return stderr.
-fn run_key_recover(out_dir: &Path, count: u32) -> String {
+fn run_validator_recover(out_dir: &Path, count: u32) -> String {
     let ks_var = format!("ETHERNAL_K4_KS_{}", std::process::id());
     let mp_var = format!("ETHERNAL_K4_MP_{}", std::process::id());
 
@@ -197,7 +197,7 @@ fn recover_seed_and_pubkeys_match_fixture() {
 fn validator_recover_keystores_match_fixture_and_loader_round_trip() {
     let fx = load_pubkeys_fixture();
     let dir = TempDir::new("k4-recover");
-    run_key_recover(dir.path(), COUNT);
+    run_validator_recover(dir.path(), COUNT);
 
     let files = keystore_files(dir.path());
     assert_eq!(
@@ -256,7 +256,7 @@ fn validator_recover_keystores_match_fixture_and_loader_round_trip() {
 fn validator_recover_then_gen_deposit_data_byte_stable() {
     let fx = load_pubkeys_fixture();
     let dir = TempDir::new("k4-e2e");
-    run_key_recover(dir.path(), COUNT);
+    run_validator_recover(dir.path(), COUNT);
 
     let pubkeys_csv: String = fx
         .indices
@@ -343,7 +343,7 @@ fn validator_recover_then_gen_deposit_data_byte_stable() {
 #[test]
 fn validator_recover_batch_salt_iv_uuid_pairwise_distinct() {
     let dir = TempDir::new("g4-key-batch");
-    run_key_recover(dir.path(), 3);
+    run_validator_recover(dir.path(), 3);
 
     let files = keystore_files(dir.path());
     assert_eq!(files.len(), 3, "expected 3 keystores, got {files:?}");
@@ -439,7 +439,7 @@ fn validator_recover_symlinked_output_dir_warns_and_writes() {
     symlink(&real, &link).expect("symlink link-out -> real-out");
     let resolved = std::fs::canonicalize(&real).expect("canonicalize real-out");
 
-    let stderr = run_key_recover(&link, 1);
+    let stderr = run_validator_recover(&link, 1);
 
     let warning_lines: Vec<_> = stderr.lines().filter(|l| l.contains("WARNING")).collect();
     assert_eq!(

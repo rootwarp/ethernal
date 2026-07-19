@@ -10,9 +10,10 @@ use clap::{Arg, ArgMatches, Command};
 use ethernal_core::cancel::CancelToken;
 
 use crate::errors::AppError;
+use crate::fs_util;
 use crate::keystore_cli::{
-    require_tty_for_new, resolve_mnemonic_passphrase, shared_args, validate_output_dir,
-    MnemonicPassphraseForm,
+    parse_mnemonic_passphrase_form, require_tty_for_new, shared_args, MnemonicPassphraseForm,
+    START_INDEX_OVERFLOW_MSG,
 };
 use crate::validator_cmd;
 
@@ -119,7 +120,7 @@ pub fn run_new(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
 
     let mut stderr = std::io::stderr();
     let cfg = load_config(m, ValidatorMode::New, &mut stderr)?;
-    validator_cmd::run_key_new(&cfg, cancel)
+    validator_cmd::run_validator_new(&cfg, cancel)
 }
 
 /// `validator recover` entry: validate config, then read mnemonic (TTY or pipe) →
@@ -127,7 +128,7 @@ pub fn run_new(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
 pub fn run_recover(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
     let mut stderr = std::io::stderr();
     let cfg = load_config(m, ValidatorMode::Recover, &mut stderr)?;
-    validator_cmd::run_key_recover(&cfg, cancel)
+    validator_cmd::run_validator_recover(&cfg, cancel)
 }
 
 /// Builds a validated [`ValidatorConfig`] from parsed flags.
@@ -156,7 +157,7 @@ pub fn load_config(
     // 2b. Index range must fit u32 before any ceremony/write (K3-L2). The
     // inclusive last index is start_index + count - 1; count ≥ 1 here.
     if start_index.checked_add(count - 1).is_none() {
-        return Err(AppError::exit2("--start-index + --count overflows u32"));
+        return Err(AppError::exit2(START_INDEX_OVERFLOW_MSG));
     }
 
     // 3. --output-dir: required existing writable directory.
@@ -167,12 +168,13 @@ pub fn load_config(
     if output_dir.is_empty() {
         return Err(AppError::exit2("--output-dir: required flag not set"));
     }
-    validate_output_dir(&output_dir).map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
-    crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
+    fs_util::validate_output_dir(&output_dir)
+        .map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
+    fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
 
     // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ env).
     // Bare vs value is num_args(0..=1); absent both → empty. Values Zeroizing'd on read.
-    let mnemonic_passphrase = resolve_mnemonic_passphrase(m)?;
+    let mnemonic_passphrase = parse_mnemonic_passphrase_form(m)?;
 
     // 5. Keystore passphrase env var name (empty → runtime TTY prompt).
     let passphrase_env = m

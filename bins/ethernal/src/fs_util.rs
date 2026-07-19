@@ -105,6 +105,24 @@ pub(crate) fn probe_dir_writable(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Checks that `dir` exists and the process can write to it via the shared
+/// exclusive create+remove probe ([`probe_dir_writable`]).
+pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
+    let meta = match std::fs::metadata(dir) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("directory \"{dir}\" does not exist"));
+        }
+        Err(e) => return Err(format!("cannot stat directory \"{dir}\": {e}")),
+    };
+    if !meta.is_dir() {
+        return Err(format!("\"{dir}\" is not a directory"));
+    }
+
+    probe_dir_writable(Path::new(dir))
+        .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +134,22 @@ mod tests {
         probe_dir_writable(&dir.0).expect("writable dir");
         // No leftover probe.
         assert!(!probe_path(&dir.0).exists());
+    }
+
+    #[test]
+    fn validate_output_dir_negative() {
+        let dir = Tmp::new("ethernal-fs-util");
+        let missing = dir.0.join("missing");
+        let err = validate_output_dir(missing.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+
+        let file = dir.0.join("not-dir");
+        std::fs::write(&file, b"x").unwrap();
+        let err = validate_output_dir(file.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("not a directory"), "{err}");
+
+        // Happy path: existing writable dir.
+        assert!(validate_output_dir(dir.str()).is_ok());
     }
 
     #[cfg(unix)]

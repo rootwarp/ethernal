@@ -4,13 +4,15 @@
 //! passphrase input so neither namespace owns the other's helpers.
 
 use std::fmt;
-use std::path::Path;
 
 use clap::{Arg, ArgMatches};
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
 use crate::fs_util::{stdin_is_tty, stdout_is_tty};
+
+/// Shared overflow message for `--start-index + --count` range checks.
+pub(crate) const START_INDEX_OVERFLOW_MSG: &str = "--start-index + --count overflows u32";
 
 /// The three-form BIP-39 mnemonic passphrase input (F-12 / architecture design
 /// note (c)). Distinct from the keystore passphrase (`--passphrase-env`).
@@ -21,7 +23,7 @@ use crate::fs_util::{stdin_is_tty, stdout_is_tty};
 /// Secret payloads (`Raw` / `Env::value`) are wrapped in [`Zeroizing`] on read
 /// (S-1 / design note (c)). [`Debug`] redacts those fields (S-2).
 #[derive(Clone, PartialEq, Eq)]
-pub enum MnemonicPassphraseForm {
+pub(crate) enum MnemonicPassphraseForm {
     /// Neither flag supplied — empty mnemonic passphrase (default).
     Empty,
     /// `--mnemonic-passphrase VALUE` raw argv value.
@@ -97,7 +99,7 @@ pub(crate) fn shared_args() -> Vec<Arg> {
 }
 
 /// Rejects non-interactive `new` (validator or account); stdin and stdout must both be TTYs.
-pub fn require_tty_for_new() -> Result<(), AppError> {
+pub(crate) fn require_tty_for_new() -> Result<(), AppError> {
     if stdin_is_tty() && stdout_is_tty() {
         return Ok(());
     }
@@ -107,7 +109,7 @@ pub fn require_tty_for_new() -> Result<(), AppError> {
     ))
 }
 
-/// Resolves the three mnemonic-passphrase forms into a [`MnemonicPassphraseForm`].
+/// Parses the three mnemonic-passphrase CLI forms into a [`MnemonicPassphraseForm`].
 ///
 /// Forms are mutually exclusive at the clap layer (`conflicts_with`), so only
 /// one branch can fire:
@@ -115,7 +117,9 @@ pub fn require_tty_for_new() -> Result<(), AppError> {
 /// - bare `--mnemonic-passphrase` → [`Prompt`]
 /// - `--mnemonic-passphrase-env VAR` → read env (unset → exit 2; empty OK) → [`Env`]
 /// - neither → [`Empty`]
-pub(crate) fn resolve_mnemonic_passphrase(
+///
+/// Distinct from the secret-resolving [`crate::validator_cmd::resolve_mnemonic_passphrase`].
+pub(crate) fn parse_mnemonic_passphrase_form(
     m: &ArgMatches,
 ) -> Result<MnemonicPassphraseForm, AppError> {
     // Env form (mutually exclusive with the raw/prompt flag via conflicts_with).
@@ -147,44 +151,9 @@ pub(crate) fn resolve_mnemonic_passphrase(
     Ok(MnemonicPassphraseForm::Empty)
 }
 
-/// Checks that dir exists and the process can write to it via the shared
-/// exclusive create+remove probe ([`crate::fs_util::probe_dir_writable`]).
-pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
-    let meta = match std::fs::metadata(dir) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("directory \"{dir}\" does not exist"));
-        }
-        Err(e) => return Err(format!("cannot stat directory \"{dir}\": {e}")),
-    };
-    if !meta.is_dir() {
-        return Err(format!("\"{dir}\" is not a directory"));
-    }
-
-    crate::fs_util::probe_dir_writable(Path::new(dir))
-        .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::Tmp;
-
-    #[test]
-    fn validate_output_dir_negative() {
-        let dir = Tmp::new("keystore-cli-test");
-        let missing = dir.0.join("missing");
-        let err = validate_output_dir(missing.to_str().unwrap()).unwrap_err();
-        assert!(err.contains("does not exist"), "{err}");
-
-        let file = dir.0.join("not-dir");
-        std::fs::write(&file, b"x").unwrap();
-        let err = validate_output_dir(file.to_str().unwrap()).unwrap_err();
-        assert!(err.contains("not a directory"), "{err}");
-
-        // Happy path: existing writable dir.
-        assert!(validate_output_dir(dir.str()).is_ok());
-    }
 
     #[test]
     fn mnemonic_passphrase_debug_redacts_secrets() {

@@ -44,8 +44,7 @@ pub fn make_valid_config() -> BuildConfig<'static> {
     }
 }
 
-type TipFn = Box<dyn Fn() -> Result<u128, RpcClientError>>;
-type BaseFeeFn = Box<dyn Fn() -> Result<u128, RpcClientError>>;
+type U128Fn = Box<dyn Fn() -> Result<u128, RpcClientError>>;
 type NonceFn = Box<dyn Fn([u8; 20]) -> Result<u64, RpcClientError>>;
 type EstimateFn = Box<dyn Fn(&CallMsg) -> Result<u64, RpcClientError>>;
 type ChainIdFn = Box<dyn Fn() -> Result<u64, RpcClientError>>;
@@ -54,8 +53,8 @@ type ChainIdFn = Box<dyn Fn() -> Result<u64, RpcClientError>>;
 /// pattern. Set each `*_fn` to control per-call behavior; an unset field panics
 /// when called, matching the Go mock.
 pub struct MockRpc {
-    pub suggest_gas_tip_cap_fn: Option<TipFn>,
-    pub block_base_fee_fn: Option<BaseFeeFn>,
+    pub suggest_gas_tip_cap_fn: Option<U128Fn>,
+    pub block_base_fee_fn: Option<U128Fn>,
     pub pending_nonce_at_fn: Option<NonceFn>,
     pub estimate_gas_fn: Option<EstimateFn>,
     pub chain_id_fn: Option<ChainIdFn>,

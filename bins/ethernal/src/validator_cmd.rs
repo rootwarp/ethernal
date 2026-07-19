@@ -1,8 +1,8 @@
 //! `validator new` / `validator recover` runtime: ceremony (new only) + derive → encrypt →
 //! write pipeline.
 //!
-//! Dependencies are injectable via [`KeyDeps`] so unit tests can drive the
-//! full flow with [`FixedEntropy`] (test-only), scripted line sources, and
+//! Dependencies are injectable via [`ValidatorDeps`] so unit tests can drive the
+//! full flow with fixed entropy (test-only), scripted line sources, and
 //! buffers — no real terminal required.
 
 use std::io::{self, Read, Write};
@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 use crate::errors::AppError;
 use crate::fs_util::{open_tty_writer, stderr_is_tty, stdin_is_tty};
 use crate::gen_cmd::Progress;
-use crate::keystore_cli::MnemonicPassphraseForm;
+use crate::keystore_cli::{MnemonicPassphraseForm, START_INDEX_OVERFLOW_MSG};
 use crate::logging::{Format, Level, Logger};
 use crate::validator_cli::ValidatorConfig;
 
@@ -36,7 +36,7 @@ use crate::validator_cli::ValidatorConfig;
 /// passphrase prompt (with confirm), and the mismatch retry/abort question.
 ///
 /// Production uses a TTY-backed source; tests inject scripted answers.
-pub trait MnemonicSource: Sync {
+pub(crate) trait MnemonicSource: Sync {
     /// Writes `prompt` (implementation-defined sink) and returns one line of
     /// input with trailing CR/LF stripped. Used for ceremony re-entry and
     /// retry/abort (multi-word paste; echo may remain on).
@@ -50,10 +50,10 @@ pub trait MnemonicSource: Sync {
     }
 }
 
-/// Injectable dependencies for [`run_key_new_with_deps`].
+/// Injectable dependencies for [`run_validator_new_with_deps`].
 ///
-/// Production values come from [`run_key_new`]; tests replace any piece.
-pub struct KeyDeps<'a> {
+/// Production values come from [`run_validator_new`]; tests replace any piece.
+pub(crate) struct ValidatorDeps<'a> {
     pub cfg: &'a ValidatorConfig,
     /// CSPRNG for mnemonic entropy and per-keystore salt/iv/uuid.
     pub entropy: &'a dyn Entropy,
@@ -80,7 +80,10 @@ pub struct KeyDeps<'a> {
 // ---------------------------------------------------------------------------
 
 /// Production entry for `validator new`: assembles real deps and runs the pipeline.
-pub fn run_key_new(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<(), AppError> {
+pub(crate) fn run_validator_new(
+    cfg: &ValidatorConfig,
+    cancel: &CancelToken,
+) -> Result<(), AppError> {
     let logger = Logger::stderr(Level::Info, Format::Text);
     let entropy = OsEntropy;
     let progress = if stderr_is_tty() {
@@ -120,7 +123,7 @@ pub fn run_key_new(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<(), Ap
     })?;
     let mut summary_out = std::io::stderr();
 
-    let mut deps = KeyDeps {
+    let mut deps = ValidatorDeps {
         cfg,
         entropy: &entropy,
         keystore_pw,
@@ -132,12 +135,15 @@ pub fn run_key_new(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<(), Ap
         now_unix,
         scrypt: ScryptParams::STANDARD,
     };
-    run_key_new_with_deps(&mut deps, cancel)
+    run_validator_new_with_deps(&mut deps, cancel)
 }
 
 /// Production entry for `validator recover`: read existing mnemonic (TTY or pipe),
 /// validate, then derive → encrypt → write (no ceremony).
-pub fn run_key_recover(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<(), AppError> {
+pub(crate) fn run_validator_recover(
+    cfg: &ValidatorConfig,
+    cancel: &CancelToken,
+) -> Result<(), AppError> {
     let logger = Logger::stderr(Level::Info, Format::Text);
     let entropy = OsEntropy;
     let progress = if stderr_is_tty() {
@@ -170,7 +176,7 @@ pub fn run_key_recover(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<()
     let mut tty_writer = io::sink();
     let mut summary_out = std::io::stderr();
 
-    let mut deps = KeyDeps {
+    let mut deps = ValidatorDeps {
         cfg,
         entropy: &entropy,
         keystore_pw,
@@ -182,7 +188,7 @@ pub fn run_key_recover(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<()
         now_unix,
         scrypt: ScryptParams::STANDARD,
     };
-    run_key_recover_with_deps(&mut deps, cancel)
+    run_validator_recover_with_deps(&mut deps, cancel)
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +197,10 @@ pub fn run_key_recover(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<()
 
 /// Testable core of `validator new`: entropy → mnemonic → mnemonic passphrase →
 /// ceremony → seed → derive/encrypt/write per index.
-pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Result<(), AppError> {
+pub(crate) fn run_validator_new_with_deps(
+    deps: &mut ValidatorDeps<'_>,
+    cancel: &CancelToken,
+) -> Result<(), AppError> {
     let log = deps.logger;
     let cfg = deps.cfg;
 
@@ -254,8 +263,8 @@ pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Re
 /// Testable core of `validator recover`: read mnemonic (TTY/pipe) → validate →
 /// mnemonic passphrase (single-entry prompt) → seed → derive/encrypt/write.
 /// **No** display/re-entry ceremony (F-10).
-pub fn run_key_recover_with_deps(
-    deps: &mut KeyDeps<'_>,
+pub(crate) fn run_validator_recover_with_deps(
+    deps: &mut ValidatorDeps<'_>,
     cancel: &CancelToken,
 ) -> Result<(), AppError> {
     let log = deps.logger;
@@ -295,7 +304,7 @@ pub fn run_key_recover_with_deps(
 
 /// Shared tail: keystore passphrase → to_seed → per-index derive/encrypt/write.
 fn finish_from_mnemonic(
-    deps: &mut KeyDeps<'_>,
+    deps: &mut ValidatorDeps<'_>,
     cancel: &CancelToken,
     mnemonic: &str,
     mnemonic_pass: &[u8],
@@ -305,7 +314,7 @@ fn finish_from_mnemonic(
     let cfg = deps.cfg;
 
     check_cancel(cancel)?;
-    let keystore_pass = Zeroizing::new(deps.keystore_pw.read().map_err(map_passphrase_err)?);
+    let keystore_pass = Zeroizing::new(deps.keystore_pw.read().map_err(map_encrypt_err)?);
 
     check_cancel(cancel)?;
     let seed = bip39::to_seed(mnemonic, mnemonic_pass).map_err(map_bip39_err)?;
@@ -320,7 +329,7 @@ fn finish_from_mnemonic(
 
         let index = start
             .checked_add(i as u32)
-            .ok_or_else(|| AppError::exit2("--start-index + --count overflows u32"))?;
+            .ok_or_else(|| AppError::exit2(START_INDEX_OVERFLOW_MSG))?;
         let path = KeyPath::signing(index);
         let path_str = path.to_string();
 
@@ -604,8 +613,9 @@ fn map_hd_err(e: hd::HdError) -> AppError {
     AppError::Hd(e)
 }
 
+/// Maps keystore/passphrase errors; exit code is selected in `exit_code_for`
+/// (encrypt → 3, passphrase validation → 2).
 fn map_encrypt_err(e: KeystoreError) -> AppError {
-    // Typed Keystore(Encrypt) → exit 3 via exit_code_for (K3-4).
     AppError::Keystore(e)
 }
 
@@ -640,11 +650,6 @@ fn write_keystore_at(
         }
         Err(e) => Err(e),
     }
-}
-
-fn map_passphrase_err(e: KeystoreError) -> AppError {
-    // PassphraseTooShort / Mismatch / EnvVarEmpty / NoTty → 2 via Keystore arm.
-    AppError::Keystore(e)
 }
 
 // ---------------------------------------------------------------------------
@@ -866,10 +871,6 @@ mod tests {
         }
     }
 
-    fn discard_logger() -> Logger {
-        Logger::discard()
-    }
-
     fn run_with(
         cfg: &ValidatorConfig,
         entropy: &dyn Entropy,
@@ -879,8 +880,8 @@ mod tests {
     ) -> Result<(Vec<u8>, Vec<u8>), AppError> {
         let mut tty = Vec::new();
         let mut summary = Vec::new();
-        let logger = discard_logger();
-        let mut deps = KeyDeps {
+        let logger = Logger::discard();
+        let mut deps = ValidatorDeps {
             cfg,
             entropy,
             keystore_pw,
@@ -892,7 +893,7 @@ mod tests {
             now_unix: 1_700_000_000,
             scrypt: ScryptParams::FAST,
         };
-        run_key_new_with_deps(&mut deps, cancel)?;
+        run_validator_new_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
     }
 
@@ -916,8 +917,8 @@ mod tests {
     ) -> Result<(Vec<u8>, Vec<u8>), AppError> {
         let mut tty = Vec::new();
         let mut summary = Vec::new();
-        let logger = discard_logger();
-        let mut deps = KeyDeps {
+        let logger = Logger::discard();
+        let mut deps = ValidatorDeps {
             cfg,
             entropy,
             keystore_pw,
@@ -929,7 +930,7 @@ mod tests {
             now_unix: 1_700_000_000,
             scrypt: ScryptParams::FAST,
         };
-        run_key_recover_with_deps(&mut deps, cancel)?;
+        run_validator_recover_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
     }
 
@@ -1073,8 +1074,8 @@ mod tests {
         let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
         let mut tty = FailWrite;
         let mut summary = Vec::new();
-        let logger = discard_logger();
-        let mut deps = KeyDeps {
+        let logger = Logger::discard();
+        let mut deps = ValidatorDeps {
             cfg: &cfg,
             entropy: &entropy,
             keystore_pw: &pw,
@@ -1086,7 +1087,7 @@ mod tests {
             now_unix: 1_700_000_000,
             scrypt: ScryptParams::FAST,
         };
-        let err = run_key_new_with_deps(&mut deps, &CancelToken::new()).unwrap_err();
+        let err = run_validator_new_with_deps(&mut deps, &CancelToken::new()).unwrap_err();
         assert_eq!(exit_code_for(&err), 2, "err={err}");
         assert!(
             err.to_string().contains("display mnemonic") || err.to_string().contains("terminal"),
@@ -1834,7 +1835,7 @@ mod tests {
             Box::new(SharedWriter(Arc::clone(&logbuf))),
         );
         {
-            let mut deps = KeyDeps {
+            let mut deps = ValidatorDeps {
                 cfg: &cfg,
                 entropy: &entropy,
                 keystore_pw: &pw,
@@ -1846,7 +1847,7 @@ mod tests {
                 now_unix: 1_700_000_000,
                 scrypt: ScryptParams::FAST,
             };
-            run_key_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+            run_validator_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }
 
         let tty_s = String::from_utf8(tty).expect("tty utf8");
@@ -1956,7 +1957,7 @@ mod tests {
             Box::new(SharedWriter(Arc::clone(&logbuf))),
         );
         {
-            let mut deps = KeyDeps {
+            let mut deps = ValidatorDeps {
                 cfg: &cfg,
                 entropy: &entropy,
                 keystore_pw: &pw,
@@ -1968,7 +1969,7 @@ mod tests {
                 now_unix: 1_700_000_000,
                 scrypt: ScryptParams::FAST,
             };
-            run_key_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+            run_validator_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }
 
         let tty_s = String::from_utf8(tty).unwrap();

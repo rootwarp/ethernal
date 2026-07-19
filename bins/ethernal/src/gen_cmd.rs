@@ -607,10 +607,6 @@ mod tests {
         }
     }
 
-    fn discard_logger() -> Logger {
-        Logger::new(Level::Error, Format::Text, Box::new(std::io::sink()))
-    }
-
     /// N distinct pubkeys where `pk[i][0] == i+1`.
     fn multi_pks(n: usize) -> Vec<[u8; 48]> {
         (0..n)
@@ -707,7 +703,7 @@ mod tests {
             err: false,
         };
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -763,7 +759,7 @@ mod tests {
         };
         let verify = |_: &str, _: &str| Ok(());
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let mut cfg = base_cfg(pks);
         cfg_mut(&mut cfg);
         let mut deps = GenDeps {
@@ -898,7 +894,7 @@ mod tests {
         };
         let verify = |_: &str, _: &str| Ok(());
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let cfg = base_cfg(vec![wrong]);
         let mut deps = GenDeps {
             init_bls: &init_bls,
@@ -1079,7 +1075,7 @@ mod tests {
         };
         let mut dry = DryRunWriter::new(Vec::<u8>::new());
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1171,7 +1167,7 @@ mod tests {
         let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
         let mut dry = DryRunWriter::new(SharedWriter(Arc::clone(&buf)));
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1229,7 +1225,7 @@ mod tests {
                 entries: Arc::clone(&captured),
             };
             let mut summary = Vec::<u8>::new();
-            let logger = discard_logger();
+            let logger = Logger::discard();
             let init_bls = || Ok(());
             let scanner = move |_: &Path| Ok(idx.clone());
             let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1302,7 +1298,7 @@ mod tests {
             err: false,
         };
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1375,7 +1371,7 @@ mod tests {
             }))
         };
         let verify = |_: &str, _: &str| Ok(());
-        let logger = discard_logger();
+        let logger = Logger::discard();
 
         // Repeat under max parallelism so first-received selection would flake.
         for _ in 0..20 {
@@ -1631,7 +1627,7 @@ mod tests {
             }))
         };
         let verify = |_: &str, _: &str| Ok(());
-        let logger = discard_logger();
+        let logger = Logger::discard();
 
         // (a) all-zero placeholder (default_withdrawal_creds / future non-CLI path).
         {

@@ -70,7 +70,7 @@ conventions) and an **executable process** (phases, gates, backlog).
 **What is already good (do not “fix”):**
 
 - Library SRP and dep-minimality.
-- Injectable `GenDeps` / `KeyDeps` / `AccountDeps` (testability without mocks framework).
+- Injectable `GenDeps` / `ValidatorDeps` / `AccountDeps` (testability without mocks framework).
 - Security domain separation (BLS vs secp; EIP-2335 NFKD vs v3 RAW passphrase).
 - Exit-code contract documented and tested.
 - Verify-before-write, secret zeroization, RPC URL redaction, EIP-55 no-echo.
@@ -108,7 +108,7 @@ conventions) and an **executable process** (phases, gates, backlog).
 | Area | Status | Notes |
 |------|--------|-------|
 | Small traits | **Strong** | `MnemonicSource`, `PassphraseSource`, `Entropy`, `KeyLoader`, `Signer`. |
-| Fat deps structs | **Acceptable** | `GenDeps` / `KeyDeps` / `AccountDeps` bundle seams for one pipeline; do not flatten into a mega-struct (T3.3). |
+| Fat deps structs | **Acceptable** | `GenDeps` / `ValidatorDeps` / `AccountDeps` bundle seams for one pipeline; do not flatten into a mega-struct (T3.3). |
 
 ### D — Dependency Inversion
 
@@ -189,7 +189,7 @@ Relocating `#[cfg(test)]` to sibling `*_tests.rs` (T2.7) is pure packaging — n
 
 | Gap | Evidence | Fix |
 |-----|----------|-----|
-| Incomplete `key → validator` rename | `run_key_new`, `KeyDeps` still | T1.6 |
+| Incomplete `key → validator` rename | `run_validator_new`, `ValidatorDeps` still | T1.6 |
 | Name collision | CLI `resolve_mnemonic_passphrase` (parse) vs cmd (resolve secrets) | T1.7 → `parse_mnemonic_passphrase_form` |
 | `pub` vs `pub(crate)` in bin | 61 `pub fn` vs 15 `pub(crate) fn`; bin has no external API | Prefer `pub(crate)` for bin surface (T1.8f) |
 | Dead field | `Params::default_rpc_url` always `""` | T1.8a |
@@ -259,20 +259,20 @@ Phase 4  Judgment          Tier 3 only if still wanted after 1–3
 
 1. **T1.1** shared `test_support` (unblocks clean later work) — **done**
 2. **T1.2** TTY helpers — **done**
-3. **T1.3–T1.8** remaining cleanups (can be one PR or split rename T1.6 alone)
+3. **T1.3–T1.8** remaining cleanups — **done**
 
 | ID | Change | Effort | Risk |
 |----|--------|:------:|:----:|
 | T1.1 | ✅ `#[cfg(test)] mod test_support` — `Tmp`, `ENV_LOCK`, keygen fakes | M | low |
 | T1.2 | ✅ Shared `stderr_is_tty` / `stdin_is_tty` / `open_tty_writer` | S | low |
-| T1.3 | Single `validate_output_dir` in `fs_util` | S | low |
-| T1.4 | Collapse identical `map_*` pairs per file | S | low |
-| T1.5 | Drop `discard_logger` wrappers | S | low |
-| T1.6 | `run_key_*` → `run_validator_*`, `KeyDeps` → `ValidatorDeps` | S | low |
-| T1.7 | Parser rename `parse_mnemonic_passphrase_form` | S | low |
-| T1.8 | Dead field, overflow msg const, version `LazyLock`, hoist `public_key`, `pub(crate)`, … | S | low |
+| T1.3 | ✅ Single `validate_output_dir` in `fs_util` | S | low |
+| T1.4 | ✅ Collapse identical `map_*` pairs per file | S | low |
+| T1.5 | ✅ Drop `discard_logger` wrappers | S | low |
+| T1.6 | ✅ `run_key_*` → `run_validator_*`, `KeyDeps` → `ValidatorDeps` | S | low |
+| T1.7 | ✅ Parser rename `parse_mnemonic_passphrase_form` | S | low |
+| T1.8 | ✅ Dead field, overflow msg const, version `LazyLock`, hoist `public_key`, `pub(crate)`, … | S | low |
 
-**Exit criteria:** no duplicate `Tmp` / TTY helpers / `validate_output_dir`; rename complete; `make lint` + `make test` green.
+**Exit criteria:** no duplicate `Tmp` / TTY helpers / `validate_output_dir`; rename complete; `make lint` + `make test` green. — **Phase 1 met**
 
 #### Phase 2 — Structural shared homes (one PR per item recommended)
 
@@ -345,7 +345,7 @@ T2.2 (write_with_retry)             ── independent (or after T2.1)
 |--------|-------|-------------------------|
 | Duplicate `struct Tmp` in bin | 8 | 1 (`test_support`) — **achieved** |
 | `account_cmd` → `validator_cmd` imports | yes | none |
-| `run_key_*` / `KeyDeps` names | present | gone |
+| `run_key_*` / `KeyDeps` names | present | gone — **achieved** (`run_validator_*` / `ValidatorDeps`) |
 | Bin files >1500 LOC with >50% tests | 3 | 0 (tests relocated) |
 | Identical TTY helpers | 3 copies | 1 module — **achieved** |
 | `make lint` / `make test` | green | stay green |
@@ -411,6 +411,11 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 
 **Change.** Hoist to `fs_util` next to `probe_dir_writable`. Do **not** have `gen_cli` call `keystore_cli` (wrong domain coupling).
 
+- [x] `validate_output_dir` only in `fs_util`
+- [x] `keystore_cli` + `gen_cli` (+ account/validator CLI) call `fs_util::validate_output_dir`
+- [x] No `gen_cli` → `keystore_cli` coupling for this helper
+- [x] `make lint` and `make test` green
+
 **Risk:** low. **Effort:** S.
 
 #### T1.4 — Collapse identical `map_encrypt_err` / `map_passphrase_err`
@@ -418,6 +423,10 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 **Evidence.** Same body `AppError::Keystore(e)` in both cmd files; exit-code split is in `exit_code_for`.
 
 **Change.** One mapper per file. **Do not** replace `map_write_err` with `AppError::from` — that yields exit 1 and breaks keystore write → 3.
+
+- [x] One `map_encrypt_err` per cmd file (`validator_cmd`, `account_cmd`); `map_passphrase_err` removed
+- [x] `map_write_err` preserved (exit 3)
+- [x] `make lint` and `make test` green
 
 **Risk:** low. **Effort:** S.
 
@@ -427,6 +436,11 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 
 **Change.** Call `Logger::discard()` directly. Keep `#[allow(dead_code)]` on `discard` for non-test builds.
 
+- [x] No `discard_logger` wrappers
+- [x] `Logger::discard()` used directly in gen/validator/account cmd tests
+- [x] `#[allow(dead_code)]` retained on `Logger::discard`
+- [x] `make lint` and `make test` green
+
 **Risk:** low. **Effort:** S.
 
 #### T1.6 — Finish `key → validator` rename
@@ -435,6 +449,11 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 
 **Change.** Rename to `run_validator_*`, `ValidatorDeps`; update CLI call sites and docs. Leave library `KeyPath` / `KeyLoader` alone.
 
+- [x] `run_key_*` / `KeyDeps` gone; `run_validator_*` / `ValidatorDeps` present
+- [x] CLI call sites and docs updated
+- [x] Library `KeyPath` / `KeyLoader` untouched
+- [x] `make lint` and `make test` green
+
 **Risk:** low. **Effort:** S.
 
 #### T1.7 — Disambiguate `resolve_mnemonic_passphrase`
@@ -442,6 +461,10 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 **Evidence.** Parser in `keystore_cli` vs secret resolver in `validator_cmd` share one name.
 
 **Change.** Parser → `parse_mnemonic_passphrase_form`. Leave cmd resolver name/behavior.
+
+- [x] Parser renamed `parse_mnemonic_passphrase_form`
+- [x] Cmd secret resolver still `resolve_mnemonic_passphrase`
+- [x] `make lint` and `make test` green
 
 **Risk:** low. **Effort:** S.
 
@@ -455,6 +478,9 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 | d | `signer.public_key()` in deposit loop | Hoist before loop |
 | e | Identical `TipFn`/`BaseFeeFn` aliases | Optional `U128Fn` |
 | f | `pub` vs `pub(crate)` in bin | Prefer `pub(crate)` for cmd surface |
+
+- [x] a–f applied (`U128Fn` for tip/base-fee; cmd surface `pub(crate)`)
+- [x] `make lint` and `make test` green
 
 **Risk:** low. **Effort:** S.
 
@@ -594,3 +620,4 @@ Trivial wrappers; intentional stack separation.
 | 2026-07-19 | Added SOLID assessment, conventions baseline, phased process, success metrics; re-validated evidence against tree (`Tmp`×8, sideways import, `run_key_*`, `Box::leak`, dead `default_rpc_url`) |
 | 2026-07-19 | T1.1 landed: shared `test_support` (`Tmp`, `ENV_LOCK`, keygen fakes) |
 | 2026-07-19 | T1.2 landed: TTY helpers centralized in `fs_util` |
+| 2026-07-19 | T1.3–T1.8 landed: `validate_output_dir` hoist, map collapse, discard_logger removal, `run_validator_*`/`ValidatorDeps`, parser rename, local cleanups a–f |
