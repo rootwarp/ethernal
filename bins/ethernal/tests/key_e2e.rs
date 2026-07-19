@@ -75,8 +75,8 @@ fn load_pubkeys_fixture() -> PubkeysFixture {
     serde_json::from_str(&raw).expect("parse pubkeys.json")
 }
 
-/// Run `key recover` with the fixed mnemonic over stdin; return the output dir.
-fn run_key_recover(out_dir: &Path, count: u32) {
+/// Run `key recover` with the fixed mnemonic over stdin; return stderr.
+fn run_key_recover(out_dir: &Path, count: u32) -> String {
     let ks_var = format!("ETHERNAL_K4_KS_{}", std::process::id());
     let mp_var = format!("ETHERNAL_K4_MP_{}", std::process::id());
 
@@ -107,13 +107,12 @@ fn run_key_recover(out_dir: &Path, count: u32) {
     }
 
     let out = child.wait_with_output().expect("wait key recover");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
         out.status.success(),
-        "key recover failed (exit {:?}): stderr={}",
+        "key recover failed (exit {:?}): stderr={stderr}",
         out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("ethernal key recover:"),
         "banner missing: {stderr}"
@@ -123,6 +122,7 @@ fn run_key_recover(out_dir: &Path, count: u32) {
         !stderr.to_lowercase().contains("entropy"),
         "unexpected entropy mention (determinism must be mnemonic-only): {stderr}"
     );
+    stderr
 }
 
 fn keystore_files(dir: &Path) -> Vec<PathBuf> {
@@ -332,6 +332,78 @@ fn key_recover_then_gen_deposit_data_byte_stable() {
     );
 }
 
+/// G4 / GHSA-c6rv-g6pj-r6qx — batch salt/IV/uuid must be pairwise-distinct under
+/// real OS entropy. `recover --count 3` exercises the encrypt-time CSPRNG loop
+/// without a TTY; fields are compared as raw JSON (no decrypt).
+///
+/// Bite-proof (local, throwaway, never commit): temporarily wire FixedEntropy /
+/// fixed bytes in place of OsEntropy in the CLI encrypt path, rebuild, run only
+/// this test and `account_recover_batch_salt_iv_id_pairwise_distinct` → salt/iv
+/// HashSets collapse to size 1 → both go red; revert before any commit.
+#[test]
+fn key_recover_batch_salt_iv_uuid_pairwise_distinct() {
+    let dir = TempDir::new("g4-key-batch");
+    run_key_recover(dir.path(), 3);
+
+    let files = keystore_files(dir.path());
+    assert_eq!(files.len(), 3, "expected 3 keystores, got {files:?}");
+
+    let mut salts = Vec::with_capacity(3);
+    let mut ivs = Vec::with_capacity(3);
+    let mut uuids = Vec::with_capacity(3);
+    let mut pubkeys = Vec::with_capacity(3);
+    let mut paths = Vec::with_capacity(3);
+
+    for f in &files {
+        let raw = std::fs::read(f).expect("read keystore");
+        let v: serde_json::Value = serde_json::from_slice(&raw).expect("keystore JSON");
+        salts.push(
+            v["crypto"]["kdf"]["params"]["salt"]
+                .as_str()
+                .expect("salt")
+                .to_owned(),
+        );
+        ivs.push(
+            v["crypto"]["cipher"]["params"]["iv"]
+                .as_str()
+                .expect("iv")
+                .to_owned(),
+        );
+        uuids.push(v["uuid"].as_str().expect("uuid").to_owned());
+        pubkeys.push(v["pubkey"].as_str().expect("pubkey").to_owned());
+        paths.push(v["path"].as_str().expect("path").to_owned());
+    }
+
+    assert_eq!(
+        salts.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "salts must be pairwise-distinct across the batch: {salts:?}"
+    );
+    assert_eq!(
+        ivs.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "ivs must be pairwise-distinct across the batch: {ivs:?}"
+    );
+    assert_eq!(
+        uuids.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "uuids must be pairwise-distinct across the batch: {uuids:?}"
+    );
+    assert_eq!(
+        pubkeys
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        3,
+        "pubkeys must be pairwise-distinct (3 real validators, not copies): {pubkeys:?}"
+    );
+    assert_eq!(
+        paths.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "paths must be pairwise-distinct: {paths:?}"
+    );
+}
+
 /// CLI surface has no hidden entropy-injection flag: determinism is the fixed
 /// mnemonic through recover (S-4).
 #[test]
@@ -350,5 +422,55 @@ fn key_recover_help_has_no_entropy_flag() {
     assert!(
         help.contains("--mnemonic-passphrase-env"),
         "expected mnemonic-passphrase-env in help: {help}"
+    );
+}
+
+/// T-12·recover / E4-2 — symlinked `--output-dir` on the recover/stdin path
+/// emits the documented WARNING (`1736843`) and still writes keystores.
+#[cfg(unix)]
+#[test]
+fn key_recover_symlinked_output_dir_warns_and_writes() {
+    use std::os::unix::fs::symlink;
+
+    let base = TempDir::new("e4-2-key-symlink");
+    let real = base.join("real-out");
+    std::fs::create_dir(&real).expect("create real-out");
+    let link = base.join("link-out");
+    symlink(&real, &link).expect("symlink link-out -> real-out");
+    let resolved = std::fs::canonicalize(&real).expect("canonicalize real-out");
+
+    let stderr = run_key_recover(&link, 1);
+
+    let warning_lines: Vec<_> = stderr.lines().filter(|l| l.contains("WARNING")).collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "expected exactly one WARNING, got: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains("is a symlink")
+            && warning_lines[0].contains("keystores will be written to"),
+        "documented symlink warning text: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains(link.to_str().unwrap()),
+        "must name given path: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains(resolved.to_str().unwrap()),
+        "must name resolved path: {stderr}"
+    );
+
+    // Warn + still write (into the real dir via the symlink).
+    let files = keystore_files(&real);
+    assert_eq!(
+        files.len(),
+        1,
+        "expected 1 keystore under real path, got {files:?}"
+    );
+    assert_eq!(
+        keystore_files(&link).len(),
+        1,
+        "keystores must also be visible via symlink path"
     );
 }

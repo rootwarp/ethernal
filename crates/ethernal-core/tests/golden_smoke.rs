@@ -21,8 +21,36 @@ const GOLDEN_SECRET: [u8; 32] = [
     0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x01,
 ];
 
-/// Matches defaultWithdrawalCreds() in the Go cmd: type 0x00 BLS withdrawal.
-const GOLDEN_WITHDRAWAL_CREDENTIALS: [u8; 32] = [0u8; 32];
+/// 0x01 ‖ 11 zero ‖ signer local test key `0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1`.
+/// Matches the post-K5 `gen --withdrawal-address` path that regenerates the
+/// hoodi/mainnet goldens. Mainnet was realigned from the historical all-zero
+/// 0x00 placeholder (rejected by gen) for the same reason as hoodi (E5-1/E5-2).
+const GOLDEN_WITHDRAWAL_CREDENTIALS_01: [u8; 32] = {
+    let mut c = [0u8; 32];
+    c[0] = 0x01;
+    // 1a642f0e3c3af545e7acbd38b07251b3990914f1
+    c[12] = 0x1a;
+    c[13] = 0x64;
+    c[14] = 0x2f;
+    c[15] = 0x0e;
+    c[16] = 0x3c;
+    c[17] = 0x3a;
+    c[18] = 0xf5;
+    c[19] = 0x45;
+    c[20] = 0xe7;
+    c[21] = 0xac;
+    c[22] = 0xbd;
+    c[23] = 0x38;
+    c[24] = 0xb0;
+    c[25] = 0x72;
+    c[26] = 0x51;
+    c[27] = 0xb3;
+    c[28] = 0x99;
+    c[29] = 0x09;
+    c[30] = 0x14;
+    c[31] = 0xf1;
+    c
+};
 
 fn testdata(rel: &str) -> std::path::PathBuf {
     // crates/core -> ../../testdata
@@ -31,7 +59,7 @@ fn testdata(rel: &str) -> std::path::PathBuf {
         .join(rel)
 }
 
-fn run_golden(net: Network, dir: &str) {
+fn run_golden(net: Network, dir: &str, withdrawal_credentials: [u8; 32]) {
     let pubkeys_raw = std::fs::read_to_string(testdata(&format!("{dir}/pubkeys.txt"))).unwrap();
     let expected = std::fs::read(testdata(&format!("{dir}/deposit_data-expected.json"))).unwrap();
 
@@ -58,7 +86,7 @@ fn run_golden(net: Network, dir: &str) {
             &Request {
                 network: net,
                 pubkeys,
-                withdrawal_credentials: GOLDEN_WITHDRAWAL_CREDENTIALS,
+                withdrawal_credentials,
                 amount_gwei: 32_000_000_000,
                 deposit_cli_version: "2.7.0".to_string(),
             },
@@ -84,10 +112,14 @@ use ethernal_core::bls::Signer as _;
 
 #[test]
 fn hoodi_golden_deposit_byte_identical() {
-    run_golden(Network::Hoodi, "hoodi");
+    run_golden(Network::Hoodi, "hoodi", GOLDEN_WITHDRAWAL_CREDENTIALS_01);
 }
 
 #[test]
 fn mainnet_golden_deposit_byte_identical() {
-    run_golden(Network::Mainnet, "mainnet");
+    run_golden(
+        Network::Mainnet,
+        "mainnet",
+        GOLDEN_WITHDRAWAL_CREDENTIALS_01,
+    );
 }

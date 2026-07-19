@@ -9,10 +9,16 @@
 
 mod crypto;
 pub mod encrypt;
+pub mod encrypt_v3;
 mod error;
 mod keystore;
 mod passphrase;
 mod scandir;
+
+#[cfg(feature = "test-support")]
+mod decrypt_v3;
+#[cfg(feature = "test-support")]
+pub use decrypt_v3::decrypt_v3;
 
 pub use error::KeystoreError;
 pub use keystore::{Key, KeyLoader, Loader};

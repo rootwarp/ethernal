@@ -1,4 +1,4 @@
-.PHONY: build test test-verbose coverage lint fmt e2e-mock clean help
+.PHONY: build test test-verbose coverage lint fmt e2e-mock e2e-live clean help
 
 ## build: compile the release binary to target/release/ethernal
 build:
@@ -26,9 +26,13 @@ lint:
 fmt:
 	cargo fmt --all
 
-## e2e-mock: run E2E tests (build+sign+send via mock broadcaster, no real RPC)
+## e2e-mock: run hermetic E2E tests (mock broadcaster, no real RPC; non-ignored only)
 e2e-mock:
-	cargo test --workspace --test 'e2e*' -- --include-ignored
+	cargo test --workspace --test 'e2e*'
+
+## e2e-live: run ignored (anvil/live) E2E tests only
+e2e-live:
+	cargo test --workspace --test 'e2e*' -- --ignored
 
 ## clean: remove build artifacts
 clean:

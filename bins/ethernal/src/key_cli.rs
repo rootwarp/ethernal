@@ -148,7 +148,7 @@ fn recover_command() -> Command {
 }
 
 /// Flags shared by `key new` and `key recover`.
-fn shared_args() -> Vec<Arg> {
+pub(crate) fn shared_args() -> Vec<Arg> {
     vec![
         Arg::new("count")
             .long("count")
@@ -263,6 +263,7 @@ pub fn load_config(
         return Err(AppError::exit2("--output-dir: required flag not set"));
     }
     validate_output_dir(&output_dir).map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
+    crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
 
     // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ env).
     // Bare vs value is num_args(0..=1); absent both → empty. Values Zeroizing'd on read.
@@ -295,7 +296,9 @@ pub fn load_config(
 /// - bare `--mnemonic-passphrase` → [`Prompt`]
 /// - `--mnemonic-passphrase-env VAR` → read env (unset → exit 2; empty OK) → [`Env`]
 /// - neither → [`Empty`]
-fn resolve_mnemonic_passphrase(m: &ArgMatches) -> Result<MnemonicPassphraseForm, AppError> {
+pub(crate) fn resolve_mnemonic_passphrase(
+    m: &ArgMatches,
+) -> Result<MnemonicPassphraseForm, AppError> {
     // Env form (mutually exclusive with the raw/prompt flag via conflicts_with).
     if let Some(var) = m.get_one::<String>("mnemonic-passphrase-env") {
         match std::env::var(var) {
@@ -327,7 +330,7 @@ fn resolve_mnemonic_passphrase(m: &ArgMatches) -> Result<MnemonicPassphraseForm,
 
 /// Checks that dir exists and the process can write to it via the shared
 /// exclusive create+remove probe ([`crate::fs_util::probe_dir_writable`]).
-fn validate_output_dir(dir: &str) -> Result<(), String> {
+pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
     let meta = match std::fs::metadata(dir) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -617,6 +620,57 @@ mod tests {
 
         // Happy path: existing writable dir.
         assert!(validate_output_dir(dir.str()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recover_load_config_warns_on_symlinked_output_dir() {
+        use std::os::unix::fs::symlink;
+
+        let dir = Tmp::new();
+        let real = dir.0.join("real-out");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.0.join("link-out");
+        symlink(&real, &link).unwrap();
+        let resolved = std::fs::canonicalize(&real).unwrap();
+
+        let (_, banner) = load_recover(&[
+            "--output-dir",
+            link.to_str().unwrap(),
+            "--count",
+            "1",
+            "--start-index",
+            "0",
+        ])
+        .expect("ok");
+        let warning_lines: Vec<_> = banner.lines().filter(|l| l.contains("WARNING")).collect();
+        assert_eq!(
+            warning_lines.len(),
+            1,
+            "expected exactly one WARNING, got: {banner}"
+        );
+        assert!(
+            warning_lines[0].contains(link.to_str().unwrap()),
+            "must name given path: {banner}"
+        );
+        assert!(
+            warning_lines[0].contains(resolved.to_str().unwrap()),
+            "must name resolved path: {banner}"
+        );
+
+        let (_, banner) = load_recover(&[
+            "--output-dir",
+            real.to_str().unwrap(),
+            "--count",
+            "1",
+            "--start-index",
+            "0",
+        ])
+        .expect("ok");
+        assert!(
+            !banner.contains("WARNING"),
+            "real dir must be warning-free: {banner}"
+        );
     }
 
     #[cfg(unix)]

@@ -17,6 +17,7 @@ use ethernal_core::bip39::Bip39Error;
 use ethernal_core::bls::BlsError;
 use ethernal_core::deposit::DepositError;
 use ethernal_core::hd::HdError;
+use ethernal_core::hd_secp256k1::Bip32Error;
 use ethernal_core::network::NetworkError;
 use ethernal_core::output::OutputError;
 use ethernal_keystore::KeystoreError;
@@ -51,6 +52,9 @@ pub enum AppError {
 
     /// EIP-2333 HD derivation failure (crypto). Exit code 3.
     Hd(HdError),
+
+    /// BIP-32 secp256k1 HD derivation failure (crypto). Exit code 3.
+    Bip32(Bip32Error),
 
     Keystore(KeystoreError),
     Deposit(DepositError),
@@ -120,6 +124,7 @@ impl fmt::Display for AppError {
             AppError::Aborted(detail) => write!(f, "user aborted: {detail}"),
             AppError::Bip39(e) => e.fmt(f),
             AppError::Hd(e) => e.fmt(f),
+            AppError::Bip32(e) => e.fmt(f),
             AppError::Keystore(e) => e.fmt(f),
             AppError::Deposit(e) => e.fmt(f),
             AppError::Network(e) => e.fmt(f),
@@ -156,6 +161,11 @@ impl From<Bip39Error> for AppError {
 impl From<HdError> for AppError {
     fn from(e: HdError) -> Self {
         AppError::Hd(e)
+    }
+}
+impl From<Bip32Error> for AppError {
+    fn from(e: Bip32Error) -> Self {
+        AppError::Bip32(e)
     }
 }
 impl From<KeystoreError> for AppError {
@@ -260,9 +270,11 @@ pub fn exit_code_for(err: &AppError) -> i32 {
         AppError::Network(_) => 2,
 
         // Exit code 3: crypto / signer errors and external verification
-        // failures (gen + keygen HD). Keystore *write* stays call-site Exit{3}
-        // so AppError::Output remains fallback 1 for gen (architecture fork a).
+        // failures (gen + keygen HD + account BIP-32). Keystore *write* stays
+        // call-site Exit{3} so AppError::Output remains fallback 1 for gen
+        // (architecture fork a).
         AppError::Hd(_) => 3,
+        AppError::Bip32(_) => 3,
         AppError::Deposit(DepositError::SelfVerifyFailed { .. }) => 3,
         AppError::BlsInit(_) => 3,
         AppError::DepositCliFailed { .. } => 3,
@@ -594,6 +606,30 @@ mod tests {
             )),
             3
         );
+    }
+
+    #[test]
+    fn bip32_is_exit3() {
+        assert_eq!(
+            code(AppError::Bip32(Bip32Error::Master(
+                "I_L is zero or ≥ n".into()
+            ))),
+            3
+        );
+        assert_eq!(
+            code(AppError::Bip32(Bip32Error::InvalidChildKey(0x8000_0000))),
+            3
+        );
+        assert_eq!(
+            code(AppError::context(
+                "derive",
+                AppError::Bip32(Bip32Error::Master("x".into()))
+            )),
+            3
+        );
+        // From impl classifies the same way.
+        let e: AppError = Bip32Error::InvalidChildKey(0).into();
+        assert_eq!(code(e), 3);
     }
 
     #[test]

@@ -28,3 +28,10 @@ zeroize = { workspace = true }
 rpassword = { workspace = true }
 
 [dev-dependencies]
+# Flip on test-support for integration tests only (resolver-2: not unified into
+# release builds). Exposes ethernal_keystore::decrypt_v3 for T-3 / E3-1.
+ethernal-keystore = { workspace = true, features = ["test-support"] }
+# Integration tests only (binary-only package has no lib re-export of deps).
+# Used by `ethernal_no_tty` to `setsid` the child so `/dev/tty` fails under an
+# interactive cargo test session.
+libc = { workspace = true }

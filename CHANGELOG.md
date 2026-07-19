@@ -68,6 +68,43 @@ No dual-accept of old binary/env names (tool still unreleased).
 
 ---
 
+### ethernal (unreleased) — `account` namespace (Web3 v3 EOA keystores)
+
+Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
+
+#### Added
+
+- **`ethernal account new`** — generates a fresh 24-word BIP-39 mnemonic (OS CSPRNG),
+  runs a TTY-only display-once + full re-entry ceremony, then writes Web3 Secret
+  Storage **v3** scrypt EOA keystores at BIP-44 `m/44'/60'/0'/0/i` under
+  `--output-dir` (geth-style `UTC--…` filenames, mode `0o600`). Non-TTY
+  stdin/stdout → exit 2 before any entropy is drawn. Stderr summary lists
+  EIP-55 addresses.
+- **`ethernal account recover`** — rebuilds v3 EOA keystores from an existing
+  12–24-word mnemonic (interactive TTY prompt or piped stdin). Supports
+  `--start-index` / `--count` for partial ranges. No ceremony (mnemonic already
+  exists).
+- **Three-form BIP-39 mnemonic passphrase** on both `account` subcommands (same
+  shape as `key`): raw `--mnemonic-passphrase VALUE`,
+  `--mnemonic-passphrase-env VAR`, bare `--mnemonic-passphrase` (prompt;
+  double-entry confirm on `account new`), or omit for empty (default). Distinct
+  from the keystore passphrase (`--passphrase-env`). **Security:** raw `VALUE`
+  is visible in `ps` and shell history — prefer env or prompt for high-value
+  mnemonics (documented in `docs/USER-GUIDE.md`).
+- **v3 raw-passphrase interop (C-4):** the keystore passphrase is fed to scrypt
+  as **raw UTF-8 bytes (no NFKD)**, matching geth/MetaMask. Distinct from
+  EIP-2335 NFKD normalization used by `key`.
+
+#### Documentation
+
+- `docs/USER-GUIDE.md`: new "Create EOA keystores (`ethernal account`)" section —
+  ceremony, flags, `key` vs `account` (v3 vs EIP-2335), raw mnemonic-passphrase
+  `ps`/history note, and the v3 no-NFKD interop rule.
+- `README.md`: `account new` / `account recover` in the command list; v3 vs
+  EIP-2335 note; layout/notable-details rows.
+
+---
+
 ## eth-deposit (historical section titles)
 
 ### eth-deposit (unreleased) — keygen + withdrawal credentials

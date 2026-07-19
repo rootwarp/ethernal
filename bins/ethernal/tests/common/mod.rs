@@ -14,6 +14,10 @@
 
 #![allow(dead_code)]
 
+// Live-tier anvil harness (unix only — shells out to the Foundry `anvil` binary).
+#[cfg(unix)]
+pub mod anvil;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -57,6 +61,35 @@ pub fn ethernal() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_ethernal"));
     for v in ETHERNAL_ENV_VARS {
         c.env_remove(v);
+    }
+    c
+}
+
+/// Like [`ethernal`], but the child runs in a **new session with no controlling
+/// terminal**.
+///
+/// Needed for tests that assert the interactive-prompt failure path
+/// (`TermPromptSource` / `NewKeystorePassphrase` open `/dev/tty`). Piping
+/// stdin/stdout via [`.output()`](std::process::Command::output) is **not**
+/// enough: the child still inherits the test runner's controlling TTY, so under
+/// an interactive `cargo test` / `make test` the prompt blocks forever waiting
+/// for a passphrase on the real terminal. `setsid(2)` drops that inheritance so
+/// `open("/dev/tty")` fails with ENXIO → `NoTty` → exit 2 naming
+/// `--passphrase-env`.
+#[cfg(unix)]
+pub fn ethernal_no_tty() -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut c = ethernal();
+    // SAFETY: pre_exec runs in the forked child between fork and exec; only
+    // async-signal-safe calls are allowed. setsid(2) is async-signal-safe.
+    unsafe {
+        c.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
     c
 }
@@ -113,6 +146,31 @@ pub fn hoodi_pubkey() -> String {
     let raw = std::fs::read_to_string(workspace_testdata().join("hoodi/pubkeys.txt"))
         .expect("read hoodi pubkeys");
     raw.trim().to_string()
+}
+
+/// Golden Launchpad deposit JSON for the hoodi real-pipeline gen test (T-7).
+pub fn hoodi_expected_deposit_data() -> PathBuf {
+    workspace_testdata().join("hoodi/deposit_data-expected.json")
+}
+
+/// The mainnet keystore fixtures used by the mainnet gen guard/golden tests (T-8).
+pub fn mainnet_keystores() -> PathBuf {
+    workspace_testdata().join("mainnet/keystores")
+}
+pub fn mainnet_passphrase() -> String {
+    let raw = std::fs::read_to_string(workspace_testdata().join("mainnet/passphrase.txt"))
+        .expect("read mainnet passphrase");
+    raw.trim_end_matches(['\r', '\n']).to_string()
+}
+pub fn mainnet_pubkey() -> String {
+    let raw = std::fs::read_to_string(workspace_testdata().join("mainnet/pubkeys.txt"))
+        .expect("read mainnet pubkeys");
+    raw.trim().to_string()
+}
+
+/// Golden Launchpad deposit JSON for the mainnet real-pipeline gen test (T-8).
+pub fn mainnet_expected_deposit_data() -> PathBuf {
+    workspace_testdata().join("mainnet/deposit_data-expected.json")
 }
 
 // --- unique temp dirs (auto-cleaned) ---

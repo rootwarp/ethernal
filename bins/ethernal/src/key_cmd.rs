@@ -14,7 +14,7 @@ use ethernal_core::cancel::CancelToken;
 use ethernal_core::entropy::{Entropy, EntropyError, OsEntropy};
 use ethernal_core::hd::{self, KeyPath};
 use ethernal_core::output::{write_new_0600, OutputError};
-use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput};
+use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput, ScryptParams};
 use ethernal_keystore::{
     require_min_len, EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource,
     KEYSTORE_PASSPHRASE_MIN_LEN,
@@ -68,6 +68,9 @@ pub struct KeyDeps<'a> {
     pub logger: &'a Logger,
     /// Unix seconds for keystore filenames (injectable for deterministic tests).
     pub now_unix: i64,
+    /// scrypt cost for EIP-2335 encrypt. Production: [`ScryptParams::STANDARD`].
+    /// Unit tests inject [`ScryptParams::FAST`] so the suite stays snappy.
+    pub scrypt: ScryptParams,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +128,7 @@ pub fn run_key_new(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError
         progress,
         logger: &logger,
         now_unix,
+        scrypt: ScryptParams::STANDARD,
     };
     run_key_new_with_deps(&mut deps, cancel)
 }
@@ -174,6 +178,7 @@ pub fn run_key_recover(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppE
         progress,
         logger: &logger,
         now_unix,
+        scrypt: ScryptParams::STANDARD,
     };
     run_key_recover_with_deps(&mut deps, cancel)
 }
@@ -239,6 +244,7 @@ pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Re
     run_ceremony(
         mnemonic.as_str(),
         deps.tty_writer,
+        deps.summary_out,
         deps.mnemonic_src,
         cancel,
     )?;
@@ -358,6 +364,7 @@ fn finish_from_mnemonic(
             salt,
             iv,
             uuid_bytes,
+            scrypt: deps.scrypt,
         })
         .map_err(map_encrypt_err)?;
 
@@ -399,7 +406,7 @@ fn finish_from_mnemonic(
 
 /// `confirm`: when true (key new), bare Prompt requires double-entry; when
 /// false (key recover), single-entry only.
-fn resolve_mnemonic_passphrase(
+pub(crate) fn resolve_mnemonic_passphrase(
     form: &MnemonicPassphraseForm,
     src: &dyn MnemonicSource,
     cancel: &CancelToken,
@@ -429,7 +436,66 @@ fn resolve_mnemonic_passphrase(
 // Ceremony (F-6)
 // ---------------------------------------------------------------------------
 
-fn run_ceremony(
+/// ESC[2J (erase screen) · ESC[3J (erase scrollback) · ESC[H (home), the whole
+/// group TWICE — iTerm2 needs a second pass (upstream ethstaker PR #242). Order
+/// is load-bearing: erase-screen → erase-scrollback → home.
+const CLEAR_SCROLLBACK_TWICE: &[u8] = b"\x1b[2J\x1b[3J\x1b[H\x1b[2J\x1b[3J\x1b[H";
+
+/// Post-ceremony scrub on the SAME display TTY (S-1: never stdout/stderr/logger).
+/// Infallible & fail-open (G1-2): on a clear-write error, print manual-clear
+/// instructions to `tty`, falling back to `warn_out` (stderr in prod); never
+/// changes the ceremony's exit status. On success, print the notice + tmux/screen
+/// caveat to the now-blank `tty` (G1-3).
+fn clear_after_ceremony(tty: &mut dyn Write, warn_out: &mut dyn Write) {
+    let cleared = tty
+        .write_all(CLEAR_SCROLLBACK_TWICE)
+        .and_then(|_| tty.flush())
+        .is_ok();
+    if cleared {
+        let _ = writeln!(
+            tty,
+            "The terminal was cleared to remove the displayed mnemonic."
+        );
+        let _ = writeln!(
+            tty,
+            "  Note: a terminal multiplexer keeps its own scrollback — \
+             tmux: `tmux clear-history`; screen: C-a : then `scrollback 0`."
+        );
+        let _ = tty.flush();
+    } else {
+        // Fail-open. macOS Terminal.app makes this the PRIMARY scrub path (ESC[3J
+        // unreliable there), so the instructions must be genuinely actionable.
+        let msg = "WARNING: could not clear the terminal automatically; the mnemonic may \
+                   remain in scrollback.\n  Clear it manually: `clear && printf '\\x1b[3J'`  \
+                   (macOS Terminal.app: press Cmd+K).\n";
+        if tty
+            .write_all(msg.as_bytes())
+            .and_then(|_| tty.flush())
+            .is_err()
+        {
+            let _ = warn_out.write_all(msg.as_bytes());
+            let _ = warn_out.flush();
+        }
+    }
+}
+
+pub(crate) fn run_ceremony(
+    mnemonic: &str,
+    tty: &mut dyn Write,
+    warn_out: &mut dyn Write,
+    src: &dyn MnemonicSource,
+    cancel: &CancelToken,
+) -> Result<(), AppError> {
+    // Result-capture so the clear fires on every post-display exit path
+    // (success, mismatch-abort, read error, cancel, partial display write).
+    let outcome = ceremony_body(mnemonic, tty, src, cancel);
+    clear_after_ceremony(tty, warn_out);
+    outcome
+}
+
+/// Display once + full re-entry loop. Split from [`run_ceremony`] so the
+/// post-ceremony scrollback clear runs on every exit path (DEP-001 / G1).
+fn ceremony_body(
     mnemonic: &str,
     tty: &mut dyn Write,
     src: &dyn MnemonicSource,
@@ -531,7 +597,7 @@ fn print_key_summary(w: &mut dyn Write, written: &[(String, String)]) {
 // Cancel + error mapping (call-site; typed arms polished in K3-4)
 // ---------------------------------------------------------------------------
 
-fn check_cancel(cancel: &CancelToken) -> Result<(), AppError> {
+pub(crate) fn check_cancel(cancel: &CancelToken) -> Result<(), AppError> {
     if cancel.is_cancelled() {
         Err(AppError::Aborted("interrupted".into()))
     } else {
@@ -599,9 +665,9 @@ fn map_passphrase_err(e: KeystoreError) -> AppError {
 // ---------------------------------------------------------------------------
 
 /// Wraps a [`PassphraseSource`] with [`require_min_len`] (F-7 env path).
-struct MinLenPassphrase<'a> {
-    inner: &'a dyn PassphraseSource,
-    min: usize,
+pub(crate) struct MinLenPassphrase<'a> {
+    pub(crate) inner: &'a dyn PassphraseSource,
+    pub(crate) min: usize,
 }
 
 impl PassphraseSource for MinLenPassphrase<'_> {
@@ -615,12 +681,12 @@ impl PassphraseSource for MinLenPassphrase<'_> {
 
 /// Production ceremony + prompt source: re-entry on stdin; secrets via `/dev/tty`
 /// with echo suppressed (rpassword), matching keystore passphrase practice.
-struct StdinMnemonicSource {
+pub(crate) struct StdinMnemonicSource {
     prompt_out: Mutex<Box<dyn Write + Send>>,
 }
 
 impl StdinMnemonicSource {
-    fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
+    pub(crate) fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
         Self {
             prompt_out: Mutex::new(Box::new(prompt_out)),
         }
@@ -682,7 +748,7 @@ impl MnemonicSource for StdinMnemonicSource {
 /// [`Zeroizing`]. If no trim is needed, returns `s` unchanged (single buffer).
 /// Otherwise allocates a trimmed `Zeroizing` and drops `s` so the untrimmed
 /// copy is scrubbed (S-1).
-fn zeroizing_trim(s: Zeroizing<String>) -> Zeroizing<String> {
+pub(crate) fn zeroizing_trim(s: Zeroizing<String>) -> Zeroizing<String> {
     let t = s.trim();
     if t.len() == s.len() {
         s
@@ -697,12 +763,12 @@ fn zeroizing_trim(s: Zeroizing<String>) -> Zeroizing<String> {
 /// Recover mnemonic source: interactive TTY prompt **or** piped stdin (F-10).
 /// When stdin is not a TTY, the prompt is skipped and the mnemonic is read
 /// from the pipe (one line or full stdin trimmed).
-struct RecoverMnemonicSource {
+pub(crate) struct RecoverMnemonicSource {
     prompt_out: Mutex<Box<dyn Write + Send>>,
 }
 
 impl RecoverMnemonicSource {
-    fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
+    pub(crate) fn new<W: Write + Send + 'static>(prompt_out: W) -> Self {
         Self {
             prompt_out: Mutex::new(Box::new(prompt_out)),
         }
@@ -979,6 +1045,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
         };
         run_key_new_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -1015,6 +1082,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
         };
         run_key_recover_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -1171,6 +1239,7 @@ mod tests {
             progress: Progress::Tty,
             logger: &logger,
             now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
         };
         let err = run_key_new_with_deps(&mut deps, &CancelToken::new()).unwrap_err();
         assert_eq!(exit_code_for(&err), 2, "err={err}");
@@ -1190,6 +1259,167 @@ mod tests {
         let lines = ScriptedLines::new(vec!["wrong words", "yes", ZERO_MNEMONIC]);
         run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok after retry");
         assert_eq!(dir.keystore_files().len(), 1);
+    }
+
+    // --- clear-on-confirm (DEP-001 / G1) ---
+
+    #[test]
+    fn clear_sequence_bytes_and_order() {
+        // Hard-lock 2J→3J→H ×2 so a const edit cannot leave tests green on a wrong sequence.
+        assert_eq!(
+            CLEAR_SCROLLBACK_TWICE,
+            b"\x1b[2J\x1b[3J\x1b[H\x1b[2J\x1b[3J\x1b[H"
+        );
+        let mut tty = Vec::new();
+        let mut warn = Vec::new();
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        run_ceremony(
+            ZERO_MNEMONIC,
+            &mut tty,
+            &mut warn,
+            &lines,
+            &CancelToken::new(),
+        )
+        .expect("ceremony ok");
+        let clear = CLEAR_SCROLLBACK_TWICE;
+        let mnemonic_at = tty
+            .windows(ZERO_MNEMONIC.len())
+            .position(|w| w == ZERO_MNEMONIC.as_bytes())
+            .expect("mnemonic on tty");
+        let clear_at = tty
+            .windows(clear.len())
+            .position(|w| w == clear)
+            .expect("CLEAR_SCROLLBACK_TWICE on tty");
+        assert!(
+            clear_at > mnemonic_at,
+            "clear must come after the mnemonic display"
+        );
+        let tty_s = String::from_utf8(tty).unwrap();
+        assert!(
+            tty_s.contains("The terminal was cleared to remove the displayed mnemonic."),
+            "post-clear notice missing: {tty_s:?}"
+        );
+        assert!(tty_s.contains("tmux"), "tmux caveat missing: {tty_s:?}");
+        assert!(tty_s.contains("screen"), "screen caveat missing: {tty_s:?}");
+        assert!(
+            tty_s.contains("tmux clear-history"),
+            "tmux clear-history missing: {tty_s:?}"
+        );
+        assert!(
+            tty_s.contains("scrollback 0"),
+            "screen scrollback 0 missing: {tty_s:?}"
+        );
+        assert!(warn.is_empty(), "warn_out should be unused on success");
+    }
+
+    /// Mismatch-abort after display: the mnemonic reached the terminal, so the
+    /// clear must still run on the error path.
+    #[test]
+    fn abort_path_still_clears() {
+        let mut tty = Vec::new();
+        let mut warn = Vec::new();
+        let lines = ScriptedLines::new(vec!["wrong mnemonic words", "n"]);
+        let err = run_ceremony(
+            ZERO_MNEMONIC,
+            &mut tty,
+            &mut warn,
+            &lines,
+            &CancelToken::new(),
+        )
+        .unwrap_err();
+        assert_eq!(exit_code_for(&err), 4, "err={err}");
+        assert!(
+            tty.windows(CLEAR_SCROLLBACK_TWICE.len())
+                .any(|w| w == CLEAR_SCROLLBACK_TWICE),
+            "abort path must still clear scrollback: {:?}",
+            String::from_utf8_lossy(&tty)
+        );
+    }
+
+    /// Fail-open: display succeeds, then every later tty write/flush fails.
+    /// `run_ceremony` must still return Ok; manual-clear warning lands on
+    /// `warn_out` (stderr in production). Uses FailAfterDisplay — not an
+    /// ESC-sniffing writer — so the fallback is exercised non-vacuously.
+    #[test]
+    fn clear_failure_warns_on_fallback() {
+        struct FailAfterDisplay {
+            display_flushed: bool,
+        }
+        impl Write for FailAfterDisplay {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                if self.display_flushed {
+                    Err(io::Error::new(io::ErrorKind::BrokenPipe, "tty gone"))
+                } else {
+                    Ok(b.len())
+                }
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                if self.display_flushed {
+                    return Err(io::Error::new(io::ErrorKind::BrokenPipe, "tty gone"));
+                }
+                self.display_flushed = true;
+                Ok(())
+            }
+        }
+
+        let mut tty = FailAfterDisplay {
+            display_flushed: false,
+        };
+        let mut warn = Vec::new();
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        run_ceremony(
+            ZERO_MNEMONIC,
+            &mut tty,
+            &mut warn,
+            &lines,
+            &CancelToken::new(),
+        )
+        .expect("fail-open: clear failure must not fail the ceremony");
+        let warn_s = String::from_utf8(warn).unwrap();
+        assert!(
+            warn_s.contains("Cmd+K"),
+            "manual-clear Cmd+K missing: {warn_s:?}"
+        );
+        assert!(
+            warn_s.contains("clear &&"),
+            "manual-clear `clear &&` missing: {warn_s:?}"
+        );
+        assert!(
+            warn_s.contains("WARNING: could not clear the terminal automatically"),
+            "fallback warning missing: {warn_s:?}"
+        );
+        assert!(
+            !warn_s.contains(ZERO_MNEMONIC),
+            "S-1: fail-open warning must not carry mnemonic bytes"
+        );
+    }
+
+    #[test]
+    fn success_prints_notice() {
+        let mut tty = Vec::new();
+        let mut warn = Vec::new();
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        run_ceremony(
+            ZERO_MNEMONIC,
+            &mut tty,
+            &mut warn,
+            &lines,
+            &CancelToken::new(),
+        )
+        .expect("ceremony ok");
+        let tty_s = String::from_utf8(tty).unwrap();
+        assert!(
+            tty_s.contains("The terminal was cleared to remove the displayed mnemonic."),
+            "notice missing: {tty_s:?}"
+        );
+        assert!(
+            tty_s.contains("tmux clear-history"),
+            "multiplexer caveat (tmux) missing: {tty_s:?}"
+        );
+        assert!(
+            tty_s.contains("scrollback 0"),
+            "multiplexer caveat (screen) missing: {tty_s:?}"
+        );
     }
 
     // --- passphrase ---
@@ -1459,7 +1689,9 @@ mod tests {
         assert_eq!(v["version"], 4);
         assert_eq!(v["path"], "m/12381/3600/0/0/0");
         assert_eq!(v["crypto"]["kdf"]["function"], "scrypt");
-        assert_eq!(v["crypto"]["kdf"]["params"]["n"], 262_144);
+        // Unit helpers inject FAST; production N is gated by key e2e + encrypt
+        // EIP-2335 spec-vector (STANDARD).
+        assert_eq!(v["crypto"]["kdf"]["params"]["n"], ScryptParams::FAST.n);
     }
 
     #[test]
@@ -1763,6 +1995,7 @@ mod tests {
                 progress: Progress::Tty,
                 logger: &logger,
                 now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
             };
             run_key_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }
@@ -1884,6 +2117,7 @@ mod tests {
                 progress: Progress::NonTty,
                 logger: &logger,
                 now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
             };
             run_key_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }

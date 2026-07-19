@@ -16,9 +16,14 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 
-use common::{ethernal, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, TempDir};
+use common::{
+    ethernal, ethernal_no_tty, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase,
+    hoodi_pubkey, mainnet_expected_deposit_data, mainnet_keystores, mainnet_passphrase,
+    mainnet_pubkey, TempDir,
+};
 
 const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
+const MAINNET_PASS_ENV: &str = "TEST_MAINNET_PASSPHRASE";
 
 /// Known EIP-55 checksummed address (signer local test key).
 const WITHDRAWAL_ADDR: &str = "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1";
@@ -53,14 +58,15 @@ fn gen_dry_run_real_pipeline_emits_json() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let entries: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
-    let arr = entries.as_array().expect("array");
-    assert_eq!(arr.len(), 1, "one deposit entry");
-    assert_eq!(arr[0]["pubkey"], hoodi_pubkey());
+    // T-7: full golden equality (subsumes prior field-level pubkey/creds asserts).
+    let want = std::fs::read(hoodi_expected_deposit_data()).expect("read hoodi golden");
     assert_eq!(
-        arr[0]["withdrawal_credentials"].as_str().unwrap(),
-        WITHDRAWAL_CREDS_HEX,
-        "0x01 execution-address credentials must appear in deposit data"
+        out.stdout,
+        want,
+        "gen dry-run stdout must be byte-identical to testdata/hoodi/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&want)
     );
 
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -68,6 +74,47 @@ fn gen_dry_run_real_pipeline_emits_json() {
     assert!(
         stderr.contains("wrote <stdout>"),
         "dry-run summary must use <stdout>: {stderr}"
+    );
+}
+
+// T-19 / E5-3: gen --parallel must produce the same deposit JSON as the serial path
+// (byte-identical to the T-7 hoodi golden). Guards ordering/nondeterminism in the
+// concurrent keystore-decryption path.
+#[test]
+fn gen_parallel_matches_hoodi_golden() {
+    let out = ethernal()
+        .env(PASS_ENV, hoodi_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--parallel",
+            "2",
+            "--passphrase-env",
+            PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen --parallel");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let want = std::fs::read(hoodi_expected_deposit_data()).expect("read hoodi golden");
+    assert_eq!(
+        out.stdout,
+        want,
+        "gen --parallel dry-run stdout must be byte-identical to testdata/hoodi/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&want)
     );
 }
 
@@ -115,10 +162,14 @@ fn gen_writes_output_file() {
         "expected one deposit_data file, got {files:?}"
     );
     let data = std::fs::read(files[0].path()).expect("read deposit_data");
-    let entries: serde_json::Value = serde_json::from_slice(&data).expect("JSON");
+    let want = std::fs::read(hoodi_expected_deposit_data()).expect("read hoodi golden");
     assert_eq!(
-        entries[0]["withdrawal_credentials"].as_str().unwrap(),
-        WITHDRAWAL_CREDS_HEX
+        data,
+        want,
+        "deposit_data file must be byte-identical to testdata/hoodi/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&data),
+        String::from_utf8_lossy(&want)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -459,5 +510,117 @@ fn gen_banner_echoes_withdrawal_address_and_credentials() {
     assert!(
         stderr.contains(&format!("withdrawal_credentials=0x{WITHDRAWAL_CREDS_HEX}")),
         "banner must show full credentials hex: {stderr}"
+    );
+}
+
+// T-8 / E5-2: gen --network mainnet without --i-understand-this-is-mainnet → exit 2.
+#[test]
+fn gen_mainnet_without_ack_exit2() {
+    let out = ethernal()
+        .env(MAINNET_PASS_ENV, mainnet_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(mainnet_keystores())
+        .args([
+            "--pubkeys",
+            &mainnet_pubkey(),
+            "--network",
+            "mainnet",
+            "--dry-run",
+            "--passphrase-env",
+            MAINNET_PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--i-understand-this-is-mainnet"),
+        "stderr must name the mainnet ack flag: {stderr}"
+    );
+}
+
+// T-8 / E5-2: with the flag, mainnet gen proceeds and byte-matches the golden.
+#[test]
+fn gen_mainnet_with_ack_matches_golden() {
+    let out = ethernal()
+        .env(MAINNET_PASS_ENV, mainnet_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(mainnet_keystores())
+        .args([
+            "--pubkeys",
+            &mainnet_pubkey(),
+            "--network",
+            "mainnet",
+            "--i-understand-this-is-mainnet",
+            "--dry-run",
+            "--passphrase-env",
+            MAINNET_PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let want = std::fs::read(mainnet_expected_deposit_data()).expect("read mainnet golden");
+    assert_eq!(
+        out.stdout,
+        want,
+        "gen mainnet dry-run stdout must be byte-identical to testdata/mainnet/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&want)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("MAINNET"),
+        "mainnet banner must be uppercase: {stderr}"
+    );
+}
+
+// T-8 / E5-2: gen without --passphrase-env when there is no controlling TTY →
+// exit 2 naming --passphrase-env.
+//
+// Must use `ethernal_no_tty` (setsid): plain `.output()` still inherits the
+// runner's controlling terminal, so under interactive `make test` the child
+// would open /dev/tty and block forever on the passphrase prompt.
+#[test]
+fn gen_pipe_without_passphrase_env_exit2() {
+    let out = ethernal_no_tty()
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--passphrase-env"),
+        "stderr must name --passphrase-env: {stderr}"
     );
 }
