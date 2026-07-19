@@ -6,19 +6,20 @@
 //! WARNING: this command broadcasts to the live network and SPENDS REAL ETH.
 
 use std::io::Write;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use ethernal_core::cancel::CancelToken;
 use ethernal_core::network;
+use ethernal_core::output::write_atomic;
 use ethernal_signer::SignedTx;
 use ethernal_tx::{EthBroadcaster, EthClient, Receipt, TxError};
 
 use crate::build_cmd::read_input;
 use crate::errors::AppError;
 use crate::logging::{Format, Level, Logger};
-use crate::run_cmd::atomic_write_file;
 
 /// The broadcaster factory seam (port of Go's `var newBroadcaster`). Passed into
 /// [`send_action`] so tests can inject a mock; the production entry point
@@ -278,12 +279,14 @@ pub fn send_action(
                 let mut rec_json = serde_json::to_vec_pretty(&rec)
                     .map_err(|e| AppError::exit2(format!("receipt: marshal: {e}")))?;
                 rec_json.push(b'\n');
-                atomic_write_file(&cfg.receipt_output_file, &rec_json, 0o600).map_err(|e| {
-                    AppError::exit2(format!(
-                        "--receipt-output: write {}: {e}",
-                        cfg.receipt_output_file
-                    ))
-                })?;
+                write_atomic(Path::new(&cfg.receipt_output_file), &rec_json, 0o600).map_err(
+                    |e| {
+                        AppError::exit2(format!(
+                            "--receipt-output: write {}: {e}",
+                            cfg.receipt_output_file
+                        ))
+                    },
+                )?;
                 logger.info(
                     "wrote receipt",
                     &[("path", cfg.receipt_output_file.clone())],

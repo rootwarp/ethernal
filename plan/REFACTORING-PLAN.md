@@ -288,7 +288,7 @@ T2.2 (write_with_retry)             ── independent (or after T2.1)
 
 | ID | Change | Effort | Risk |
 |----|--------|:------:|:----:|
-| T2.1 | `atomic_write_file` → `core::output` overwrite-allowed API | M | low |
+| T2.1 | `atomic_write_file` → `core::output` overwrite-allowed API ✅ | M | low |
 | T2.2 | Extract `write_with_retry` for keystore write skeleton | M | low |
 | T2.3 | Hoist ceremony/mnemonic neutrals out of `validator_cmd` | M | low |
 | T2.4 | `KeygenConfig` + aliases for validator/account | M | low |
@@ -488,11 +488,19 @@ Findings below are grouped by confidence. Line numbers are approximate anchors f
 
 ### Tier 2 — Structural, behavior-preserving
 
-#### T2.1 — Overwrite-allowed atomic writer → `core::output`
+#### T2.1 — Overwrite-allowed atomic writer → `core::output` ✅ **done**
 
 **Evidence.** `run_cmd::atomic_write_file` used by `send_cmd`; `core::output::write_new_0600` is refuse-overwrite only.
 
-**Change.** Add sibling `write_atomic` (name TBD) with overwrite-allowed semantics. **Do not** collapse onto `write_new_0600`. Preserve modes per call site (0644/0600).
+**Change.** Add sibling `write_atomic` with overwrite-allowed semantics. **Do not** collapse onto `write_new_0600`. Preserve modes per call site (0644/0600). Move bin call sites from local `atomic_write_file` to the shared API. Remove local helper after migration.
+
+**Acceptance criteria:**
+- [x] Overwrite-allowed atomic writer lives in `core::output` (sibling of `write_new_0600`)
+- [x] `write_new_0600` remains refuse-overwrite only (separate API)
+- [x] Modes preserved at call sites (0644 unsigned companion; 0600 signed/raw/receipt)
+- [x] Local `run_cmd::atomic_write_file` removed
+- [x] `make lint` && `make test` green
+- [x] No behavior change for refuse-overwrite keystore writes
 
 **Risk:** low. **Effort:** M.
 

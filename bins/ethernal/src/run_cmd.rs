@@ -1,16 +1,15 @@
 //! The `run` subcommand, ported from `cmd/ethernal/run.go`.
 //!
 //! `run` performs build → sign in-process (no intermediate unsigned tx on disk),
-//! for workflows where both phases happen on the same machine. It also owns the
-//! atomic-write helper (`atomic_write_file`) reused by `send`.
+//! for workflows where both phases happen on the same machine.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use ethernal_core::cancel::CancelToken;
+use ethernal_core::output::write_atomic;
 use ethernal_signer::{new_local_signer_from_env, Signer};
 
 use crate::build_cmd::{build_flags, build_unsigned_tx, read_input};
@@ -181,7 +180,7 @@ fn run_action(cfg: &mut RunConfig, cancel: &CancelToken) -> Result<(), AppError>
         let mut unsigned_json = serde_json::to_vec_pretty(&unsigned)
             .map_err(|e| AppError::exit2(format!("run: marshal unsigned: {e}")))?;
         unsigned_json.push(b'\n');
-        atomic_write_file(&unsigned_path, &unsigned_json, 0o644)
+        write_atomic(Path::new(&unsigned_path), &unsigned_json, 0o644)
             .map_err(|e| AppError::exit2(format!("--keep-unsigned: write {unsigned_path}: {e}")))?;
         logger.info("wrote unsigned tx", &[("path", unsigned_path.clone())]);
     }
@@ -210,7 +209,7 @@ fn run_action(cfg: &mut RunConfig, cancel: &CancelToken) -> Result<(), AppError>
     }
 
     // Write signed.json atomically (0600).
-    atomic_write_file(&cfg.output_file, &signed_json, 0o600)
+    write_atomic(Path::new(&cfg.output_file), &signed_json, 0o600)
         .map_err(|e| AppError::exit2(format!("--output: write {}: {e}", cfg.output_file)))?;
     logger.info(
         "wrote signed tx",
@@ -227,7 +226,7 @@ fn run_action(cfg: &mut RunConfig, cancel: &CancelToken) -> Result<(), AppError>
         cfg.raw_output_file.clone()
     };
     let raw_content = format!("{}\n", signed.raw_rlp);
-    atomic_write_file(&raw_path, raw_content.as_bytes(), 0o600)
+    write_atomic(Path::new(&raw_path), raw_content.as_bytes(), 0o600)
         .map_err(|e| AppError::exit2(format!("raw output: write {raw_path}: {e}")))?;
     logger.info("wrote raw RLP", &[("path", raw_path.clone())]);
 
@@ -249,67 +248,6 @@ pub fn require_ledger_flags_for_rpc(cfg: &RunConfig) -> Result<(), AppError> {
         ));
     }
     Ok(())
-}
-
-/// Writes `data` to `path` via a temp file + rename so a partial write never
-/// leaves a corrupt file at the target path. The temp file is created in the
-/// same directory as `path` so the rename is atomic on a single filesystem.
-/// Port of `atomicWriteFile`; shared with `send` for the receipt file.
-pub fn atomic_write_file(path: &str, data: &[u8], mode: u32) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = go_dir(path);
-    let (tmp_name, mut tmp) = create_temp(&dir).map_err(|e| format!("create temp: {e}"))?;
-
-    // Chmod to the requested perm (mirrors Go's tmp.Chmod(perm) after CreateTemp).
-    if let Err(e) = std::fs::set_permissions(&tmp_name, std::fs::Permissions::from_mode(mode)) {
-        drop(tmp);
-        let _ = std::fs::remove_file(&tmp_name);
-        return Err(format!("chmod temp: {e}"));
-    }
-    if let Err(e) = tmp.write_all(data) {
-        drop(tmp);
-        let _ = std::fs::remove_file(&tmp_name);
-        return Err(format!("write temp: {e}"));
-    }
-    drop(tmp); // close
-    if let Err(e) = std::fs::rename(&tmp_name, path) {
-        // Best-effort cleanup of the temp file when the rename never happened.
-        let _ = std::fs::remove_file(&tmp_name);
-        return Err(format!("rename: {e}"));
-    }
-    Ok(())
-}
-
-/// Creates a uniquely named temp file (mode 0600 initially, like Go's
-/// `os.CreateTemp`) in `dir`, returning its path and handle.
-fn create_temp(dir: &str) -> std::io::Result<(String, std::fs::File)> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let base = if dir.is_empty() { "." } else { dir };
-    for _ in 0..10_000 {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let name = format!("{base}/.tmp-ethernal-{}-{nanos}-{n}", std::process::id());
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&name)
-        {
-            Ok(f) => return Ok((name, f)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not create a unique temp file",
-    ))
 }
 
 /// Derives the unsigned tx file path from the signed output path.
