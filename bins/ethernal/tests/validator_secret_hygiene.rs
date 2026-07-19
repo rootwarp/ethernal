@@ -1,6 +1,6 @@
-//! Secret-hygiene integration check for `key recover` (K3-4 / S-2 / G5).
+//! Secret-hygiene integration check for `validator recover` (K3-4 / S-2 / G5).
 //!
-//! Binary-level companion to the `KeyDeps` unit tests in `key_cmd.rs`: pipe a
+//! Binary-level companion to the `KeyDeps` unit tests in `validator_cmd.rs`: pipe a
 //! fixed mnemonic, encrypt with `--passphrase-env`, and assert the mnemonic,
 //! seed hex, and both passphrases never appear on stderr (where progress,
 //! banner, and fatal logs go). Full injectible-logger coverage lives in the
@@ -20,13 +20,13 @@ const KEYSTORE_PW: &str = "password1";
 const MNEMONIC_PW: &str = "TREZOR";
 
 #[test]
-fn key_recover_secrets_absent_from_stderr() {
+fn validator_recover_secrets_absent_from_stderr() {
     let dir = common::TempDir::new("key-hygiene");
     let ks_var = format!("ETHERNAL_HYGIENE_KS_{}", std::process::id());
     let mp_var = format!("ETHERNAL_HYGIENE_MP_{}", std::process::id());
 
     let mut child = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
             "--count",
@@ -85,7 +85,7 @@ fn key_recover_secrets_absent_from_stderr() {
 
     // Banner / progress should still be present on stderr (non-secret).
     assert!(
-        stderr.contains("ethernal key recover:"),
+        stderr.contains("ethernal validator recover:"),
         "expected banner on stderr: {stderr}"
     );
     assert!(
@@ -97,7 +97,7 @@ fn key_recover_secrets_absent_from_stderr() {
 /// Invalid-token recover path must not echo the token to any captured channel
 /// (H1 / M1 / S-2). Report 1-based position only.
 #[test]
-fn key_recover_unknown_word_token_absent_from_all_channels() {
+fn validator_recover_unknown_word_token_absent_from_all_channels() {
     let dir = common::TempDir::new("key-hygiene-unknown");
     // Distinctive non-wordlist token — if it appears in any channel, hygiene fails.
     const BAD_TOKEN: &str = "wroth";
@@ -108,7 +108,7 @@ fn key_recover_unknown_word_token_absent_from_all_channels() {
     let ks_var = format!("ETHERNAL_HYGIENE_BAD_KS_{}", std::process::id());
 
     let mut child = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
         .args(["--count", "1", "--passphrase-env", &ks_var])
         .env(&ks_var, KEYSTORE_PW)

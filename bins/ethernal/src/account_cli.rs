@@ -25,7 +25,7 @@ pub enum AccountMode {
 
 /// Validated inputs for `account new` / `account recover`.
 ///
-/// Identical shape to [`crate::key_cli::KeyConfig`] minus pubkey/withdrawal
+/// Identical shape to [`crate::validator_cli::ValidatorConfig`] minus pubkey/withdrawal
 /// concerns (EOA = one keypair; the `account` namespace is the type selector —
 /// F-8, U-3). [`Debug`] redacts mnemonic-passphrase secret payloads (S-2).
 #[derive(Clone, PartialEq, Eq)]
@@ -140,7 +140,7 @@ pub fn run_recover(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError>
 
 /// Builds a validated [`AccountConfig`] from parsed flags.
 ///
-/// Validation order mirrors [`crate::key_cli::load_config`]: count → start-index
+/// Validation order mirrors [`crate::validator_cli::load_config`]: count → start-index
 /// → index-range overflow → output-dir → mnemonic-passphrase form →
 /// passphrase-env, then confirmation banner. Bad `--count` / overflowing
 /// range / unwritable `--output-dir` → exit 2.

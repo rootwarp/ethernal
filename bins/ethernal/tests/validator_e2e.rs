@@ -1,8 +1,8 @@
-//! K4-1 — in-binary E2E: fixed mnemonic → `key recover` → keystores →
+//! K4-1 — in-binary E2E: fixed mnemonic → `validator recover` → keystores →
 //! `gen --withdrawal-address` (BLS self-verify on) → byte-stable deposit data.
 //!
 //! Determinism is via the fixed BIP-39 mnemonic + TREZOR passphrase through
-//! `key recover` — **no** hidden `--entropy-*` flag (S-4 / PRD Q4).
+//! `validator recover` — **no** hidden `--entropy-*` flag (S-4 / PRD Q4).
 //!
 //! Fixtures (frozen once post-K5, real 0x01 creds):
 //!   tests/testdata/keygen/pubkeys.json
@@ -75,13 +75,13 @@ fn load_pubkeys_fixture() -> PubkeysFixture {
     serde_json::from_str(&raw).expect("parse pubkeys.json")
 }
 
-/// Run `key recover` with the fixed mnemonic over stdin; return stderr.
+/// Run `validator recover` with the fixed mnemonic over stdin; return stderr.
 fn run_key_recover(out_dir: &Path, count: u32) -> String {
     let ks_var = format!("ETHERNAL_K4_KS_{}", std::process::id());
     let mp_var = format!("ETHERNAL_K4_MP_{}", std::process::id());
 
     let mut child = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(out_dir)
         .args([
             "--count",
@@ -110,11 +110,11 @@ fn run_key_recover(out_dir: &Path, count: u32) -> String {
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
         out.status.success(),
-        "key recover failed (exit {:?}): stderr={stderr}",
+        "validator recover failed (exit {:?}): stderr={stderr}",
         out.status.code(),
     );
     assert!(
-        stderr.contains("ethernal key recover:"),
+        stderr.contains("ethernal validator recover:"),
         "banner missing: {stderr}"
     );
     // S-4: no entropy-injection flag on the recover surface.
@@ -191,10 +191,10 @@ fn recover_seed_and_pubkeys_match_fixture() {
     }
 }
 
-/// Binary `key recover` writes keystores whose signing pubkeys match the
+/// Binary `validator recover` writes keystores whose signing pubkeys match the
 /// fixture; Loader round-trip recovers the HD-derived secret.
 #[test]
-fn key_recover_keystores_match_fixture_and_loader_round_trip() {
+fn validator_recover_keystores_match_fixture_and_loader_round_trip() {
     let fx = load_pubkeys_fixture();
     let dir = TempDir::new("k4-recover");
     run_key_recover(dir.path(), COUNT);
@@ -249,11 +249,11 @@ fn key_recover_keystores_match_fixture_and_loader_round_trip() {
     }
 }
 
-/// Full front-of-pipeline: `key recover` → `gen --withdrawal-address` (BLS
+/// Full front-of-pipeline: `validator recover` → `gen --withdrawal-address` (BLS
 /// self-verify on by default) → deposit data with real 0x01 creds, byte-stable
 /// against the committed golden.
 #[test]
-fn key_recover_then_gen_deposit_data_byte_stable() {
+fn validator_recover_then_gen_deposit_data_byte_stable() {
     let fx = load_pubkeys_fixture();
     let dir = TempDir::new("k4-e2e");
     run_key_recover(dir.path(), COUNT);
@@ -341,7 +341,7 @@ fn key_recover_then_gen_deposit_data_byte_stable() {
 /// this test and `account_recover_batch_salt_iv_id_pairwise_distinct` → salt/iv
 /// HashSets collapse to size 1 → both go red; revert before any commit.
 #[test]
-fn key_recover_batch_salt_iv_uuid_pairwise_distinct() {
+fn validator_recover_batch_salt_iv_uuid_pairwise_distinct() {
     let dir = TempDir::new("g4-key-batch");
     run_key_recover(dir.path(), 3);
 
@@ -407,9 +407,9 @@ fn key_recover_batch_salt_iv_uuid_pairwise_distinct() {
 /// CLI surface has no hidden entropy-injection flag: determinism is the fixed
 /// mnemonic through recover (S-4).
 #[test]
-fn key_recover_help_has_no_entropy_flag() {
+fn validator_recover_help_has_no_entropy_flag() {
     let out = ethernal()
-        .args(["key", "recover", "--help"])
+        .args(["validator", "recover", "--help"])
         .output()
         .expect("help");
     assert!(out.status.success());
@@ -417,7 +417,7 @@ fn key_recover_help_has_no_entropy_flag() {
     let help_l = help.to_lowercase();
     assert!(
         !help_l.contains("--entropy") && !help_l.contains("entropy-"),
-        "key recover must not expose an entropy flag (S-4): {help}"
+        "validator recover must not expose an entropy flag (S-4): {help}"
     );
     assert!(
         help.contains("--mnemonic-passphrase-env"),
@@ -429,7 +429,7 @@ fn key_recover_help_has_no_entropy_flag() {
 /// emits the documented WARNING (`1736843`) and still writes keystores.
 #[cfg(unix)]
 #[test]
-fn key_recover_symlinked_output_dir_warns_and_writes() {
+fn validator_recover_symlinked_output_dir_warns_and_writes() {
     use std::os::unix::fs::symlink;
 
     let base = TempDir::new("e4-2-key-symlink");

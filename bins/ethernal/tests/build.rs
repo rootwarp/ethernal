@@ -61,7 +61,7 @@ fn app_help() {
     let out = ethernal().arg("--help").output().expect("run --help");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("ethernal"), "help missing app name: {s}");
-    for sub in ["key", "account", "deposit", "tx"] {
+    for sub in ["validator", "account", "deposit", "tx"] {
         assert!(s.contains(sub), "help missing subcommand {sub}: {s}");
     }
 }

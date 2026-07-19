@@ -60,8 +60,8 @@ fn build_bad_index_value() {
 }
 
 #[test]
-fn key_missing_subcommand() {
-    assert_exit2(&["key"], "key missing subcommand");
+fn validator_missing_subcommand() {
+    assert_exit2(&["validator"], "validator missing subcommand");
 }
 
 #[test]
@@ -86,13 +86,16 @@ fn tx_unknown_leaf() {
 }
 
 #[test]
-fn key_new_missing_output_dir() {
-    assert_exit2(&["key", "new"], "key new missing --output-dir");
+fn validator_new_missing_output_dir() {
+    assert_exit2(&["validator", "new"], "validator new missing --output-dir");
 }
 
 #[test]
-fn key_recover_missing_output_dir() {
-    assert_exit2(&["key", "recover"], "key recover missing --output-dir");
+fn validator_recover_missing_output_dir() {
+    assert_exit2(
+        &["validator", "recover"],
+        "validator recover missing --output-dir",
+    );
 }
 
 #[test]
@@ -113,20 +116,20 @@ fn account_recover_missing_output_dir() {
     );
 }
 
-/// F-5: `key new` must exit 2 before generating when stdin/stdout are not TTYs.
+/// F-5: `validator new` must exit 2 before generating when stdin/stdout are not TTYs.
 /// Integration tests drive the binary with piped stdio, so isatty fails.
 #[test]
-fn key_new_non_tty_exits_two() {
-    let dir = common::TempDir::new("key-new-nontty");
+fn validator_new_non_tty_exits_two() {
+    let dir = common::TempDir::new("validator-new-nontty");
     let out = ethernal()
-        .args(["key", "new", "--output-dir"])
+        .args(["validator", "new", "--output-dir"])
         .arg(dir.path())
         .output()
         .expect("run");
     assert_eq!(
         out.status.code(),
         Some(2),
-        "key new non-TTY: expected exit 2, got {:?}; stderr: {}",
+        "validator new non-TTY: expected exit 2, got {:?}; stderr: {}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -141,17 +144,17 @@ fn key_new_non_tty_exits_two() {
         .collect();
     assert!(
         entries.is_empty(),
-        "non-TTY key new must write nothing; found {entries:?}"
+        "non-TTY validator new must write nothing; found {entries:?}"
     );
 }
 
 #[test]
-fn key_new_bad_count_exits_two() {
+fn validator_new_bad_count_exits_two() {
     // Bad --count is validated after the TTY guard; on non-TTY the guard wins
     // first (still exit 2). Exercise clap-level rejection of a non-u32 count.
     assert_exit2(
-        &["key", "new", "--output-dir", "/tmp", "--count", "abc"],
-        "key new bad --count value",
+        &["validator", "new", "--output-dir", "/tmp", "--count", "abc"],
+        "validator new bad --count value",
     );
 }
 
@@ -216,18 +219,18 @@ fn account_recover_nonexistent_output_dir_exits_two() {
 }
 
 #[test]
-fn key_recover_nonexistent_output_dir_exits_two() {
-    let dir = common::TempDir::new("key-recover-missing-out");
+fn validator_recover_nonexistent_output_dir_exits_two() {
+    let dir = common::TempDir::new("validator-recover-missing-out");
     let missing = dir.path().join("does-not-exist");
     let out = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(&missing)
         .output()
         .expect("run");
     assert_eq!(
         out.status.code(),
         Some(2),
-        "key recover bad output-dir: expected exit 2, got {:?}; stderr: {}",
+        "validator recover bad output-dir: expected exit 2, got {:?}; stderr: {}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -236,15 +239,15 @@ fn key_recover_nonexistent_output_dir_exits_two() {
 /// H4 / K3-L2: overflowing `--start-index + --count` is rejected in load_config
 /// (exit 2) before any keystore write — output dir stays empty.
 #[test]
-fn key_recover_index_overflow_exits_two_no_writes() {
+fn validator_recover_index_overflow_exits_two_no_writes() {
     use std::io::Write;
     use std::process::Stdio;
 
-    let dir = common::TempDir::new("key-recover-overflow");
+    let dir = common::TempDir::new("validator-recover-overflow");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
     let pw_var = format!("ETHERNAL_TEST_OVERFLOW_PW_{}", std::process::id());
     let mut child = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
             "--count",
@@ -289,18 +292,18 @@ fn key_recover_index_overflow_exits_two_no_writes() {
     );
 }
 
-/// `key recover` is exempt from the TTY guard: piped mnemonic on non-TTY stdin
+/// `validator recover` is exempt from the TTY guard: piped mnemonic on non-TTY stdin
 /// is accepted (F-10). Uses --passphrase-env so no interactive keystore prompt.
 #[test]
-fn key_recover_validates_without_tty() {
+fn validator_recover_validates_without_tty() {
     use std::io::Write;
     use std::process::Stdio;
 
-    let dir = common::TempDir::new("key-recover-ok");
+    let dir = common::TempDir::new("validator-recover-ok");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
     let pw_var = format!("ETHERNAL_TEST_RECOVER_PW_{}", std::process::id());
     let mut child = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
             "--count",
@@ -325,12 +328,12 @@ fn key_recover_validates_without_tty() {
     let out = child.wait_with_output().expect("wait");
     assert!(
         out.status.success(),
-        "key recover should accept piped mnemonic on non-TTY; stderr: {}",
+        "validator recover should accept piped mnemonic on non-TTY; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("ethernal key recover:"),
+        stderr.contains("ethernal validator recover:"),
         "banner missing: {stderr}"
     );
     assert!(stderr.contains("start_index=1"), "banner: {stderr}");

@@ -60,7 +60,7 @@ pub enum AppError {
     Deposit(DepositError),
     Network(NetworkError),
     /// Deposit-data write path (`gen`). Exit code 1 via fallback — keystore
-    /// writes from `key new`/`recover` must use call-site `Exit{code:3}` so
+    /// writes from `validator new`/`recover` must use call-site `Exit{code:3}` so
     /// this arm stays gen-only (architecture fork (a)).
     Output(OutputError),
     Tx(TxError),
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn keystore_write_call_site_exit3() {
-        // key_cmd::map_write_err shape — not AppError::Output.
+        // validator_cmd::map_write_err shape — not AppError::Output.
         assert_eq!(
             code(AppError::Exit {
                 msg: "output: file already exists".into(),

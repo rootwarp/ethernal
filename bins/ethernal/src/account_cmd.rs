@@ -5,7 +5,7 @@
 //! full flow with [`FixedEntropy`] (test-only), scripted line sources, fixed
 //! [`Timestamp`], and buffers — no real terminal required.
 //!
-//! Differs from [`crate::key_cmd::KeyDeps`] in the address-based summary and the
+//! Differs from [`crate::validator_cmd::KeyDeps`] in the address-based summary and the
 //! nanos-carrying [`Timestamp`] (geth `UTC--` filenames need 9-digit nanos).
 
 use std::io::{self, Write};
@@ -26,11 +26,11 @@ use zeroize::Zeroizing;
 use crate::account_cli::AccountConfig;
 use crate::errors::AppError;
 use crate::gen_cmd::Progress;
-use crate::key_cmd::{
+use crate::logging::{Format, Level, Logger};
+use crate::validator_cmd::{
     check_cancel, resolve_mnemonic_passphrase, run_ceremony, MinLenPassphrase, MnemonicSource,
     RecoverMnemonicSource, StdinMnemonicSource,
 };
-use crate::logging::{Format, Level, Logger};
 
 // ---------------------------------------------------------------------------
 // Injectable seams

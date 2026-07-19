@@ -1,5 +1,5 @@
 //! Entry point for ethernal, ported from `cmd/ethernal/main.go`.
-//! Wires the key, account, deposit (gen/build), and tx (sign/run/send) namespaces.
+//! Wires the validator, account, deposit (gen/build), and tx (sign/run/send) namespaces.
 //!
 //! Exit codes:
 //!
@@ -21,13 +21,13 @@ mod errors;
 mod fs_util;
 mod gen_cli;
 mod gen_cmd;
-mod key_cli;
-mod key_cmd;
 mod keystore_cli;
 mod logging;
 mod run_cmd;
 mod send_cmd;
 mod sign_cmd;
+mod validator_cli;
+mod validator_cmd;
 
 use std::sync::OnceLock;
 
@@ -85,7 +85,7 @@ fn root_command() -> Command {
             "ethernal takes BLS validator keystores all the way through to a broadcast\n\
              Ethereum deposit transaction for the Beacon Chain deposit contract.\n\n\
              It supports a secure workflow under four namespaces:\n\
-             \x20 key     - Generate or recover EIP-2335 BLS validator keystores from a BIP-39 mnemonic\n\
+             \x20 validator - Generate or recover EIP-2335 BLS validator keystores from a BIP-39 mnemonic\n\
              \x20 account - Generate or recover EIP-155 secp256k1 execution-layer keystores\n\
              \x20 deposit - Beacon-chain deposit workflow: deposit_data JSON and deposit-tx construction\n\
              \x20          (gen, build)\n\
@@ -94,7 +94,7 @@ fn root_command() -> Command {
              The tool produces standard hex-encoded RLP output ready for eth_sendRawTransaction.\n\n\
              Exit codes: 0=success, 1=internal error, 2=bad input, 3=signer/crypto error, 4=user abort, 5=broadcast/RPC error.",
         )
-        .subcommand(key_cli::command())
+        .subcommand(validator_cli::command())
         .subcommand(account_cli::command())
         .subcommand(
             Command::new("deposit")
@@ -130,11 +130,11 @@ fn main() {
     };
 
     let result: Result<(), AppError> = match matches.subcommand() {
-        Some(("key", sub)) => match sub.subcommand() {
-            Some(("new", m)) => key_cli::run_new(m, cancel),
-            Some(("recover", m)) => key_cli::run_recover(m, cancel),
-            // subcommand_required(true) on the key group; clap rejects bare `key`.
-            _ => unreachable!("key requires a subcommand"),
+        Some(("validator", sub)) => match sub.subcommand() {
+            Some(("new", m)) => validator_cli::run_new(m, cancel),
+            Some(("recover", m)) => validator_cli::run_recover(m, cancel),
+            // subcommand_required(true) on the validator group; clap rejects bare `validator`.
+            _ => unreachable!("validator requires a subcommand"),
         },
         Some(("account", sub)) => match sub.subcommand() {
             Some(("new", m)) => account_cli::run_new(m, cancel),

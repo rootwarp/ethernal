@@ -1,4 +1,4 @@
-//! `key new` / `key recover` runtime: ceremony (new only) + derive → encrypt →
+//! `validator new` / `validator recover` runtime: ceremony (new only) + derive → encrypt →
 //! write pipeline.
 //!
 //! Dependencies are injectable via [`KeyDeps`] so unit tests can drive the
@@ -23,9 +23,9 @@ use zeroize::Zeroizing;
 
 use crate::errors::AppError;
 use crate::gen_cmd::Progress;
-use crate::key_cli::KeyConfig;
 use crate::keystore_cli::MnemonicPassphraseForm;
 use crate::logging::{Format, Level, Logger};
+use crate::validator_cli::ValidatorConfig;
 
 // ---------------------------------------------------------------------------
 // Injectable seams
@@ -53,15 +53,15 @@ pub trait MnemonicSource: Sync {
 ///
 /// Production values come from [`run_key_new`]; tests replace any piece.
 pub struct KeyDeps<'a> {
-    pub cfg: &'a KeyConfig,
+    pub cfg: &'a ValidatorConfig,
     /// CSPRNG for mnemonic entropy and per-keystore salt/iv/uuid.
     pub entropy: &'a dyn Entropy,
     /// Keystore encryption passphrase (confirm+≥8 or env+min-len).
     pub keystore_pw: &'a dyn PassphraseSource,
     /// Ceremony re-entry / recover mnemonic / mnemonic-passphrase prompts.
     pub mnemonic_src: &'a dyn MnemonicSource,
-    /// Where the mnemonic is displayed **once** on `key new` (TTY only; never
-    /// stdout/stderr/logger). Unused by `key recover` (may be `io::sink()`).
+    /// Where the mnemonic is displayed **once** on `validator new` (TTY only; never
+    /// stdout/stderr/logger). Unused by `validator recover` (may be `io::sink()`).
     pub tty_writer: &'a mut dyn Write,
     /// Progress + end-of-run summary (stderr in production).
     pub summary_out: &'a mut dyn Write,
@@ -78,8 +78,8 @@ pub struct KeyDeps<'a> {
 // Production entry
 // ---------------------------------------------------------------------------
 
-/// Production entry for `key new`: assembles real deps and runs the pipeline.
-pub fn run_key_new(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError> {
+/// Production entry for `validator new`: assembles real deps and runs the pipeline.
+pub fn run_key_new(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<(), AppError> {
     let logger = Logger::stderr(Level::Info, Format::Text);
     let entropy = OsEntropy;
     let progress = if stderr_is_tty() {
@@ -113,7 +113,7 @@ pub fn run_key_new(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError
     // Fail closed: never fall back to stderr (would log the mnemonic).
     let mut tty_writer = open_tty_writer().map_err(|e| {
         AppError::exit2(format!(
-            "key new: cannot open controlling terminal for mnemonic display: {e}; \
+            "validator new: cannot open controlling terminal for mnemonic display: {e}; \
              refusing to print the mnemonic to stderr"
         ))
     })?;
@@ -134,9 +134,9 @@ pub fn run_key_new(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError
     run_key_new_with_deps(&mut deps, cancel)
 }
 
-/// Production entry for `key recover`: read existing mnemonic (TTY or pipe),
+/// Production entry for `validator recover`: read existing mnemonic (TTY or pipe),
 /// validate, then derive → encrypt → write (no ceremony).
-pub fn run_key_recover(cfg: &KeyConfig, cancel: &CancelToken) -> Result<(), AppError> {
+pub fn run_key_recover(cfg: &ValidatorConfig, cancel: &CancelToken) -> Result<(), AppError> {
     let logger = Logger::stderr(Level::Info, Format::Text);
     let entropy = OsEntropy;
     let progress = if stderr_is_tty() {
@@ -200,10 +200,10 @@ fn stdin_is_tty() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline — key new
+// Pipeline — validator new
 // ---------------------------------------------------------------------------
 
-/// Testable core of `key new`: entropy → mnemonic → mnemonic passphrase →
+/// Testable core of `validator new`: entropy → mnemonic → mnemonic passphrase →
 /// ceremony → seed → derive/encrypt/write per index.
 pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Result<(), AppError> {
     let log = deps.logger;
@@ -212,7 +212,7 @@ pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Re
     check_cancel(cancel)?;
 
     // 1. Draw 256-bit entropy → 24-word mnemonic (F-1, S-4).
-    log.debug("key new: drawing entropy", &[]);
+    log.debug("validator new: drawing entropy", &[]);
     let mut entropy_bytes = Zeroizing::new([0u8; 32]);
     deps.entropy
         .fill(entropy_bytes.as_mut())
@@ -222,12 +222,12 @@ pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Re
 
     let word_count = mnemonic.split_whitespace().count();
     log.debug(
-        "key new: mnemonic generated",
+        "validator new: mnemonic generated",
         &[("words", word_count.to_string())],
     );
     if word_count != 24 {
         return Err(AppError::Internal(format!(
-            "key new: expected 24-word mnemonic from 32-byte entropy, got {word_count}"
+            "validator new: expected 24-word mnemonic from 32-byte entropy, got {word_count}"
         )));
     }
 
@@ -249,7 +249,7 @@ pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Re
         deps.mnemonic_src,
         cancel,
     )?;
-    log.debug("key new: ceremony complete", &[]);
+    log.debug("validator new: ceremony complete", &[]);
 
     // 4–6. Keystore passphrase → seed → derive/encrypt/write.
     finish_from_mnemonic(
@@ -257,15 +257,15 @@ pub fn run_key_new_with_deps(deps: &mut KeyDeps<'_>, cancel: &CancelToken) -> Re
         cancel,
         mnemonic.as_str(),
         mnemonic_pass.as_slice(),
-        "key new",
+        "validator new",
     )
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline — key recover
+// Pipeline — validator recover
 // ---------------------------------------------------------------------------
 
-/// Testable core of `key recover`: read mnemonic (TTY/pipe) → validate →
+/// Testable core of `validator recover`: read mnemonic (TTY/pipe) → validate →
 /// mnemonic passphrase (single-entry prompt) → seed → derive/encrypt/write.
 /// **No** display/re-entry ceremony (F-10).
 pub fn run_key_recover_with_deps(
@@ -278,13 +278,13 @@ pub fn run_key_recover_with_deps(
     check_cancel(cancel)?;
 
     // 1. Existing mnemonic from TTY prompt or piped stdin (F-10).
-    log.debug("key recover: reading mnemonic", &[]);
+    log.debug("validator recover: reading mnemonic", &[]);
     let mnemonic = deps.mnemonic_src.read_line("Enter your mnemonic: ")?;
     // 2. Validate first — 12/15/18/21/24; bad word/checksum → exit 2 (F-11).
     bip39::validate_mnemonic(mnemonic.as_str()).map_err(map_bip39_err)?;
     let word_count = mnemonic.split_whitespace().count();
     log.debug(
-        "key recover: mnemonic validated",
+        "validator recover: mnemonic validated",
         &[("words", word_count.to_string())],
     );
 
@@ -303,7 +303,7 @@ pub fn run_key_recover_with_deps(
         cancel,
         mnemonic.as_str(),
         mnemonic_pass.as_slice(),
-        "key recover",
+        "validator recover",
     )
 }
 
@@ -405,8 +405,8 @@ fn finish_from_mnemonic(
 // Mnemonic passphrase resolution (flag > env > prompt > empty)
 // ---------------------------------------------------------------------------
 
-/// `confirm`: when true (key new), bare Prompt requires double-entry; when
-/// false (key recover), single-entry only.
+/// `confirm`: when true (validator new), bare Prompt requires double-entry; when
+/// false (validator recover), single-entry only.
 pub(crate) fn resolve_mnemonic_passphrase(
     form: &MnemonicPassphraseForm,
     src: &dyn MnemonicSource,
@@ -514,7 +514,7 @@ fn ceremony_body(
     .and_then(|_| tty.flush())
     .map_err(|e| {
         AppError::exit2(format!(
-            "key new: failed to display mnemonic on controlling terminal: {e}"
+            "validator new: failed to display mnemonic on controlling terminal: {e}"
         ))
     })?;
 
@@ -853,7 +853,7 @@ impl MnemonicSource for RecoverMnemonicSource {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use crate::key_cli::KeyMode;
+    use crate::validator_cli::ValidatorMode;
     use ethernal_core::hd::derive_path;
     use ethernal_keystore::{KeyLoader, Loader};
     use std::collections::VecDeque;
@@ -980,7 +980,8 @@ mod tests {
         fn new() -> Self {
             static N: AtomicUsize = AtomicUsize::new(0);
             let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!("key-cmd-test-{}-{n}", std::process::id()));
+            let p =
+                std::env::temp_dir().join(format!("validator-cmd-test-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&p).unwrap();
             Tmp(p)
         }
@@ -1011,9 +1012,9 @@ mod tests {
         }
     }
 
-    fn base_cfg(dir: &str, count: u32) -> KeyConfig {
-        KeyConfig {
-            mode: KeyMode::New,
+    fn base_cfg(dir: &str, count: u32) -> ValidatorConfig {
+        ValidatorConfig {
+            mode: ValidatorMode::New,
             count,
             output_dir: dir.into(),
             start_index: 0,
@@ -1027,7 +1028,7 @@ mod tests {
     }
 
     fn run_with(
-        cfg: &KeyConfig,
+        cfg: &ValidatorConfig,
         entropy: &dyn Entropy,
         keystore_pw: &dyn PassphraseSource,
         mnemonic_src: &dyn MnemonicSource,
@@ -1052,9 +1053,9 @@ mod tests {
         Ok((tty, summary))
     }
 
-    fn recover_cfg(dir: &str, count: u32, start_index: u32) -> KeyConfig {
-        KeyConfig {
-            mode: KeyMode::Recover,
+    fn recover_cfg(dir: &str, count: u32, start_index: u32) -> ValidatorConfig {
+        ValidatorConfig {
+            mode: ValidatorMode::Recover,
             count,
             output_dir: dir.into(),
             start_index,
@@ -1064,7 +1065,7 @@ mod tests {
     }
 
     fn run_recover_with(
-        cfg: &KeyConfig,
+        cfg: &ValidatorConfig,
         entropy: &dyn Entropy,
         keystore_pw: &dyn PassphraseSource,
         mnemonic_src: &dyn MnemonicSource,
@@ -1476,7 +1477,7 @@ mod tests {
         .unwrap();
         assert!(empty.is_empty());
 
-        // Prompt form double-confirm (key new).
+        // Prompt form double-confirm (validator new).
         let prompted = resolve_mnemonic_passphrase(
             &MnemonicPassphraseForm::Prompt,
             &ScriptedLines::new(vec!["TREZOR", "TREZOR"]),
@@ -1690,7 +1691,7 @@ mod tests {
         assert_eq!(v["version"], 4);
         assert_eq!(v["path"], "m/12381/3600/0/0/0");
         assert_eq!(v["crypto"]["kdf"]["function"], "scrypt");
-        // Unit helpers inject FAST; production N is gated by key e2e + encrypt
+        // Unit helpers inject FAST; production N is gated by validator e2e + encrypt
         // EIP-2335 spec-vector (STANDARD).
         assert_eq!(v["crypto"]["kdf"]["params"]["n"], ScryptParams::FAST.n);
     }
@@ -1723,7 +1724,7 @@ mod tests {
     }
 
     // =========================================================================
-    // key recover (K3-3)
+    // validator recover (K3-3)
     // =========================================================================
 
     #[test]
@@ -1945,7 +1946,10 @@ mod tests {
         // Same secret + password + salt/iv/uuid → byte-identical keystore JSON.
         let a = std::fs::read(&f_new[0]).unwrap();
         let b = std::fs::read(&f_rec[0]).unwrap();
-        assert_eq!(a, b, "key new and key recover must produce identical shape");
+        assert_eq!(
+            a, b,
+            "validator new and key recover must produce identical shape"
+        );
     }
 
     // =========================================================================

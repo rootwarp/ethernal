@@ -1,4 +1,4 @@
-//! Shared keystore-CLI helpers used by both the `key` and `account` namespaces.
+//! Shared keystore-CLI helpers used by both the `validator` and `account` namespaces.
 //!
 //! Neutral home for flags, validation, and the three-form BIP-39 mnemonic
 //! passphrase input so neither namespace owns the other's helpers.
@@ -50,7 +50,7 @@ impl fmt::Debug for MnemonicPassphraseForm {
     }
 }
 
-/// Flags shared by `key new` and `key recover`.
+/// Flags shared by validator/account new and recover.
 pub(crate) fn shared_args() -> Vec<Arg> {
     vec![
         Arg::new("count")
@@ -95,7 +95,7 @@ pub(crate) fn shared_args() -> Vec<Arg> {
     ]
 }
 
-/// Rejects non-interactive `key new` (stdin and stdout must both be TTYs).
+/// Rejects non-interactive `new` (validator or account); stdin and stdout must both be TTYs.
 pub fn require_tty_for_new() -> Result<(), AppError> {
     // SAFETY: isatty is async-signal-safe and has no preconditions.
     let stdin_tty = unsafe { libc::isatty(0) == 1 };
@@ -104,7 +104,7 @@ pub fn require_tty_for_new() -> Result<(), AppError> {
         return Ok(());
     }
     Err(AppError::exit2(
-        "key new requires an interactive terminal (stdin and stdout must both be a TTY); \
+        "new requires an interactive terminal (stdin and stdout must both be a TTY); \
          refusing to generate a mnemonic on a non-TTY",
     ))
 }
