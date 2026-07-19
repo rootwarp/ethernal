@@ -47,10 +47,10 @@ pub fn command() -> Command {
     Command::new("send")
         .about("Broadcast a signed deposit transaction via JSON-RPC")
         .override_usage(
-            "ethernal send --input FILE --rpc-url URL [--yes] [--wait-for-receipt] [--receipt-output FILE]",
+            "ethernal tx send --input FILE --rpc-url URL [--yes] [--wait-for-receipt] [--receipt-output FILE]",
         )
         .long_about(
-            "Submits a signed transaction (produced by sign or run) to the Ethereum network\n\
+            "Submits a signed transaction (produced by tx sign or tx run) to the Ethereum network\n\
              via eth_sendRawTransaction.\n\n\
              WARNING: This command broadcasts to the live network and SPENDS REAL ETH.\n\
              You will be prompted to type the network name before anything is sent.\n\

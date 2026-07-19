@@ -67,7 +67,7 @@ pub fn command() -> Command {
     Command::new("gen")
         .about("Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys")
         .override_usage(
-            "ethernal gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]",
+            "ethernal deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]",
         )
         .long_about(
             "Produces deposit_data-<ts>.json for one or more BLS validator public keys by\n\
@@ -75,14 +75,14 @@ pub fn command() -> Command {
              Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.\n\n\
              Examples:\n\n\
              \x20 # Hoodi testnet, two pubkeys (keystores directory contains one .json per validator)\n\
-             \x20 ethernal gen \\\n\
+             \x20 ethernal deposit gen \\\n\
              \x20   --network hoodi \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\
              \x20   --pubkeys 0x93247f2209abcafd...,0xa1b2c3d4e5f6... \\\n\
              \x20   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \\\n\
              \x20   --output-dir ./out\n\n\
              \x20 # Mainnet, single pubkey (requires explicit acknowledgement)\n\
-             \x20 ethernal gen \\\n\
+             \x20 ethernal deposit gen \\\n\
              \x20   --network mainnet \\\n\
              \x20   --i-understand-this-is-mainnet \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\

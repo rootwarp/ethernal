@@ -37,10 +37,10 @@ pub fn command() -> Command {
     Command::new("sign")
         .about("Sign a previously built unsigned deposit transaction")
         .override_usage(
-            "ethernal sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]",
+            "ethernal tx sign --signer local|ledger --input FILE [--output FILE] [--private-key-env VAR]",
         )
         .long_about(
-            "Signs an unsigned transaction produced by \"ethernal build\".\n\n\
+            "Signs an unsigned transaction produced by \"ethernal deposit build\".\n\n\
              Two signing methods are supported:\n\n\
              \x20 --signer local\n\
              \x20   Reads a secp256k1 private key from the environment variable named by\n\

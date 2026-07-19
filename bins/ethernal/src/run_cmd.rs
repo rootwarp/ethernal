@@ -43,11 +43,11 @@ pub struct RunConfig {
 pub fn command() -> Command {
     Command::new("run")
         .about("Build and sign a deposit transaction in one step (convenience command)")
-        .override_usage("ethernal run --input-file FILE --network NET --signer local|ledger [options]")
+        .override_usage("ethernal tx run --input-file FILE --network NET --signer local|ledger [options]")
         .long_about(
             "Runs build and sign in-process without writing an intermediate unsigned tx to disk.\n\n\
              Use this when both phases happen on the same machine. For air-gapped workflows\n\
-             (build offline, transfer, sign on a separate device), use the build and sign\n\
+             (build offline, transfer, sign on a separate device), use the `deposit build` and `tx sign`\n\
              subcommands separately.\n\n\
              Output artifacts:\n\
              \x20 signed.json  — the full SignedTx JSON (fields: unsigned, from, hash, r, s, v, rawRLP)\n\
