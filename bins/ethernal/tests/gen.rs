@@ -16,7 +16,9 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 
-use common::{ethernal, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, TempDir};
+use common::{
+    ethernal, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, TempDir,
+};
 
 const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
 
@@ -53,14 +55,15 @@ fn gen_dry_run_real_pipeline_emits_json() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let entries: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
-    let arr = entries.as_array().expect("array");
-    assert_eq!(arr.len(), 1, "one deposit entry");
-    assert_eq!(arr[0]["pubkey"], hoodi_pubkey());
+    // T-7: full golden equality (subsumes prior field-level pubkey/creds asserts).
+    let want = std::fs::read(hoodi_expected_deposit_data()).expect("read hoodi golden");
     assert_eq!(
-        arr[0]["withdrawal_credentials"].as_str().unwrap(),
-        WITHDRAWAL_CREDS_HEX,
-        "0x01 execution-address credentials must appear in deposit data"
+        out.stdout,
+        want,
+        "gen dry-run stdout must be byte-identical to testdata/hoodi/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&want)
     );
 
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -115,10 +118,14 @@ fn gen_writes_output_file() {
         "expected one deposit_data file, got {files:?}"
     );
     let data = std::fs::read(files[0].path()).expect("read deposit_data");
-    let entries: serde_json::Value = serde_json::from_slice(&data).expect("JSON");
+    let want = std::fs::read(hoodi_expected_deposit_data()).expect("read hoodi golden");
     assert_eq!(
-        entries[0]["withdrawal_credentials"].as_str().unwrap(),
-        WITHDRAWAL_CREDS_HEX
+        data,
+        want,
+        "deposit_data file must be byte-identical to testdata/hoodi/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&data),
+        String::from_utf8_lossy(&want)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

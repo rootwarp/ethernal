@@ -115,6 +115,11 @@ pub fn hoodi_pubkey() -> String {
     raw.trim().to_string()
 }
 
+/// Golden Launchpad deposit JSON for the hoodi real-pipeline gen test (T-7).
+pub fn hoodi_expected_deposit_data() -> PathBuf {
+    workspace_testdata().join("hoodi/deposit_data-expected.json")
+}
+
 // --- unique temp dirs (auto-cleaned) ---
 
 /// A uniquely named temp directory that removes itself on drop.
