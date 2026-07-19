@@ -1,9 +1,13 @@
 name: e2e-live
 
-# Live (anvil) tier — manual only for now (E6-4 / M6).
-# E7 adds schedule + release-tag triggers and switches the run step to `make e2e-live`.
+# Live (anvil) tier — schedule (nightly), release tags, and manual dispatch.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *'
+  push:
+    tags:
+      - 'v*.*.*'
 
 jobs:
   live:
@@ -28,4 +32,4 @@ jobs:
           version: v1.7.1
 
       - name: E2E live (ignored anvil tests)
-        run: cargo test --workspace --test 'e2e*' -- --ignored
+        run: make e2e-live

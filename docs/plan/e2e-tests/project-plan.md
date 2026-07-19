@@ -426,8 +426,8 @@ Consolidated here so Stage 6 does not re-open them:
   G5 (recover-path hardening reachable this stage).
 - [x] **M4/E4** — T-12·recover green. → G5.
 - [x] **M5/E5** — T-7/T-8/T-19 green. → G6.
-- [ ] **M6/E6** — T-6 + T-13 green locally + via a manual CI dispatch (anvil-in-CI proven). → G3, G4.
-- [ ] **M7a/E7** — two-tier CI wired; live workflow scheduled/release-gated and green; hermetic tier
+- [x] **M6/E6** — T-6 + T-13 green locally + via a manual CI dispatch (anvil-in-CI proven). → G3, G4.
+- [x] **M7a/E7** — two-tier CI wired; live workflow scheduled/release-gated and green; hermetic tier
   unchanged and PR-gating. → G3, G7.
 
 **Optional (M7b/E8):** T-15/T-16 green; `verify-parity.md` maps every automatable `SKILL.md` step and marks
