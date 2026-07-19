@@ -14,6 +14,10 @@
 
 #![allow(dead_code)]
 
+// Live-tier anvil harness (unix only — shells out to the Foundry `anvil` binary).
+#[cfg(unix)]
+pub mod anvil;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
