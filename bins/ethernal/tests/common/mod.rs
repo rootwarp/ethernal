@@ -120,6 +120,26 @@ pub fn hoodi_expected_deposit_data() -> PathBuf {
     workspace_testdata().join("hoodi/deposit_data-expected.json")
 }
 
+/// The mainnet keystore fixtures used by the mainnet gen guard/golden tests (T-8).
+pub fn mainnet_keystores() -> PathBuf {
+    workspace_testdata().join("mainnet/keystores")
+}
+pub fn mainnet_passphrase() -> String {
+    let raw = std::fs::read_to_string(workspace_testdata().join("mainnet/passphrase.txt"))
+        .expect("read mainnet passphrase");
+    raw.trim_end_matches(['\r', '\n']).to_string()
+}
+pub fn mainnet_pubkey() -> String {
+    let raw = std::fs::read_to_string(workspace_testdata().join("mainnet/pubkeys.txt"))
+        .expect("read mainnet pubkeys");
+    raw.trim().to_string()
+}
+
+/// Golden Launchpad deposit JSON for the mainnet real-pipeline gen test (T-8).
+pub fn mainnet_expected_deposit_data() -> PathBuf {
+    workspace_testdata().join("mainnet/deposit_data-expected.json")
+}
+
 // --- unique temp dirs (auto-cleaned) ---
 
 /// A uniquely named temp directory that removes itself on drop.

@@ -17,10 +17,12 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 
 use common::{
-    ethernal, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase, hoodi_pubkey, TempDir,
+    ethernal, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase, hoodi_pubkey,
+    mainnet_expected_deposit_data, mainnet_keystores, mainnet_passphrase, mainnet_pubkey, TempDir,
 };
 
 const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
+const MAINNET_PASS_ENV: &str = "TEST_MAINNET_PASSPHRASE";
 
 /// Known EIP-55 checksummed address (signer local test key).
 const WITHDRAWAL_ADDR: &str = "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1";
@@ -466,5 +468,114 @@ fn gen_banner_echoes_withdrawal_address_and_credentials() {
     assert!(
         stderr.contains(&format!("withdrawal_credentials=0x{WITHDRAWAL_CREDS_HEX}")),
         "banner must show full credentials hex: {stderr}"
+    );
+}
+
+// T-8 / E5-2: gen --network mainnet without --i-understand-this-is-mainnet → exit 2.
+#[test]
+fn gen_mainnet_without_ack_exit2() {
+    let out = ethernal()
+        .env(MAINNET_PASS_ENV, mainnet_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(mainnet_keystores())
+        .args([
+            "--pubkeys",
+            &mainnet_pubkey(),
+            "--network",
+            "mainnet",
+            "--dry-run",
+            "--passphrase-env",
+            MAINNET_PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--i-understand-this-is-mainnet"),
+        "stderr must name the mainnet ack flag: {stderr}"
+    );
+}
+
+// T-8 / E5-2: with the flag, mainnet gen proceeds and byte-matches the golden.
+#[test]
+fn gen_mainnet_with_ack_matches_golden() {
+    let out = ethernal()
+        .env(MAINNET_PASS_ENV, mainnet_passphrase())
+        .args(["gen", "--keystore-dir"])
+        .arg(mainnet_keystores())
+        .args([
+            "--pubkeys",
+            &mainnet_pubkey(),
+            "--network",
+            "mainnet",
+            "--i-understand-this-is-mainnet",
+            "--dry-run",
+            "--passphrase-env",
+            MAINNET_PASS_ENV,
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let want = std::fs::read(mainnet_expected_deposit_data()).expect("read mainnet golden");
+    assert_eq!(
+        out.stdout,
+        want,
+        "gen mainnet dry-run stdout must be byte-identical to testdata/mainnet/deposit_data-expected.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&want)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("MAINNET"),
+        "mainnet banner must be uppercase: {stderr}"
+    );
+}
+
+// T-8 / E5-2: gen without --passphrase-env under piped (non-TTY) stdio → exit 2.
+// `.output()` pipes stdin/stdout/stderr so /dev/tty is the only prompt surface;
+// TermPromptSource fails NoTty and the message names --passphrase-env.
+#[test]
+fn gen_pipe_without_passphrase_env_exit2() {
+    let out = ethernal()
+        .args(["gen", "--keystore-dir"])
+        .arg(hoodi_keystores())
+        .args([
+            "--pubkeys",
+            &hoodi_pubkey(),
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--withdrawal-address",
+            WITHDRAWAL_ADDR,
+        ])
+        .output()
+        .expect("run gen");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--passphrase-env"),
+        "stderr must name --passphrase-env: {stderr}"
     );
 }

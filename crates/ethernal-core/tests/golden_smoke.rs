@@ -21,12 +21,11 @@ const GOLDEN_SECRET: [u8; 32] = [
     0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x01,
 ];
 
-/// Historical type-0x00 BLS withdrawal placeholder (mainnet golden still uses this).
-const GOLDEN_WITHDRAWAL_CREDENTIALS_00: [u8; 32] = [0u8; 32];
-
 /// 0x01 ‖ 11 zero ‖ signer local test key `0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1`.
-/// Matches the post-K5 `gen --withdrawal-address` path that regenerates the hoodi golden.
-const GOLDEN_WITHDRAWAL_CREDENTIALS_HOODI: [u8; 32] = {
+/// Matches the post-K5 `gen --withdrawal-address` path that regenerates the
+/// hoodi/mainnet goldens. Mainnet was realigned from the historical all-zero
+/// 0x00 placeholder (rejected by gen) for the same reason as hoodi (E5-1/E5-2).
+const GOLDEN_WITHDRAWAL_CREDENTIALS_01: [u8; 32] = {
     let mut c = [0u8; 32];
     c[0] = 0x01;
     // 1a642f0e3c3af545e7acbd38b07251b3990914f1
@@ -113,7 +112,7 @@ use ethernal_core::bls::Signer as _;
 
 #[test]
 fn hoodi_golden_deposit_byte_identical() {
-    run_golden(Network::Hoodi, "hoodi", GOLDEN_WITHDRAWAL_CREDENTIALS_HOODI);
+    run_golden(Network::Hoodi, "hoodi", GOLDEN_WITHDRAWAL_CREDENTIALS_01);
 }
 
 #[test]
@@ -121,6 +120,6 @@ fn mainnet_golden_deposit_byte_identical() {
     run_golden(
         Network::Mainnet,
         "mainnet",
-        GOLDEN_WITHDRAWAL_CREDENTIALS_00,
+        GOLDEN_WITHDRAWAL_CREDENTIALS_01,
     );
 }
