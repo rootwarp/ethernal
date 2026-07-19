@@ -24,6 +24,7 @@ use ethernal_core::bip39;
 use ethernal_core::hd::{self, KeyPath};
 use ethernal_core::hd_secp256k1::{self, Bip44Path};
 use ethernal_core::output::{write_new_0600, OutputError};
+use ethernal_keystore::decrypt_v3;
 use ethernal_keystore::encrypt_v3::{v3_filename, ScryptParams};
 use ethernal_signer::{eip55_checksum, secret_to_address};
 
@@ -353,6 +354,104 @@ fn account_recover_keystores_match_fixture() {
         assert!(
             !String::from_utf8_lossy(&raw).contains(&entry.eoa_private_key),
             "plaintext secret leaked into keystore JSON"
+        );
+    }
+}
+
+/// T-3 / E3-1 — v3 correctness via `account recover` + `decrypt_v3`.
+///
+/// Structural address-match alone leaves the encrypt path unproven (`address`
+/// is written independent of the ciphertext). `decrypt_v3` closes that gap:
+/// decrypt → secret → derive address == keystore `address` == fixture address.
+#[test]
+fn account_recover_decrypt_v3_round_trip_matches_fixture() {
+    let fx = load_fixture();
+    let dir = TempDir::new("e3-1-decrypt-v3");
+    let (_stdout, stderr, ok) = run_account_recover(dir.path(), COUNT);
+    assert!(ok, "account recover failed: stderr={stderr}");
+
+    let files = v3_files(dir.path());
+    assert_eq!(
+        files.len(),
+        COUNT as usize,
+        "expected {COUNT} keystores, got {files:?}"
+    );
+
+    let mut by_addr: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+    for f in &files {
+        let name = f.file_name().unwrap().to_string_lossy().into_owned();
+        let (addr, _secs, _nanos) = parse_v3_filename(&name);
+        by_addr.insert(hex::encode(addr), f.clone());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "mode for {f:?}");
+        }
+    }
+
+    for entry in &fx.indices {
+        let f = by_addr
+            .get(&entry.address)
+            .unwrap_or_else(|| panic!("missing keystore for address {}", entry.address));
+        let raw = std::fs::read(f).expect("read keystore");
+        let v: serde_json::Value = serde_json::from_slice(&raw).expect("keystore JSON");
+
+        // Structural v3 (version / cipher / scrypt / mac / address / filename / 0600).
+        assert_eq!(v["version"], 3, "version index {}", entry.index);
+        assert_eq!(
+            v["address"].as_str().unwrap(),
+            entry.address,
+            "JSON address index {}",
+            entry.index
+        );
+        assert_eq!(v["crypto"]["cipher"], "aes-128-ctr");
+        assert_eq!(v["crypto"]["kdf"], "scrypt");
+        assert_eq!(
+            v["crypto"]["kdfparams"]["n"],
+            ScryptParams::STANDARD.n,
+            "production scrypt N"
+        );
+        assert_eq!(v["crypto"]["kdfparams"]["r"], ScryptParams::STANDARD.r);
+        assert_eq!(v["crypto"]["kdfparams"]["p"], ScryptParams::STANDARD.p);
+        assert!(
+            v["crypto"]["ciphertext"].as_str().is_some(),
+            "ciphertext index {}",
+            entry.index
+        );
+        // Web3 v3 MAC is Keccak-256 over derived-key[16..32] || ciphertext.
+        let mac = v["crypto"]["mac"].as_str().expect("mac present");
+        assert_eq!(
+            mac.len(),
+            64,
+            "keccak-256 mac is 32 bytes hex, index {}",
+            entry.index
+        );
+        assert!(v["id"].as_str().is_some(), "id index {}", entry.index);
+
+        // decrypt_v3 → secret → address == keystore address == fixture address/eip55.
+        let secret = decrypt_v3(&raw, KEYSTORE_PW.as_bytes())
+            .unwrap_or_else(|e| panic!("decrypt_v3 index {}: {e}", entry.index));
+        let derived = secret_to_address(&secret)
+            .unwrap_or_else(|e| panic!("secret_to_address index {}: {e}", entry.index));
+        let derived_hex = hex::encode(derived);
+        let ks_addr = v["address"].as_str().unwrap();
+        assert_eq!(
+            derived_hex, ks_addr,
+            "decrypt-derived address != keystore address, index {}",
+            entry.index
+        );
+        assert_eq!(
+            derived_hex, entry.address,
+            "decrypt-derived address != fixture address, index {}",
+            entry.index
+        );
+        assert_eq!(
+            eip55_checksum(&derived),
+            entry.eip55,
+            "decrypt-derived EIP-55 != fixture, index {}",
+            entry.index
         );
     }
 }
