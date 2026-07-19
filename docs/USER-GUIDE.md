@@ -1,5 +1,9 @@
 # ethernal User Guide
 
+> **New here?** Start with the [README](../README.md) for the friendly
+> introduction, then come back here. This is the comprehensive reference —
+> every command, flag, exit code, and security detail.
+
 Comprehensive guide for `ethernal`, the CLI in this repository that takes a
 validator all the way from a BIP-39 mnemonic to a broadcast Ethereum deposit
 transaction, and (separately) creates Web3 v3 EOA keystores:
@@ -9,9 +13,10 @@ transaction, and (separately) creates Web3 v3 EOA keystores:
 - **`ethernal gen`** — produces Launchpad-compatible deposit data JSON (BLS signatures over the deposit message) from EIP-2335 validator keystores.
 - **`ethernal build|sign|run|send`** — builds, signs (Ledger or local key), and broadcasts the Ethereum transaction that submits the deposit to the Beacon Chain deposit contract.
 
-**Status:** unreleased, pending the first tag under the merged name. `ethernal` combines the formerly separate `eth-deposit-gen` (released as v1.0.0) and `eth-deposit-tx` (never tagged) binaries into one tool — see `CHANGELOG.md` for the merge note.
-
-**Implementation:** `ethernal` is a Rust workspace (the original Go implementation was ported with byte-identical outputs on the shared golden fixtures, then retired — see the repository `README.md` for the documented divergences and `docs/plan/` for the migration record).
+**Status:** unreleased (`0.1.0`), pending the first tag under the merged name.
+`ethernal` is a Rust workspace that combines the formerly separate
+`eth-deposit-gen` and `eth-deposit-tx` binaries; see [`CHANGELOG.md`](../CHANGELOG.md)
+for the merge, the Go→Rust port, and the documented divergences.
 
 ---
 
@@ -525,12 +530,14 @@ Produces an EIP-1559 unsigned transaction in JSON. No signing happens — runs f
 | `--network NET` / `-n NET` | `mainnet`, `hoodi`, `sepolia`, `holesky` | `hoodi` |
 | `--output PATH` | Output file for unsigned tx JSON; omit or `-` for stdout | stdout |
 | `--index N` | Which deposit entry to use when the JSON has multiple validators | `0` |
-| `--rpc-url URL` | JSON-RPC endpoint. When set, any gas/fee/nonce not passed explicitly is fetched from the node (requires `--from`); when omitted, the build is fully offline | — |
+| `--rpc-url URL` | JSON-RPC endpoint (`http`/`https` only; `ws://` is rejected). When set, any gas/fee/nonce not passed explicitly is fetched from the node (requires `--from`); when omitted, the build is fully offline | — |
 | `--gas-limit N` | EIP-1559 gas limit | `250000` |
 | `--max-fee-per-gas WEI` | EIP-1559 max fee per gas (decimal wei) | `20000000000` (20 gwei) |
 | `--max-priority-fee-per-gas WEI` | EIP-1559 priority fee per gas (decimal wei) | `1000000000` (1 gwei) |
 | `--nonce N` | Sender account nonce. With `--rpc-url` and omitted, the node's pending nonce is used; offline, omitting defaults to 0 (first-time sender only) | `0` (offline) |
 | `--from ADDR` | Sender address (0x-prefixed, 20-byte hex). Required with `--rpc-url` when `--nonce`/`--gas-limit` is omitted, to fetch the pending nonce and estimate gas | — |
+
+Wei quantities (fees, value) are held as `u128`; a value ≥ 2^128 wei is rejected.
 
 ### Examples
 
@@ -872,6 +879,7 @@ fi
 - **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from env vars only; Ledger keys never leave the device. Mnemonics from `key new` / `account new` are shown only on the controlling terminal and never on stdout/stderr/logs.
 - **Signed artifacts and keystores are written with restricted perms** (0o600; receiver can verify a signed tx by recovering the sender and checking the tx hash).
 - **Broadcast is gated by chain-ID match and operator confirmation.** A signed-for-Holesky transaction will not be broadcast to a mainnet RPC endpoint.
+- **RPC credentials are redacted from error messages by construction.** API keys embedded in an `--rpc-url` are stripped before any error is logged or printed.
 
 It does NOT protect:
 
