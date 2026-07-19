@@ -520,7 +520,7 @@ mod tests {
     use super::*;
     use crate::account_cli::AccountMode;
     use crate::errors::exit_code_for;
-    use crate::key_cli::MnemonicPassphraseForm;
+    use crate::keystore_cli::MnemonicPassphraseForm;
     use ethernal_keystore::require_min_len;
     use std::collections::VecDeque;
     use std::path::PathBuf;

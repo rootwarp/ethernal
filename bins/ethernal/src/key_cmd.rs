@@ -23,7 +23,8 @@ use zeroize::Zeroizing;
 
 use crate::errors::AppError;
 use crate::gen_cmd::Progress;
-use crate::key_cli::{KeyConfig, MnemonicPassphraseForm};
+use crate::key_cli::KeyConfig;
+use crate::keystore_cli::MnemonicPassphraseForm;
 use crate::logging::{Format, Level, Logger};
 
 // ---------------------------------------------------------------------------

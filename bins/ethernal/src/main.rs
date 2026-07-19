@@ -23,6 +23,7 @@ mod gen_cli;
 mod gen_cmd;
 mod key_cli;
 mod key_cmd;
+mod keystore_cli;
 mod logging;
 mod run_cmd;
 mod send_cmd;

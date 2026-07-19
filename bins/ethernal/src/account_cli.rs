@@ -11,7 +11,7 @@ use ethernal_core::cancel::CancelToken;
 
 use crate::account_cmd;
 use crate::errors::AppError;
-use crate::key_cli::{
+use crate::keystore_cli::{
     require_tty_for_new, resolve_mnemonic_passphrase, shared_args, validate_output_dir,
     MnemonicPassphraseForm,
 };
