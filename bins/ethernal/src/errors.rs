@@ -102,6 +102,17 @@ pub enum AppError {
         output: String,
     },
 
+    /// A derivation or post-write self-check failed (C1–C4). Carries no key material:
+    /// check tag, index, HD or file path, and a secret-free detail only. Exit code 3.
+    /// Call sites land in V3-2; `path` is retained for V4-2 C4 file-retention messaging.
+    #[allow(dead_code)] // no production call site until V3-2
+    KeyVerifyFailed {
+        check: &'static str, // "C1" | "C2" | "C3" | "C4"
+        index: u32,
+        path: String,
+        detail: String,
+    },
+
     /// A context-message wrapper that preserves the source's classification
     /// (the port of `fmt.Errorf("...: %w", err)`).
     Context {
@@ -147,6 +158,15 @@ impl fmt::Display for AppError {
             AppError::DepositCliFailed { output } => {
                 write!(f, "deposit CLI verification failed: {output}")
             }
+            AppError::KeyVerifyFailed {
+                check,
+                index,
+                detail,
+                ..
+            } => write!(
+                f,
+                "keystore self-check failed for index {index} ({check}): {detail}"
+            ),
             AppError::Context { msg, source } => write!(f, "{msg}: {source}"),
             AppError::Internal(msg) => f.write_str(msg),
         }
@@ -276,6 +296,7 @@ pub fn exit_code_for(err: &AppError) -> i32 {
         AppError::Hd(_) => 3,
         AppError::Bip32(_) => 3,
         AppError::Deposit(DepositError::SelfVerifyFailed { .. }) => 3,
+        AppError::KeyVerifyFailed { .. } => 3,
         AppError::BlsInit(_) => 3,
         AppError::DepositCliFailed { .. } => 3,
 
@@ -691,5 +712,71 @@ mod tests {
             4
         );
         assert_eq!(code(AppError::Aborted("interrupted".into())), 4);
+    }
+
+    // --- keygen self-check (V3-1 / PR-14, PR-16) ---
+
+    #[test]
+    fn key_verify_failed_is_exit3() {
+        assert_eq!(
+            code(AppError::KeyVerifyFailed {
+                check: "C1",
+                index: 0,
+                path: "m/12381/3600/0/0/0".into(),
+                detail: "pubkey mismatch".into(),
+            }),
+            3
+        );
+        assert_eq!(
+            code(AppError::context(
+                "derive",
+                AppError::KeyVerifyFailed {
+                    check: "C4",
+                    index: 2,
+                    path: "/tmp/keystore.json".into(),
+                    detail: "decrypt round-trip failed".into(),
+                }
+            )),
+            3
+        );
+    }
+
+    #[test]
+    fn key_verify_failed_display_has_check_and_index_no_secret() {
+        let e = AppError::KeyVerifyFailed {
+            check: "C2",
+            index: 7,
+            path: "m/12381/3600/7/0/0".into(),
+            detail: "signature verify failed against derived pubkey".into(),
+        };
+        let AppError::KeyVerifyFailed {
+            check,
+            index,
+            path,
+            detail,
+        } = &e
+        else {
+            panic!("expected KeyVerifyFailed");
+        };
+        assert_eq!(*check, "C2");
+        assert_eq!(*index, 7);
+        assert_eq!(path, "m/12381/3600/7/0/0");
+        assert!(!detail.is_empty());
+
+        let s = e.to_string();
+        assert!(
+            s.contains("C2") && s.contains("7"),
+            "Display must include check tag and index: {s}"
+        );
+        assert!(
+            s.contains("keystore self-check failed for index 7 (C2):"),
+            "Display shape: {s}"
+        );
+        // PR-16: no secret-shaped material (no 64-hex-char run).
+        let has_64_hex = s
+            .as_bytes()
+            .windows(64)
+            .any(|w| w.iter().all(|b| b.is_ascii_hexdigit()));
+        assert!(!has_64_hex, "Display must not contain a 64-hex run: {s}");
     }
 }
