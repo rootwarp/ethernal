@@ -24,6 +24,7 @@ mod gen_cmd;
 mod keygen;
 mod keystore_cli;
 mod logging;
+mod progress;
 mod run_cmd;
 mod send_cmd;
 mod sign_cmd;

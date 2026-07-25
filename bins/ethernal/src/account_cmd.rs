@@ -27,13 +27,13 @@ use zeroize::Zeroizing;
 use crate::account_cli::AccountConfig;
 use crate::errors::AppError;
 use crate::fs_util::{open_tty_writer, stderr_is_tty};
-use crate::gen_cmd::Progress;
 use crate::keygen::{
     check_cancel, resolve_mnemonic_passphrase, run_ceremony, MinLenPassphrase, MnemonicSource,
     RecoverMnemonicSource, StdinMnemonicSource,
 };
 use crate::keystore_cli::{write_with_retry, START_INDEX_OVERFLOW_MSG};
 use crate::logging::{Format, Level, Logger};
+use crate::progress::Progress;
 
 // ---------------------------------------------------------------------------
 // Injectable seams
