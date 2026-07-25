@@ -15,7 +15,8 @@ use ethernal_core::hd::{self, KeyPath};
 use ethernal_core::output::OutputError;
 use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput, ScryptParams};
 use ethernal_keystore::{
-    EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource, KEYSTORE_PASSPHRASE_MIN_LEN,
+    EnvSource, KeyLoader, KeystoreError, Loader, NewKeystorePassphrase, PassphraseSource,
+    KEYSTORE_PASSPHRASE_MIN_LEN,
 };
 use zeroize::Zeroizing;
 
@@ -59,6 +60,10 @@ pub(crate) struct ValidatorDeps<'a> {
     /// scrypt cost for EIP-2335 encrypt. Production: [`ScryptParams::STANDARD`].
     /// Unit tests inject [`ScryptParams::FAST`] so the suite stays snappy.
     pub scrypt: ScryptParams,
+    /// EIP-2335 loader for the C4 round trip. Production: [`Loader`].
+    // Consumed by V4-2 (`verify_written_keystore`); present as plumbing in V4-1.
+    #[allow(dead_code)]
+    pub loader: &'a (dyn KeyLoader + Sync),
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +113,7 @@ pub(crate) fn run_validator_new(
         ))
     })?;
     let mut summary_out = std::io::stderr();
+    let loader = Loader::new();
 
     let mut deps = ValidatorDeps {
         cfg,
@@ -120,6 +126,7 @@ pub(crate) fn run_validator_new(
         logger: &logger,
         now_unix,
         scrypt: ScryptParams::STANDARD,
+        loader: &loader,
     };
     run_validator_new_with_deps(&mut deps, cancel)
 }
@@ -161,6 +168,7 @@ pub(crate) fn run_validator_recover(
     let mnemonic_src = RecoverMnemonicSource::new(std::io::stderr());
     let mut tty_writer = io::sink();
     let mut summary_out = std::io::stderr();
+    let loader = Loader::new();
 
     let mut deps = ValidatorDeps {
         cfg,
@@ -173,6 +181,7 @@ pub(crate) fn run_validator_recover(
         logger: &logger,
         now_unix,
         scrypt: ScryptParams::STANDARD,
+        loader: &loader,
     };
     run_validator_recover_with_deps(&mut deps, cancel)
 }
@@ -521,6 +530,7 @@ mod tests {
         let mut tty = Vec::new();
         let mut summary = Vec::new();
         let logger = Logger::discard();
+        let loader = Loader::new();
         let mut deps = ValidatorDeps {
             cfg,
             entropy,
@@ -532,6 +542,7 @@ mod tests {
             logger: &logger,
             now_unix: 1_700_000_000,
             scrypt: ScryptParams::FAST,
+            loader: &loader,
         };
         run_validator_new_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -558,6 +569,7 @@ mod tests {
         let mut tty = Vec::new();
         let mut summary = Vec::new();
         let logger = Logger::discard();
+        let loader = Loader::new();
         let mut deps = ValidatorDeps {
             cfg,
             entropy,
@@ -569,6 +581,7 @@ mod tests {
             logger: &logger,
             now_unix: 1_700_000_000,
             scrypt: ScryptParams::FAST,
+            loader: &loader,
         };
         run_validator_recover_with_deps(&mut deps, cancel)?;
         Ok((tty, summary))
@@ -715,6 +728,7 @@ mod tests {
         let mut tty = FailWrite;
         let mut summary = Vec::new();
         let logger = Logger::discard();
+        let loader = Loader::new();
         let mut deps = ValidatorDeps {
             cfg: &cfg,
             entropy: &entropy,
@@ -726,6 +740,7 @@ mod tests {
             logger: &logger,
             now_unix: 1_700_000_000,
             scrypt: ScryptParams::FAST,
+            loader: &loader,
         };
         let err = run_validator_new_with_deps(&mut deps, &CancelToken::new()).unwrap_err();
         assert_eq!(exit_code_for(&err), 2, "err={err}");
@@ -1475,6 +1490,7 @@ mod tests {
             Box::new(SharedWriter(Arc::clone(&logbuf))),
         );
         {
+            let loader = Loader::new();
             let mut deps = ValidatorDeps {
                 cfg: &cfg,
                 entropy: &entropy,
@@ -1486,6 +1502,7 @@ mod tests {
                 logger: &logger,
                 now_unix: 1_700_000_000,
                 scrypt: ScryptParams::FAST,
+                loader: &loader,
             };
             run_validator_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }
@@ -1597,6 +1614,7 @@ mod tests {
             Box::new(SharedWriter(Arc::clone(&logbuf))),
         );
         {
+            let loader = Loader::new();
             let mut deps = ValidatorDeps {
                 cfg: &cfg,
                 entropy: &entropy,
@@ -1608,6 +1626,7 @@ mod tests {
                 logger: &logger,
                 now_unix: 1_700_000_000,
                 scrypt: ScryptParams::FAST,
+                loader: &loader,
             };
             run_validator_recover_with_deps(&mut deps, &CancelToken::new()).expect("ok");
         }

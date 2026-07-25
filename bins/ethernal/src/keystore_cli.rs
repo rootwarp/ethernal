@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgMatches};
 use ethernal_core::output::{write_new_0600, OutputError};
+use ethernal_keystore::{KeystoreError, PassphraseSource};
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
@@ -155,6 +156,36 @@ pub(crate) fn parse_mnemonic_passphrase_form(
 }
 
 // ---------------------------------------------------------------------------
+// InMemoryPassphrase — post-write decrypt round trip (C4 / V4-1)
+// ---------------------------------------------------------------------------
+
+/// A [`PassphraseSource`] over a passphrase already held in memory, for the
+/// post-write decrypt round trip (C4). Never prompts and never re-reads the
+/// environment: re-prompting mid-loop is unacceptable and a second
+/// [`ethernal_keystore::EnvSource`] read is a needless extra exposure.
+///
+/// `read()` returns a fresh `Vec` copy — the trait returns a plain `Vec` and
+/// documents that the caller must re-wrap; the master copy stays in
+/// [`Zeroizing`].
+// Consumed by V4-2 (`verify_written_keystore`); present as plumbing in V4-1.
+#[allow(dead_code)]
+pub(crate) struct InMemoryPassphrase(Zeroizing<Vec<u8>>);
+
+#[allow(dead_code)] // V4-2 construction site
+impl InMemoryPassphrase {
+    /// Wraps `bytes` as the master copy (zeroized on drop).
+    pub(crate) fn new(bytes: Vec<u8>) -> Self {
+        Self(Zeroizing::new(bytes))
+    }
+}
+
+impl PassphraseSource for InMemoryPassphrase {
+    fn read(&self) -> Result<Vec<u8>, KeystoreError> {
+        Ok(self.0.to_vec())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // write_with_retry — shared keystore write skeleton (T2.2)
 // ---------------------------------------------------------------------------
 
@@ -189,6 +220,18 @@ pub(crate) fn write_with_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_memory_passphrase_read_returns_exact_bytes_separate_allocations() {
+        let src = InMemoryPassphrase::new(b"secret-pass".to_vec());
+        let a = src.read().expect("read a");
+        let b = src.read().expect("read b");
+        assert_eq!(&a[..], b"secret-pass");
+        assert_eq!(&b[..], b"secret-pass");
+        assert_eq!(a, b);
+        // Two calls return equal content via separate allocations.
+        assert_ne!(a.as_ptr(), b.as_ptr());
+    }
 
     #[test]
     fn mnemonic_passphrase_debug_redacts_secrets() {
