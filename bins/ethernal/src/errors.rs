@@ -107,8 +107,7 @@ pub enum AppError {
     KeyVerifyFailed {
         check: &'static str, // "C1" | "C2" | "C3" | "C4"
         index: u32,
-        /// HD path for C1–C3; written file path for C4 (V4-2 retention messaging).
-        #[allow(dead_code)] // read by V4-2 C4 multi-line Display; stored now for C1–C3
+        /// HD path for C1–C3; written file path for C4 (PR-15 retention messaging).
         path: String,
         detail: String,
     },
@@ -161,12 +160,22 @@ impl fmt::Display for AppError {
             AppError::KeyVerifyFailed {
                 check,
                 index,
+                path,
                 detail,
-                ..
-            } => write!(
-                f,
-                "keystore self-check failed for index {index} ({check}): {detail}"
-            ),
+            } => {
+                // Base line for C1–C4; C4 appends file-retention lines (PR-15 / D-5).
+                write!(
+                    f,
+                    "keystore self-check failed for index {index} ({check}): {detail}"
+                )?;
+                if *check == "C4" {
+                    write!(
+                        f,
+                        "\n  file: {path}\n  the file was NOT removed; do not use it. No further keys were created."
+                    )?;
+                }
+                Ok(())
+            }
             AppError::Context { msg, source } => write!(f, "{msg}: {source}"),
             AppError::Internal(msg) => f.write_str(msg),
         }
@@ -778,5 +787,40 @@ mod tests {
             .windows(64)
             .any(|w| w.iter().all(|b| b.is_ascii_hexdigit()));
         assert!(!has_64_hex, "Display must not contain a 64-hex run: {s}");
+    }
+
+    #[test]
+    fn key_verify_failed_c4_display_includes_file_retention() {
+        let e = AppError::KeyVerifyFailed {
+            check: "C4",
+            index: 2,
+            path: "/tmp/out/keystore-m_12381_3600_2_0_0-1700000000.json".into(),
+            detail: "decrypted secret does not match the derived secret".into(),
+        };
+        let s = e.to_string();
+        assert!(
+            s.contains("keystore self-check failed for index 2 (C4):"),
+            "base line: {s}"
+        );
+        assert!(
+            s.contains("file: /tmp/out/keystore-m_12381_3600_2_0_0-1700000000.json"),
+            "must name the file: {s}"
+        );
+        assert!(
+            s.contains("the file was NOT removed; do not use it. No further keys were created."),
+            "PR-15 retention line: {s}"
+        );
+        // C1–C3 Display must stay single-line (no retention boilerplate).
+        let c1 = AppError::KeyVerifyFailed {
+            check: "C1",
+            index: 0,
+            path: "m/12381/3600/0/0/0".into(),
+            detail: "pubkey mismatch".into(),
+        };
+        let c1s = c1.to_string();
+        assert!(
+            !c1s.contains("was NOT removed"),
+            "C1 Display must not include C4 retention lines: {c1s}"
+        );
     }
 }

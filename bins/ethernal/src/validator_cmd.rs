@@ -29,7 +29,7 @@ use crate::keygen::{
 };
 #[cfg(test)]
 use crate::keystore_cli::MnemonicPassphraseForm;
-use crate::keystore_cli::{write_with_retry, START_INDEX_OVERFLOW_MSG};
+use crate::keystore_cli::{write_with_retry, InMemoryPassphrase, START_INDEX_OVERFLOW_MSG};
 use crate::logging::{Format, Level, Logger};
 use crate::progress::{Phase, PhaseReporter, Progress};
 use crate::validator_cli::ValidatorConfig;
@@ -62,8 +62,7 @@ pub(crate) struct ValidatorDeps<'a> {
     /// Unit tests inject [`ScryptParams::FAST`] so the suite stays snappy.
     pub scrypt: ScryptParams,
     /// EIP-2335 loader for the C4 round trip. Production: [`Loader`].
-    // Consumed by V4-2 (`verify_written_keystore`); present as plumbing in V4-1.
-    #[allow(dead_code)]
+    /// Tests inject a failing loader to prove C4 is live (PR-19).
     pub loader: &'a (dyn KeyLoader + Sync),
 }
 
@@ -413,6 +412,64 @@ fn verify_derived_key(
     Ok(())
 }
 
+/// Constant-time equality for equal-length slices (secret compare).
+///
+/// Length mismatch returns `false` immediately (derived secret is always 32 bytes).
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut acc = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        acc |= x ^ y;
+    }
+    acc == 0
+}
+
+/// C4, post-write. Reads the **file** back through the loader (PR-13) and asserts
+/// both secret and pubkey_hex match the derived values. On failure leaves the
+/// file in place (D-5 / PR-15).
+fn verify_written_keystore(
+    loader: &dyn KeyLoader,
+    file: &Path,
+    pw: &dyn PassphraseSource,
+    sk_bytes: &[u8],
+    pubkey_hex: &str,
+    index: u32,
+) -> Result<(), AppError> {
+    let path_display = file.display().to_string();
+    let mut key = loader
+        .load(file, pw)
+        .map_err(|e| AppError::KeyVerifyFailed {
+            check: "C4",
+            index,
+            path: path_display.clone(),
+            detail: format!("could not decrypt written keystore: {e}"),
+        })?;
+
+    if !ct_eq(key.secret.as_slice(), sk_bytes) {
+        key.zeroize();
+        return Err(AppError::KeyVerifyFailed {
+            check: "C4",
+            index,
+            path: path_display,
+            detail: "decrypted secret does not match the derived secret".into(),
+        });
+    }
+    if key.pubkey_hex != pubkey_hex {
+        key.zeroize();
+        return Err(AppError::KeyVerifyFailed {
+            check: "C4",
+            index,
+            path: path_display,
+            detail: "keystore pubkey field does not match the derived public key".into(),
+        });
+    }
+    // Drop also zeroizes; explicit call matches crate convention (keystore.rs:23).
+    key.zeroize();
+    Ok(())
+}
+
 /// Shared tail: keystore passphrase → to_seed → per-index derive/encrypt/write.
 fn finish_from_mnemonic(
     deps: &mut ValidatorDeps<'_>,
@@ -426,6 +483,9 @@ fn finish_from_mnemonic(
 
     check_cancel(cancel)?;
     let keystore_pass = Zeroizing::new(deps.keystore_pw.read().map_err(map_encrypt_err)?);
+    // C4 passphrase source: one copy of the already-held buffer for the whole
+    // run (PR-17 / D-6). Never re-prompt and never re-read the env.
+    let c4_pw = InMemoryPassphrase::new(keystore_pass.to_vec());
 
     check_cancel(cancel)?;
     let seed = bip39::to_seed(mnemonic, mnemonic_pass).map_err(map_bip39_err)?;
@@ -498,6 +558,18 @@ fn finish_from_mnemonic(
             Ok(p) => p,
             Err(e) => return Err(map_write_err(e)),
         };
+
+        // C4 after write, reads the file on disk (I-2 / PR-13). Always on in
+        // V4-2; V4-3 gates this behind `cfg.verify_keystore` / `--no-verify`.
+        reporter.phase(i + 1, count, Phase::Verifying);
+        verify_written_keystore(
+            deps.loader,
+            &final_path,
+            &c4_pw,
+            sk_bytes.as_slice(),
+            &pubkey_hex,
+            index,
+        )?;
 
         let path_display = final_path.display().to_string();
         // Clear transient line before the durable progress line (PR-4 format).
@@ -629,8 +701,8 @@ mod tests {
     };
     use crate::validator_cli::ValidatorMode;
     use ethernal_core::hd::derive_path;
-    use ethernal_keystore::{KeyLoader, Loader};
-    use std::sync::atomic::AtomicUsize;
+    use ethernal_keystore::{Key, KeyLoader, Loader};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     /// All-zero 32-byte entropy → `abandon` × 23 + `art` (24 words).
@@ -2035,6 +2107,268 @@ mod tests {
         // Progress/summary should still be non-empty (paths + pubkeys only).
         assert!(summary_s.contains("wrote 1 keystore"), "{summary_s}");
         assert!(!logs.is_empty(), "debug logger should emit events");
+    }
+
+    // =========================================================================
+    // V4-2 C4 post-write decrypt round trip + verifying phase
+    // =========================================================================
+
+    /// Injected loader for C4 negative tests (PR-19).
+    struct FakeKeyLoader {
+        #[allow(clippy::type_complexity)]
+        f: Box<dyn Fn(&Path) -> Result<Key, KeystoreError> + Sync>,
+    }
+
+    impl KeyLoader for FakeKeyLoader {
+        fn load(&self, path: &Path, _pw: &dyn PassphraseSource) -> Result<Key, KeystoreError> {
+            (self.f)(path)
+        }
+    }
+
+    /// Counts `PassphraseSource::read` calls (prove original source is called once).
+    struct CountingPassphrase {
+        inner: FixedPassphrase,
+        calls: AtomicUsize,
+    }
+
+    impl PassphraseSource for CountingPassphrase {
+        fn read(&self) -> Result<Vec<u8>, KeystoreError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.read()
+        }
+    }
+
+    #[test]
+    fn c4_happy_path_count2_decrypts_and_writes_exactly_two() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 2);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let (_, summary) = run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let summary_s = String::from_utf8(summary).unwrap();
+
+        for i in 1..=2 {
+            assert!(
+                summary_s.contains(&format!("[{i}/2] verifying")),
+                "missing [{i}/2] verifying: {summary_s}"
+            );
+        }
+        let files = dir.keystore_files();
+        assert_eq!(files.len(), 2, "files: {files:?}");
+        assert!(summary_s.contains("wrote 2 keystores"), "{summary_s}");
+
+        // C4 already verified via Loader; re-check content still matches HD.
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
+        let loader = Loader::new();
+        let pw_src = FixedPassphrase(b"password1".to_vec());
+        for f in &files {
+            let key = loader.load(f, &pw_src).expect("load");
+            let name = f.file_name().unwrap().to_string_lossy();
+            let idx: u32 = name
+                .split('_')
+                .nth(3)
+                .and_then(|s| s.parse().ok())
+                .expect("index in filename");
+            let derived = derive_path(seed.as_slice(), &KeyPath::signing(idx)).unwrap();
+            assert_eq!(key.secret.as_slice(), derived.to_bytes().as_slice());
+            assert_eq!(key.pubkey_hex, hex::encode(derived.public_key()));
+        }
+    }
+
+    #[test]
+    fn c4_mismatched_secret_stops_run_leaves_file_exit3() {
+        let dir = Tmp::new("validator-cmd-test");
+        // count=2: first key fails C4 → second never created.
+        let cfg = base_cfg(dir.str(), 2);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = Logger::discard();
+        // Wrong secret (all zeros) so C4 fails on secret compare, not load error.
+        let fake = FakeKeyLoader {
+            f: Box::new(|_path| {
+                Ok(Key {
+                    secret: vec![0u8; 32],
+                    pubkey_hex: "00".repeat(48),
+                })
+            }),
+        };
+        let mut deps = ValidatorDeps {
+            cfg: &cfg,
+            entropy: &entropy,
+            keystore_pw: &pw,
+            mnemonic_src: &lines,
+            tty_writer: &mut tty,
+            summary_out: &mut summary,
+            progress: Progress::Tty,
+            logger: &logger,
+            now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
+            loader: &fake,
+        };
+        let err = run_validator_new_with_deps(&mut deps, &CancelToken::new()).unwrap_err();
+        match &err {
+            AppError::KeyVerifyFailed {
+                check, index, path, ..
+            } => {
+                assert_eq!(*check, "C4");
+                assert_eq!(*index, 0);
+                assert!(
+                    Path::new(path).exists(),
+                    "failing file must still exist: {path}"
+                );
+            }
+            other => panic!("expected KeyVerifyFailed C4, got {other:?}"),
+        }
+        assert_eq!(exit_code_for(&err), 3);
+        let s = err.to_string();
+        assert!(s.contains("C4"), "{s}");
+        assert!(s.contains("was NOT removed"), "{s}");
+        // First keystore written and left; second never created.
+        assert_eq!(
+            dir.keystore_files().len(),
+            1,
+            "only the failing index's file: {:?}",
+            dir.keystore_files()
+        );
+    }
+
+    #[test]
+    fn c4_mismatched_pubkey_hex_stops_run_leaves_file_exit3() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 2);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        // Right secret for index 0, wrong pubkey_hex — the scan_dir-accepts-it case.
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
+        let derived0 = derive_path(seed.as_slice(), &KeyPath::signing(0)).unwrap();
+        let sk0 = derived0.to_bytes().to_vec();
+        let wrong_pk = hex::encode(
+            derive_path(seed.as_slice(), &KeyPath::signing(1))
+                .unwrap()
+                .public_key(),
+        );
+
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = Logger::discard();
+        let fake = FakeKeyLoader {
+            f: Box::new(move |_path| {
+                Ok(Key {
+                    secret: sk0.clone(),
+                    pubkey_hex: wrong_pk.clone(),
+                })
+            }),
+        };
+        let mut deps = ValidatorDeps {
+            cfg: &cfg,
+            entropy: &entropy,
+            keystore_pw: &pw,
+            mnemonic_src: &lines,
+            tty_writer: &mut tty,
+            summary_out: &mut summary,
+            progress: Progress::Tty,
+            logger: &logger,
+            now_unix: 1_700_000_000,
+            scrypt: ScryptParams::FAST,
+            loader: &fake,
+        };
+        let err = run_validator_new_with_deps(&mut deps, &CancelToken::new()).unwrap_err();
+        match &err {
+            AppError::KeyVerifyFailed {
+                check,
+                index,
+                path,
+                detail,
+            } => {
+                assert_eq!(*check, "C4");
+                assert_eq!(*index, 0);
+                assert!(
+                    detail.contains("pubkey"),
+                    "detail should name pubkey mismatch: {detail}"
+                );
+                assert!(
+                    Path::new(path).exists(),
+                    "failing file must still exist: {path}"
+                );
+            }
+            other => panic!("expected KeyVerifyFailed C4, got {other:?}"),
+        }
+        assert_eq!(exit_code_for(&err), 3);
+        assert!(err.to_string().contains("was NOT removed"));
+        assert_eq!(dir.keystore_files().len(), 1);
+    }
+
+    #[test]
+    fn c4_original_passphrase_source_read_exactly_once() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 3);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = CountingPassphrase {
+            inner: FixedPassphrase(b"password1".to_vec()),
+            calls: AtomicUsize::new(0),
+        };
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        assert_eq!(
+            pw.calls.load(Ordering::SeqCst),
+            1,
+            "original passphrase source must be read exactly once for the whole run \
+             (InMemoryPassphrase covers C4; no re-prompt / no second env read)"
+        );
+        assert_eq!(dir.keystore_files().len(), 3);
+    }
+
+    #[test]
+    fn phase_verifying_tty_only_not_nontty() {
+        // Tty: verifying appears.
+        let dir_tty = Tmp::new("validator-cmd-test");
+        let cfg_tty = base_cfg(dir_tty.str(), 1);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let (_, summary_tty) =
+            run_with(&cfg_tty, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let tty_s = String::from_utf8(summary_tty).unwrap();
+        assert!(
+            tty_s.contains("[1/1] verifying"),
+            "Tty must show verifying phase: {tty_s}"
+        );
+
+        // NonTty: no phase labels at all (including verifying).
+        let dir_nt = Tmp::new("validator-cmd-test");
+        let cfg_nt = base_cfg(dir_nt.str(), 1);
+        let lines_nt = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = Logger::discard();
+        let loader = Loader::new();
+        {
+            let mut deps = ValidatorDeps {
+                cfg: &cfg_nt,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines_nt,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
+                loader: &loader,
+            };
+            run_validator_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+        let nt_s = String::from_utf8(summary).unwrap();
+        assert!(
+            !nt_s.contains("verifying") && !nt_s.contains("deriving") && !nt_s.contains("writing"),
+            "NonTty must not emit phase labels: {nt_s}"
+        );
+        assert_eq!(dir_nt.keystore_files().len(), 1);
     }
 
     /// Recover path: no tty display; secrets still absent from summary/logger.

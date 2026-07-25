@@ -21,8 +21,6 @@ pub(crate) enum Phase {
     Checking,
     Encrypting,
     Writing,
-    // Verifying label lands with V4-2; kept so the enum is complete.
-    #[allow(dead_code)]
     Verifying,
 }
 

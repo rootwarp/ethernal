@@ -167,11 +167,8 @@ pub(crate) fn parse_mnemonic_passphrase_form(
 /// `read()` returns a fresh `Vec` copy — the trait returns a plain `Vec` and
 /// documents that the caller must re-wrap; the master copy stays in
 /// [`Zeroizing`].
-// Consumed by V4-2 (`verify_written_keystore`); present as plumbing in V4-1.
-#[allow(dead_code)]
 pub(crate) struct InMemoryPassphrase(Zeroizing<Vec<u8>>);
 
-#[allow(dead_code)] // V4-2 construction site
 impl InMemoryPassphrase {
     /// Wraps `bytes` as the master copy (zeroized on drop).
     pub(crate) fn new(bytes: Vec<u8>) -> Self {
