@@ -30,7 +30,7 @@ use crate::keygen::{
 use crate::keystore_cli::MnemonicPassphraseForm;
 use crate::keystore_cli::{write_with_retry, START_INDEX_OVERFLOW_MSG};
 use crate::logging::{Format, Level, Logger};
-use crate::progress::Progress;
+use crate::progress::{Phase, PhaseReporter, Progress};
 use crate::validator_cli::ValidatorConfig;
 
 // ---------------------------------------------------------------------------
@@ -242,6 +242,9 @@ pub(crate) fn run_validator_new_with_deps(
     log.debug("validator new: ceremony complete", &[]);
 
     // 4–6. Keystore passphrase → seed → derive/encrypt/write.
+    // Invariant I-4: progress must not start before run_ceremony returns,
+    // because clear_after_ceremony wipes the screen (and would erase any
+    // earlier progress output with it).
     finish_from_mnemonic(
         deps,
         cancel,
@@ -319,6 +322,11 @@ fn finish_from_mnemonic(
     let out_dir = Path::new(&cfg.output_dir);
     let mut written: Vec<(String, String)> = Vec::with_capacity(count);
 
+    // PhaseReporter borrows summary_out for the whole loop; durable lines go
+    // through reporter.out() (which clears first). Drop erases any live phase
+    // line on ? exit paths (invariant I-3).
+    let mut reporter = PhaseReporter::new(deps.summary_out, deps.progress);
+
     for i in 0..count {
         check_cancel(cancel)?;
 
@@ -333,11 +341,13 @@ fn finish_from_mnemonic(
             &[("index", index.to_string()), ("path", path_str.clone())],
         );
 
+        reporter.phase(i + 1, count, Phase::Deriving);
         let derived = hd::derive_path(seed.as_slice(), &path).map_err(map_hd_err)?;
         let sk_bytes = derived.to_bytes();
         let pubkey = derived.public_key();
         let pubkey_hex = hex::encode(pubkey);
 
+        reporter.phase(i + 1, count, Phase::Encrypting);
         let mut salt = [0u8; 32];
         let mut iv = [0u8; 16];
         let mut uuid_bytes = [0u8; 16];
@@ -365,15 +375,18 @@ fn finish_from_mnemonic(
         // convention). On same-second collision, retry once at now_unix+1
         // before propagating AlreadyExists / exit 3 (K3-L5 / H5). Never
         // overwrites: write_new_0600 stays create_new-exclusive.
+        reporter.phase(i + 1, count, Phase::Writing);
         let final_path = match write_keystore_at(out_dir, &path_str, deps.now_unix, &json) {
             Ok(p) => p,
             Err(e) => return Err(map_write_err(e)),
         };
 
         let path_display = final_path.display().to_string();
+        // Clear transient line before the durable progress line (PR-4 format).
+        reporter.clear();
         emit_key_progress(
             deps.progress,
-            deps.summary_out,
+            reporter.out(),
             deps.logger,
             i + 1,
             count,
@@ -383,7 +396,7 @@ fn finish_from_mnemonic(
         written.push((path_display, pubkey_hex));
     }
 
-    print_key_summary(deps.summary_out, &written);
+    print_key_summary(reporter.out(), &written);
     log.debug(
         &format!("{label}: complete"),
         &[("count", written.len().to_string())],
@@ -1059,7 +1072,27 @@ mod tests {
         };
         let pw = FixedPassphrase(b"password1".to_vec());
         let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
-        let err = run_with(&cfg, &entropy, &pw, &lines, &cancel).unwrap_err();
+        // Inline deps so summary_out is captured on the Err path (Drop I-3).
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = Logger::discard();
+        let loader = Loader::new();
+        let err = {
+            let mut deps = ValidatorDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::Tty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
+                loader: &loader,
+            };
+            run_validator_new_with_deps(&mut deps, &cancel).unwrap_err()
+        };
         assert_eq!(exit_code_for(&err), 4, "err={err}");
         let files = dir.keystore_files();
         assert_eq!(
@@ -1068,10 +1101,22 @@ mod tests {
             "SIGINT after k=1 write must leave 1 keystore; got {files:?}"
         );
         // The remaining file must be loadable (complete, not partial).
-        let loader = Loader::new();
         loader
             .load(&files[0], &FixedPassphrase(b"password1".to_vec()))
             .expect("partial-write must not leave unloadable file");
+        // Drop path through real loop: live phase line erased, not left on screen.
+        assert!(
+            summary.ends_with(b"\r\x1b[K"),
+            "cancel mid-loop must leave buffer ending in CSI erase, got {:?}",
+            String::from_utf8_lossy(&summary)
+        );
+        let summary_s = String::from_utf8_lossy(&summary);
+        assert!(
+            !summary_s.ends_with("deriving...")
+                && !summary_s.ends_with("encrypting...")
+                && !summary_s.ends_with("writing..."),
+            "Drop must not leave phase label on screen, got {summary_s:?}"
+        );
     }
 
     #[test]
@@ -1340,7 +1385,8 @@ mod tests {
         let lines = ScriptedLines::new(vec![ABANDON_12]);
         let entropy = FixedEntropy::new(vec![]);
         let pw = FixedPassphrase(b"password1".to_vec());
-        run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let (_, summary) =
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
 
         let mut files = dir.keystore_files();
         files.sort();
@@ -1378,6 +1424,137 @@ mod tests {
             let derived = derive_path(seed.as_slice(), &KeyPath::signing(idx)).unwrap();
             assert_eq!(key.secret.as_slice(), derived.to_bytes().as_slice());
         }
+
+        // PR-8: recover shares finish_from_mnemonic — same phase reporting as new.
+        let summary_s = String::from_utf8(summary).unwrap();
+        for i in 1..=3 {
+            assert!(
+                summary_s.contains(&format!("[{i}/3] deriving")),
+                "missing [{i}/3] deriving in recover summary: {summary_s}"
+            );
+            assert!(
+                summary_s.contains(&format!("[{i}/3] encrypting")),
+                "missing [{i}/3] encrypting in recover summary: {summary_s}"
+            );
+            assert!(
+                summary_s.contains(&format!("[{i}/3] writing")),
+                "missing [{i}/3] writing in recover summary: {summary_s}"
+            );
+        }
+        assert!(summary_s.contains("keystore 1/3:"), "{summary_s}");
+        assert!(summary_s.contains("wrote 3 keystores"), "{summary_s}");
+    }
+
+    // =========================================================================
+    // V2-2 phase reporting in finish_from_mnemonic
+    // =========================================================================
+
+    #[test]
+    fn phase_reporting_count3_tty_phases_and_durable_lines() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 3);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let (_, summary) = run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let summary_s = String::from_utf8(summary).unwrap();
+
+        // Transient phases for every key.
+        for i in 1..=3 {
+            assert!(
+                summary_s.contains(&format!("[{i}/3] deriving")),
+                "missing [{i}/3] deriving: {summary_s}"
+            );
+            assert!(
+                summary_s.contains(&format!("[{i}/3] encrypting")),
+                "missing [{i}/3] encrypting: {summary_s}"
+            );
+            assert!(
+                summary_s.contains(&format!("[{i}/3] writing")),
+                "missing [{i}/3] writing: {summary_s}"
+            );
+        }
+        // Ends with last key's writing phase (then clear + durable + summary).
+        assert!(
+            summary_s.contains("[3/3] writing"),
+            "missing [3/3] writing: {summary_s}"
+        );
+
+        // Durable lines byte-identical to today's format (PR-4).
+        assert!(
+            summary_s.contains("keystore 1/3:"),
+            "durable keystore 1/3 missing: {summary_s}"
+        );
+        assert!(
+            summary_s.contains("keystore 2/3:"),
+            "durable keystore 2/3 missing: {summary_s}"
+        );
+        assert!(
+            summary_s.contains("keystore 3/3:"),
+            "durable keystore 3/3 missing: {summary_s}"
+        );
+        assert!(
+            summary_s.contains("wrote 3 keystores"),
+            "summary missing: {summary_s}"
+        );
+        // Durable keystore line shape: "keystore i/n: <path> (pubkey=0x...)"
+        for line in summary_s.lines() {
+            if let Some(rest) = line.strip_prefix("keystore ") {
+                assert!(
+                    rest.contains(": ") && rest.contains(" (pubkey=0x") && rest.ends_with(')'),
+                    "durable line format changed: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn phase_reporting_nontty_no_csi() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 2);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = Logger::discard();
+        let loader = Loader::new();
+        {
+            let mut deps = ValidatorDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
+                loader: &loader,
+            };
+            run_validator_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+        assert!(
+            !summary.contains(&b'\r'),
+            "NonTty summary must not contain \\r: {:?}",
+            String::from_utf8_lossy(&summary)
+        );
+        assert!(
+            !summary.contains(&0x1b),
+            "NonTty summary must not contain ESC: {:?}",
+            String::from_utf8_lossy(&summary)
+        );
+        let summary_s = String::from_utf8(summary).unwrap();
+        assert!(summary_s.contains("wrote 2 keystores"), "{summary_s}");
+        // NonTty: no phase labels, no durable keystore i/n lines on summary
+        // (those go to the logger).
+        assert!(
+            !summary_s.contains("deriving")
+                && !summary_s.contains("encrypting")
+                && !summary_s.contains("writing"),
+            "NonTty must not emit phase labels: {summary_s}"
+        );
     }
 
     #[test]

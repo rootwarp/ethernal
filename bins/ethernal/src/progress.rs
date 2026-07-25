@@ -15,19 +15,18 @@ pub enum Progress {
 
 /// One in-flight unit of work, rendered as a transient single line on a TTY and
 /// as nothing at all off-TTY.
-// Wired into the keygen loop by V2-2; present here so unit tests can pin the
-// renderer contract without a production call site yet.
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub(crate) enum Phase {
     Deriving,
+    // Checking/Verifying labels land with V3-2/V4-2; kept so the enum is complete.
+    #[allow(dead_code)]
     Checking,
     Encrypting,
     Writing,
+    #[allow(dead_code)]
     Verifying,
 }
 
-#[allow(dead_code)]
 impl Phase {
     fn label(self) -> &'static str {
         match self {
@@ -42,16 +41,12 @@ impl Phase {
 
 /// Transient single-line progress reporter. Owns the `dirty` bit so clear() is
 /// correct on every exit path, including error and cancel (invariant I-3).
-// Wired into the keygen loop by V2-2; present here so unit tests can pin the
-// renderer contract without a production call site yet.
-#[allow(dead_code)]
 pub(crate) struct PhaseReporter<'a> {
     out: &'a mut dyn Write,
     mode: Progress,
     dirty: bool,
 }
 
-#[allow(dead_code)]
 impl<'a> PhaseReporter<'a> {
     pub(crate) fn new(out: &'a mut dyn Write, mode: Progress) -> Self {
         Self {
