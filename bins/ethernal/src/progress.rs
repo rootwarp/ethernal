@@ -18,11 +18,10 @@ pub enum Progress {
 #[derive(Clone, Copy)]
 pub(crate) enum Phase {
     Deriving,
-    // Checking/Verifying labels land with V3-2/V4-2; kept so the enum is complete.
-    #[allow(dead_code)]
     Checking,
     Encrypting,
     Writing,
+    // Verifying label lands with V4-2; kept so the enum is complete.
     #[allow(dead_code)]
     Verifying,
 }

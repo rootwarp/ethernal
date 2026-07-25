@@ -104,11 +104,11 @@ pub enum AppError {
 
     /// A derivation or post-write self-check failed (C1–C4). Carries no key material:
     /// check tag, index, HD or file path, and a secret-free detail only. Exit code 3.
-    /// Call sites land in V3-2; `path` is retained for V4-2 C4 file-retention messaging.
-    #[allow(dead_code)] // no production call site until V3-2
     KeyVerifyFailed {
         check: &'static str, // "C1" | "C2" | "C3" | "C4"
         index: u32,
+        /// HD path for C1–C3; written file path for C4 (V4-2 retention messaging).
+        #[allow(dead_code)] // read by V4-2 C4 multi-line Display; stored now for C1–C3
         path: String,
         detail: String,
     },

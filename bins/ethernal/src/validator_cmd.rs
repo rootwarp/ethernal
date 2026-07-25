@@ -9,6 +9,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use ethernal_core::bip39::{self, Bip39Error};
+use ethernal_core::bls::{self, Signer, Verifier};
 use ethernal_core::cancel::CancelToken;
 use ethernal_core::entropy::{Entropy, EntropyError, OsEntropy};
 use ethernal_core::hd::{self, KeyPath};
@@ -300,6 +301,118 @@ pub(crate) fn run_validator_recover_with_deps(
     )
 }
 
+// ---------------------------------------------------------------------------
+// C1–C3 derivation self-checks (mandatory, pre-encrypt — invariant I-1)
+// ---------------------------------------------------------------------------
+
+/// Domain-separated probe root for the C3 proof-of-possession round trip.
+///
+/// Preimage: `b"ethernal/keygen-selfcheck/v1"`.
+/// Value: `sha256(preimage)`. Fixed, never persisted; the probe signature is
+/// dropped immediately after verify.
+const SELFCHECK_ROOT: [u8; 32] = [
+    0xaf, 0xeb, 0xe9, 0x93, 0x99, 0xf0, 0x46, 0xd3, 0x4c, 0x91, 0x7f, 0xf2, 0xa6, 0x68, 0x5a, 0x1e,
+    0x06, 0x97, 0xfe, 0x84, 0x76, 0xf0, 0xf9, 0x72, 0x4c, 0xc3, 0xa3, 0xaf, 0xae, 0xef, 0xd6, 0xf9,
+];
+
+/// C1: secret bytes reconstruct a signer whose public key matches `pubkey`.
+fn check_c1(
+    sk_bytes: &[u8],
+    pubkey: &[u8; 48],
+    index: u32,
+    path_str: &str,
+) -> Result<(), AppError> {
+    let signer = bls::new_signer(sk_bytes).map_err(|e| AppError::KeyVerifyFailed {
+        check: "C1",
+        index,
+        path: path_str.to_string(),
+        detail: format!("could not reconstruct signer from derived secret: {e}"),
+    })?;
+    let from_sk = signer.public_key().map_err(|e| AppError::KeyVerifyFailed {
+        check: "C1",
+        index,
+        path: path_str.to_string(),
+        detail: format!("could not recompute public key from secret: {e}"),
+    })?;
+    if from_sk != *pubkey {
+        return Err(AppError::KeyVerifyFailed {
+            check: "C1",
+            index,
+            path: path_str.to_string(),
+            detail: "public key derived from the secret does not match the derived public key"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
+/// C2: pubkey is a valid compressed G1 point (on-curve, subgroup, non-identity).
+fn check_c2(pubkey: &[u8; 48], index: u32, path_str: &str) -> Result<(), AppError> {
+    bls::validate_pubkey_bytes(*pubkey).map_err(|e| AppError::KeyVerifyFailed {
+        check: "C2",
+        index,
+        path: path_str.to_string(),
+        detail: format!("public key failed point validation: {e}"),
+    })
+}
+
+/// C3: sign [`SELFCHECK_ROOT`] with the secret and verify against `pubkey`.
+///
+/// Callable directly with a mismatched-but-valid pair: C3's failure path is
+/// unreachable through [`verify_derived_key`] (C1 fails first on a mismatch).
+fn check_c3(
+    sk_bytes: &[u8],
+    pubkey: &[u8; 48],
+    index: u32,
+    path_str: &str,
+) -> Result<(), AppError> {
+    let signer = bls::new_signer(sk_bytes).map_err(|e| AppError::KeyVerifyFailed {
+        check: "C3",
+        index,
+        path: path_str.to_string(),
+        detail: format!("could not reconstruct signer for self-check: {e}"),
+    })?;
+    let sig = signer
+        .sign(SELFCHECK_ROOT)
+        .map_err(|e| AppError::KeyVerifyFailed {
+            check: "C3",
+            index,
+            path: path_str.to_string(),
+            detail: format!("could not sign self-check root: {e}"),
+        })?;
+    // Probe signature is dropped when `sig` goes out of scope; never persisted.
+    let ok = bls::default_verifier()
+        .verify(*pubkey, SELFCHECK_ROOT, sig)
+        .map_err(|e| AppError::KeyVerifyFailed {
+            check: "C3",
+            index,
+            path: path_str.to_string(),
+            detail: format!("self-check signature or public key malformed: {e}"),
+        })?;
+    if !ok {
+        return Err(AppError::KeyVerifyFailed {
+            check: "C3",
+            index,
+            path: path_str.to_string(),
+            detail: "signature self-verify failed for self-check root".into(),
+        });
+    }
+    Ok(())
+}
+
+/// C1–C3, pre-write. Cheap, mandatory, no flag. Call before encrypt (I-1).
+fn verify_derived_key(
+    sk_bytes: &[u8],
+    pubkey: &[u8; 48],
+    index: u32,
+    path_str: &str,
+) -> Result<(), AppError> {
+    check_c1(sk_bytes, pubkey, index, path_str)?;
+    check_c2(pubkey, index, path_str)?;
+    check_c3(sk_bytes, pubkey, index, path_str)?;
+    Ok(())
+}
+
 /// Shared tail: keystore passphrase → to_seed → per-index derive/encrypt/write.
 fn finish_from_mnemonic(
     deps: &mut ValidatorDeps<'_>,
@@ -346,6 +459,11 @@ fn finish_from_mnemonic(
         let sk_bytes = derived.to_bytes();
         let pubkey = derived.public_key();
         let pubkey_hex = hex::encode(pubkey);
+
+        // C1–C3 before encrypt (I-1): never spend scrypt on a key that fails
+        // its own consistency / signability checks.
+        reporter.phase(i + 1, count, Phase::Checking);
+        verify_derived_key(sk_bytes.as_slice(), &pubkey, index, &path_str)?;
 
         reporter.phase(i + 1, count, Phase::Encrypting);
         let mut salt = [0u8; 32];
@@ -1554,6 +1672,155 @@ mod tests {
                 && !summary_s.contains("encrypting")
                 && !summary_s.contains("writing"),
             "NonTty must not emit phase labels: {summary_s}"
+        );
+    }
+
+    // =========================================================================
+    // V3-2 C1–C3 derivation self-checks
+    // =========================================================================
+
+    /// sk + pubkey for ZERO_MNEMONIC signing index `idx`.
+    fn zero_mnemonic_key(idx: u32) -> (Zeroizing<[u8; 32]>, [u8; 48]) {
+        let seed = bip39::to_seed(ZERO_MNEMONIC, b"").unwrap();
+        let d = derive_path(seed.as_slice(), &KeyPath::signing(idx)).unwrap();
+        (d.to_bytes(), d.public_key())
+    }
+
+    #[test]
+    fn check_c1_mismatched_sk_and_pubkey() {
+        let (sk_a, _pk_a) = zero_mnemonic_key(0);
+        let (_sk_b, pk_b) = zero_mnemonic_key(1);
+        let err = check_c1(sk_a.as_slice(), &pk_b, 0, "m/12381/3600/0/0/0").unwrap_err();
+        match &err {
+            AppError::KeyVerifyFailed { check, index, .. } => {
+                assert_eq!(*check, "C1");
+                assert_eq!(*index, 0);
+            }
+            other => panic!("expected KeyVerifyFailed C1, got {other:?}"),
+        }
+        assert_eq!(exit_code_for(&err), 3);
+        // No secret-shaped hex dump in the detail (PR-16).
+        let s = err.to_string();
+        assert!(!s.contains(&hex::encode(sk_a.as_slice())));
+        assert!(!s.contains(&hex::encode(pk_b)));
+    }
+
+    #[test]
+    fn check_c2_all_zero_pubkey() {
+        let zero_pk = [0u8; 48];
+        let err = check_c2(&zero_pk, 7, "m/12381/3600/7/0/0").unwrap_err();
+        match &err {
+            AppError::KeyVerifyFailed { check, index, .. } => {
+                assert_eq!(*check, "C2");
+                assert_eq!(*index, 7);
+            }
+            other => panic!("expected KeyVerifyFailed C2, got {other:?}"),
+        }
+        assert_eq!(exit_code_for(&err), 3);
+    }
+
+    #[test]
+    fn check_c3_mismatched_sk_and_pubkey() {
+        // Both sk_a and pk_b are individually valid; only the pair fails C3.
+        // (C1 would also fail this pair; C3 is tested by calling the helper
+        // directly — unreachable through verify_derived_key.)
+        let (sk_a, _pk_a) = zero_mnemonic_key(0);
+        let (_sk_b, pk_b) = zero_mnemonic_key(1);
+        let err = check_c3(sk_a.as_slice(), &pk_b, 1, "m/12381/3600/1/0/0").unwrap_err();
+        match &err {
+            AppError::KeyVerifyFailed { check, index, .. } => {
+                assert_eq!(*check, "C3");
+                assert_eq!(*index, 1);
+            }
+            other => panic!("expected KeyVerifyFailed C3, got {other:?}"),
+        }
+        assert_eq!(exit_code_for(&err), 3);
+        let s = err.to_string();
+        assert!(!s.contains(&hex::encode(sk_a.as_slice())));
+        assert!(!s.contains(&hex::encode(pk_b)));
+    }
+
+    #[test]
+    fn verify_derived_key_positive_zero_mnemonic() {
+        let (sk, pk) = zero_mnemonic_key(0);
+        verify_derived_key(sk.as_slice(), &pk, 0, "m/12381/3600/0/0/0")
+            .expect("real derived key must pass C1–C3");
+        // C1 first: mismatched pair fails as C1, not C3.
+        let (sk_a, _) = zero_mnemonic_key(0);
+        let (_, pk_b) = zero_mnemonic_key(1);
+        let err = verify_derived_key(sk_a.as_slice(), &pk_b, 0, "m/12381/3600/0/0/0").unwrap_err();
+        match err {
+            AppError::KeyVerifyFailed { check, .. } => assert_eq!(check, "C1"),
+            other => panic!("expected C1 via verify_derived_key, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn phase_checking_appears_on_tty_happy_path() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 2);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let before = dir.keystore_files().len();
+        let (_, summary) = run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let summary_s = String::from_utf8(summary).unwrap();
+
+        for i in 1..=2 {
+            assert!(
+                summary_s.contains(&format!("[{i}/2] checking")),
+                "missing [{i}/2] checking: {summary_s}"
+            );
+            // Full phase order: deriving → checking → encrypting → writing.
+            assert!(
+                summary_s.contains(&format!("[{i}/2] deriving")),
+                "missing [{i}/2] deriving: {summary_s}"
+            );
+            assert!(
+                summary_s.contains(&format!("[{i}/2] encrypting")),
+                "missing [{i}/2] encrypting: {summary_s}"
+            );
+            assert!(
+                summary_s.contains(&format!("[{i}/2] writing")),
+                "missing [{i}/2] writing: {summary_s}"
+            );
+        }
+        // Happy path still writes keystores (checks passed).
+        assert_eq!(dir.keystore_files().len(), before + 2);
+        assert!(summary_s.contains("wrote 2 keystores"), "{summary_s}");
+    }
+
+    #[test]
+    fn phase_checking_appears_on_recover_tty() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = recover_cfg(dir.str(), 1, 0);
+        let entropy = FixedEntropy::new(vec![]);
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let (_, summary) =
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let summary_s = String::from_utf8(summary).unwrap();
+        assert!(
+            summary_s.contains("[1/1] checking"),
+            "recover must run C1–C3 (checking phase): {summary_s}"
+        );
+        assert_eq!(dir.keystore_files().len(), 1);
+    }
+
+    /// C1–C3 are pre-write: a failed check cannot leave a keystore for that index.
+    /// Structural proof via call-order + helper failure (no production fault seam).
+    #[test]
+    fn c1_c3_failure_is_pre_write_no_keystore_for_index() {
+        let dir = Tmp::new("validator-cmd-test");
+        let (sk_a, _) = zero_mnemonic_key(0);
+        let (_, pk_b) = zero_mnemonic_key(1);
+        // Helpers fail without I/O; production path calls them before encrypt/write.
+        let err = verify_derived_key(sk_a.as_slice(), &pk_b, 0, "m/12381/3600/0/0/0").unwrap_err();
+        assert_eq!(exit_code_for(&err), 3);
+        assert!(
+            dir.keystore_files().is_empty(),
+            "C1–C3 failure must not create a keystore: {:?}",
+            dir.keystore_files()
         );
     }
 

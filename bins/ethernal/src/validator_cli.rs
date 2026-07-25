@@ -294,6 +294,44 @@ mod tests {
         assert!(parse_recover(&["--output-dir", dir.str()]).is_ok());
     }
 
+    /// C1–C3 are mandatory: no CLI flag may disable them (V3-2 / D-7).
+    /// `--no-verify` (V4-3) will skip C4 only and must document that C1–C3 always run.
+    #[test]
+    fn help_has_no_flag_disabling_c1_c3() {
+        for sub in ["new", "recover"] {
+            let mut cmd = command();
+            let sub_cmd = cmd.find_subcommand_mut(sub).expect("subcommand");
+            let mut buf = Vec::new();
+            sub_cmd.write_long_help(&mut buf).unwrap();
+            let help = String::from_utf8(buf).unwrap().to_lowercase();
+            // No flag that skips derivation self-checks.
+            for forbidden in [
+                "no-check",
+                "skip-check",
+                "skip-c1",
+                "skip-c2",
+                "skip-c3",
+                "no-c1",
+                "no-c2",
+                "no-c3",
+                "disable-check",
+                "disable-verify",
+            ] {
+                assert!(
+                    !help.contains(forbidden),
+                    "validator {sub} help must not offer a flag to skip C1–C3 ({forbidden}): {help}"
+                );
+            }
+            // When --no-verify exists (V4-3), it must not claim to skip C1–C3.
+            // Today it is absent; assert no bare "no-verify" until V4-3 lands.
+            // (V4-3 will update this test when the flag is added.)
+            assert!(
+                !help.contains("no-verify"),
+                "validator {sub}: --no-verify not yet in schema (V4-3); help must not mention it: {help}"
+            );
+        }
+    }
+
     // --- defaults and flags ---
 
     #[test]
