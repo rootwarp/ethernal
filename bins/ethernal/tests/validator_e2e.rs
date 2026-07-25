@@ -77,6 +77,14 @@ fn load_pubkeys_fixture() -> PubkeysFixture {
 
 /// Run `validator recover` with the fixed mnemonic over stdin; return stderr.
 fn run_validator_recover(out_dir: &Path, count: u32) -> String {
+    run_validator_recover_ex(out_dir, count, &[])
+}
+
+/// Like [`run_validator_recover`], with optional extra CLI args (e.g. `--no-verify`).
+///
+/// Stderr is always piped (NonTty). V5-2 asserts no TTY transient CSI/`\r` on
+/// that path so every recover e2e caller gets the guarantee for free.
+fn run_validator_recover_ex(out_dir: &Path, count: u32, extra_args: &[&str]) -> String {
     let ks_var = format!("ETHERNAL_K4_KS_{}", std::process::id());
     let mp_var = format!("ETHERNAL_K4_MP_{}", std::process::id());
 
@@ -93,6 +101,7 @@ fn run_validator_recover(out_dir: &Path, count: u32) -> String {
             "--mnemonic-passphrase-env",
             &mp_var,
         ])
+        .args(extra_args)
         .env(&ks_var, KEYSTORE_PW)
         .env(&mp_var, MNEMONIC_PASS)
         .stdin(Stdio::piped())
@@ -121,6 +130,15 @@ fn run_validator_recover(out_dir: &Path, count: u32) -> String {
     assert!(
         !stderr.to_lowercase().contains("entropy"),
         "unexpected entropy mention (determinism must be mnemonic-only): {stderr}"
+    );
+    // V5-2 / PR-8: piped (NonTty) path must never emit TTY transient rendering.
+    assert!(
+        !stderr.contains('\r'),
+        "piped recover stderr must not contain \\r: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("\x1b["),
+        "piped recover stderr must not contain CSI \\x1b[: {stderr:?}"
     );
     stderr
 }
@@ -423,6 +441,70 @@ fn validator_recover_help_has_no_entropy_flag() {
         help.contains("--mnemonic-passphrase-env"),
         "expected mnemonic-passphrase-env in help: {help}"
     );
+}
+
+/// V5-2 / PR-8 / PR-19 — default `validator recover` (production STANDARD scrypt
+/// ×2 per key; keep `--count 1`) on the piped path: durable 1/1 progress marker,
+/// `verified=full`, and no TTY CSI (asserted in the helper).
+#[test]
+fn validator_recover_default_verified_full_and_progress() {
+    let dir = TempDir::new("v5-2-recover-full");
+    let stderr = run_validator_recover(dir.path(), 1);
+
+    // TTY durable shape is `keystore 1/1: …`; NonTty (this e2e) logs the
+    // structured event with done/total instead. Accept either so the shape is
+    // locked without requiring a PTY.
+    assert!(
+        stderr.contains("keystore 1/1:")
+            || (stderr.contains("done=1") && stderr.contains("total=1")),
+        "expected keystore 1/1 progress marker (TTY line or NonTty done/total): {stderr}"
+    );
+    assert!(
+        stderr.contains("verified=full"),
+        "default path must log verified=full: {stderr}"
+    );
+    assert!(
+        !stderr.contains("verified=derived-only"),
+        "default path must not log verified=derived-only: {stderr}"
+    );
+    assert!(
+        !stderr.contains("WARNING: --no-verify"),
+        "default path must not emit --no-verify WARNING: {stderr}"
+    );
+
+    let files = keystore_files(dir.path());
+    assert_eq!(files.len(), 1, "expected 1 keystore, got {files:?}");
+}
+
+/// V5-2 — `--no-verify` skips C4 only: `verified=derived-only` and exactly one
+/// WARNING. Uses `--count 1` (one STANDARD scrypt, no second C4 decrypt).
+#[test]
+fn validator_recover_no_verify_derived_only_one_warning() {
+    let dir = TempDir::new("v5-2-recover-no-verify");
+    let stderr = run_validator_recover_ex(dir.path(), 1, &["--no-verify"]);
+
+    assert!(
+        stderr.contains("verified=derived-only"),
+        "--no-verify must log verified=derived-only: {stderr}"
+    );
+    assert!(
+        !stderr.contains("verified=full"),
+        "--no-verify must not log verified=full: {stderr}"
+    );
+
+    let warning_lines: Vec<_> = stderr.lines().filter(|l| l.contains("WARNING")).collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "expected exactly one WARNING under --no-verify, got: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains("--no-verify"),
+        "WARNING must name --no-verify: {stderr}"
+    );
+
+    let files = keystore_files(dir.path());
+    assert_eq!(files.len(), 1, "expected 1 keystore, got {files:?}");
 }
 
 /// T-12·recover / E4-2 — symlinked `--output-dir` on the recover/stdin path
