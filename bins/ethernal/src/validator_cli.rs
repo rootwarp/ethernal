@@ -43,6 +43,9 @@ pub struct ValidatorConfig {
     pub passphrase_env: String,
     /// Resolved mnemonic-passphrase form (flag / env value / prompt / empty).
     pub mnemonic_passphrase: MnemonicPassphraseForm,
+    /// When true (default), run C4 post-write keystore decrypt round-trip.
+    /// `--no-verify` sets this false. C1–C3 always run regardless.
+    pub verify_keystore: bool,
 }
 
 impl fmt::Debug for ValidatorConfig {
@@ -55,6 +58,7 @@ impl fmt::Debug for ValidatorConfig {
             .field("passphrase_env", &self.passphrase_env)
             // Delegates to MnemonicPassphraseForm's redacting Debug.
             .field("mnemonic_passphrase", &self.mnemonic_passphrase)
+            .field("verify_keystore", &self.verify_keystore)
             .finish()
     }
 }
@@ -67,6 +71,19 @@ pub fn command() -> Command {
         .arg_required_else_help(true)
         .subcommand(new_command())
         .subcommand(recover_command())
+}
+
+/// `--no-verify` shared by `validator new` and `validator recover` (V4-3 / PR-12).
+/// Not on account: C4 is validator-only for now.
+fn no_verify_arg() -> Arg {
+    Arg::new("no-verify")
+        .long("no-verify")
+        .action(clap::ArgAction::SetTrue)
+        .help(
+            "Skip the post-write keystore decrypt round-trip (C4). Derivation self-checks \
+             (C1-C3) always run and cannot be skipped. Halves wall-clock at the cost of the \
+             strongest correctness check.",
+        )
 }
 
 fn new_command() -> Command {
@@ -85,6 +102,7 @@ fn new_command() -> Command {
              \x20 ethernal validator new --output-dir ./keys --mnemonic-passphrase-env MNEMONIC_PW",
         )
         .args(shared_args())
+        .arg(no_verify_arg())
 }
 
 fn recover_command() -> Command {
@@ -110,6 +128,7 @@ fn recover_command() -> Command {
                 .default_value("0")
                 .help("First HD derivation index (default 0); produces indices start..start+count"),
         )
+        .arg(no_verify_arg())
 }
 
 /// `validator new` entry: non-TTY guard first, validate config, then ceremony +
@@ -182,6 +201,9 @@ pub fn load_config(
         .cloned()
         .unwrap_or_default();
 
+    // 6. --no-verify skips C4 only (default: verify). Positive name for call sites.
+    let verify_keystore = !m.get_flag("no-verify");
+
     let cfg = ValidatorConfig {
         mode,
         count,
@@ -189,6 +211,7 @@ pub fn load_config(
         start_index,
         passphrase_env,
         mnemonic_passphrase,
+        verify_keystore,
     };
 
     print_banner(banner_out, &cfg);
@@ -295,7 +318,7 @@ mod tests {
     }
 
     /// C1–C3 are mandatory: no CLI flag may disable them (V3-2 / D-7).
-    /// `--no-verify` (V4-3) will skip C4 only and must document that C1–C3 always run.
+    /// `--no-verify` (V4-3) skips C4 only and must document that C1–C3 always run.
     #[test]
     fn help_has_no_flag_disabling_c1_c3() {
         for sub in ["new", "recover"] {
@@ -322,14 +345,39 @@ mod tests {
                     "validator {sub} help must not offer a flag to skip C1–C3 ({forbidden}): {help}"
                 );
             }
-            // When --no-verify exists (V4-3), it must not claim to skip C1–C3.
-            // Today it is absent; assert no bare "no-verify" until V4-3 lands.
-            // (V4-3 will update this test when the flag is added.)
+            // --no-verify must exist and state that C1–C3 always run / cannot be skipped.
             assert!(
-                !help.contains("no-verify"),
-                "validator {sub}: --no-verify not yet in schema (V4-3); help must not mention it: {help}"
+                help.contains("no-verify"),
+                "validator {sub} help must document --no-verify: {help}"
+            );
+            assert!(
+                help.contains("c1-c3")
+                    && help.contains("always run")
+                    && help.contains("cannot be skipped"),
+                "validator {sub} --no-verify help must caveat that C1–C3 always run: {help}"
             );
         }
+    }
+
+    #[test]
+    fn no_verify_flag_defaults_true_and_sets_false() {
+        let dir = Tmp::new("validator-cli-test");
+        let (cfg, _) = load_new(&["--output-dir", dir.str()]).expect("ok");
+        assert!(cfg.verify_keystore, "default must verify keystores (C4 on)");
+
+        let (cfg, _) = load_new(&["--output-dir", dir.str(), "--no-verify"]).expect("ok");
+        assert!(
+            !cfg.verify_keystore,
+            "--no-verify must set verify_keystore=false"
+        );
+
+        let (cfg, _) = load_recover(&["--output-dir", dir.str(), "--no-verify"]).expect("ok");
+        assert!(
+            !cfg.verify_keystore,
+            "recover --no-verify must set verify_keystore=false"
+        );
+        let (cfg, _) = load_recover(&["--output-dir", dir.str()]).expect("ok");
+        assert!(cfg.verify_keystore);
     }
 
     // --- defaults and flags ---
@@ -618,6 +666,7 @@ mod tests {
             start_index: 0,
             passphrase_env: String::new(),
             mnemonic_passphrase: raw,
+            verify_keystore: true,
         };
         let dbg = format!("{cfg:?}");
         assert!(

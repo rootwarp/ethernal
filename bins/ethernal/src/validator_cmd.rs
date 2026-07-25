@@ -494,6 +494,21 @@ fn finish_from_mnemonic(
     let start = cfg.start_index;
     let out_dir = Path::new(&cfg.output_dir);
     let mut written: Vec<(String, String)> = Vec::with_capacity(count);
+    // PR-18: full = C1–C4; derived-only = --no-verify (C1–C3 only).
+    let verified = if cfg.verify_keystore {
+        "full"
+    } else {
+        "derived-only"
+    };
+
+    // One-shot WARNING before the loop when C4 is skipped (PR-12). Never on
+    // the default path so symlink e2e WARNING counts stay green.
+    if !cfg.verify_keystore {
+        let _ = writeln!(
+            deps.summary_out,
+            "WARNING: --no-verify — keystores will not be decrypted back after writing."
+        );
+    }
 
     // PhaseReporter borrows summary_out for the whole loop; durable lines go
     // through reporter.out() (which clears first). Drop erases any live phase
@@ -559,17 +574,19 @@ fn finish_from_mnemonic(
             Err(e) => return Err(map_write_err(e)),
         };
 
-        // C4 after write, reads the file on disk (I-2 / PR-13). Always on in
-        // V4-2; V4-3 gates this behind `cfg.verify_keystore` / `--no-verify`.
-        reporter.phase(i + 1, count, Phase::Verifying);
-        verify_written_keystore(
-            deps.loader,
-            &final_path,
-            &c4_pw,
-            sk_bytes.as_slice(),
-            &pubkey_hex,
-            index,
-        )?;
+        // C4 after write, reads the file on disk (I-2 / PR-13). Default on;
+        // `--no-verify` / `verify_keystore=false` skips only this check (PR-12).
+        if cfg.verify_keystore {
+            reporter.phase(i + 1, count, Phase::Verifying);
+            verify_written_keystore(
+                deps.loader,
+                &final_path,
+                &c4_pw,
+                sk_bytes.as_slice(),
+                &pubkey_hex,
+                index,
+            )?;
+        }
 
         let path_display = final_path.display().to_string();
         // Clear transient line before the durable progress line (PR-4 format).
@@ -582,6 +599,7 @@ fn finish_from_mnemonic(
             count,
             &path_display,
             &pubkey_hex,
+            verified,
         );
         written.push((path_display, pubkey_hex));
     }
@@ -598,6 +616,8 @@ fn finish_from_mnemonic(
 // Progress / summary (F-15) — stderr in production
 // ---------------------------------------------------------------------------
 
+// Progress + logger + path + verified k/v; keep flat rather than a bag struct.
+#[allow(clippy::too_many_arguments)]
 fn emit_key_progress(
     progress: Progress,
     summary_out: &mut dyn Write,
@@ -606,9 +626,12 @@ fn emit_key_progress(
     total: usize,
     path: &str,
     pubkey_hex: &str,
+    // `"full"` (C1–C4) or `"derived-only"` (`--no-verify`, C1–C3 only).
+    verified: &str,
 ) {
     match progress {
         Progress::Tty => {
+            // Byte-identical durable line (PR-4); verified status is NonTty-only.
             let _ = writeln!(
                 summary_out,
                 "keystore {done}/{total}: {path} (pubkey=0x{pubkey_hex})"
@@ -616,6 +639,7 @@ fn emit_key_progress(
             let _ = summary_out.flush();
         }
         Progress::NonTty => {
+            // Existing event + verified k/v (PR-18). No new event type.
             logger.info(
                 "keystore written",
                 &[
@@ -623,6 +647,7 @@ fn emit_key_progress(
                     ("total", total.to_string()),
                     ("path", path.to_string()),
                     ("pubkey", format!("0x{pubkey_hex}")),
+                    ("verified", verified.to_string()),
                 ],
             );
         }
@@ -720,6 +745,7 @@ mod tests {
             start_index: 0,
             passphrase_env: String::new(),
             mnemonic_passphrase: MnemonicPassphraseForm::Empty,
+            verify_keystore: true,
         }
     }
 
@@ -759,6 +785,7 @@ mod tests {
             start_index,
             passphrase_env: String::new(),
             mnemonic_passphrase: MnemonicPassphraseForm::Empty,
+            verify_keystore: true,
         }
     }
 
@@ -2427,6 +2454,250 @@ mod tests {
         ] {
             assert!(!summary_s.contains(secret), "secret {secret:?} in summary");
             assert!(!logs_s.contains(secret), "secret {secret:?} in logs");
+        }
+    }
+
+    // =========================================================================
+    // V4-3 --no-verify, WARNING, verified= log field
+    // =========================================================================
+
+    /// Counts `KeyLoader::load` calls to prove C4 is skipped under `--no-verify`.
+    struct CountingLoader {
+        inner: Loader,
+        calls: AtomicUsize,
+    }
+
+    impl KeyLoader for CountingLoader {
+        fn load(&self, path: &Path, pw: &dyn PassphraseSource) -> Result<Key, KeystoreError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.load(path, pw)
+        }
+    }
+
+    #[test]
+    fn no_verify_skips_c4_loader_not_called_count2() {
+        let dir = Tmp::new("validator-cmd-test");
+        let mut cfg = base_cfg(dir.str(), 2);
+        cfg.verify_keystore = false;
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logger = Logger::discard();
+        let counter = CountingLoader {
+            inner: Loader::new(),
+            calls: AtomicUsize::new(0),
+        };
+        {
+            let mut deps = ValidatorDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::Tty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
+                loader: &counter,
+            };
+            run_validator_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+        assert_eq!(
+            counter.calls.load(Ordering::SeqCst),
+            0,
+            "C4 loader must not be called when verify_keystore=false"
+        );
+        assert_eq!(dir.keystore_files().len(), 2);
+        let summary_s = String::from_utf8(summary).unwrap();
+        // C1–C3 still run (checking phase present for each key).
+        for i in 1..=2 {
+            assert!(
+                summary_s.contains(&format!("[{i}/2] checking")),
+                "C1–C3 must still run under --no-verify: {summary_s}"
+            );
+        }
+        // Verifying phase must not appear when C4 is skipped.
+        assert!(
+            !summary_s.contains("verifying"),
+            "verifying phase must not run under --no-verify: {summary_s}"
+        );
+        // Exactly one WARNING line for the flag.
+        let warning_lines: Vec<_> = summary_s
+            .lines()
+            .filter(|l| l.contains("WARNING"))
+            .collect();
+        assert_eq!(
+            warning_lines.len(),
+            1,
+            "expected exactly one WARNING, got: {summary_s}"
+        );
+        assert!(
+            warning_lines[0].contains("--no-verify")
+                && warning_lines[0].contains("will not be decrypted back"),
+            "unexpected WARNING text: {}",
+            warning_lines[0]
+        );
+    }
+
+    #[test]
+    fn default_path_no_no_verify_warning() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 1);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let (_, summary) = run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let summary_s = String::from_utf8(summary).unwrap();
+        assert!(
+            !summary_s.contains("WARNING: --no-verify"),
+            "default path must not emit --no-verify WARNING: {summary_s}"
+        );
+        // C4 still runs by default.
+        assert!(
+            summary_s.contains("[1/1] verifying"),
+            "default must still verify: {summary_s}"
+        );
+    }
+
+    #[test]
+    fn no_verify_c1_helpers_still_exit3() {
+        // --no-verify does not gate C1–C3; forced C1 failure still exits 3.
+        let (sk_a, _) = zero_mnemonic_key(0);
+        let (_, pk_b) = zero_mnemonic_key(1);
+        let err = verify_derived_key(sk_a.as_slice(), &pk_b, 0, "m/12381/3600/0/0/0").unwrap_err();
+        assert_eq!(exit_code_for(&err), 3);
+        match err {
+            AppError::KeyVerifyFailed { check, .. } => assert_eq!(check, "C1"),
+            other => panic!("expected C1 KeyVerifyFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verified_full_default_nontty_log() {
+        let dir = Tmp::new("validator-cmd-test");
+        let cfg = base_cfg(dir.str(), 1);
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(
+            Level::Info,
+            Format::Text,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        let loader = Loader::new();
+        {
+            let mut deps = ValidatorDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
+                loader: &loader,
+            };
+            run_validator_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+        let logs_s = String::from_utf8_lossy(&logbuf.lock().unwrap()).into_owned();
+        assert!(
+            logs_s.contains("msg=\"keystore written\"") || logs_s.contains("msg=keystore"),
+            "expected keystore written event: {logs_s}"
+        );
+        assert!(
+            logs_s.contains("verified=full"),
+            "default NonTty must log verified=full: {logs_s}"
+        );
+        assert!(
+            !logs_s.contains("verified=derived-only"),
+            "default must not log derived-only: {logs_s}"
+        );
+    }
+
+    #[test]
+    fn verified_derived_only_with_no_verify_nontty_log() {
+        let dir = Tmp::new("validator-cmd-test");
+        let mut cfg = base_cfg(dir.str(), 1);
+        cfg.verify_keystore = false;
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let mut tty = Vec::new();
+        let mut summary = Vec::new();
+        let logbuf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let logger = Logger::new(
+            Level::Info,
+            Format::Text,
+            Box::new(SharedWriter(Arc::clone(&logbuf))),
+        );
+        let counter = CountingLoader {
+            inner: Loader::new(),
+            calls: AtomicUsize::new(0),
+        };
+        {
+            let mut deps = ValidatorDeps {
+                cfg: &cfg,
+                entropy: &entropy,
+                keystore_pw: &pw,
+                mnemonic_src: &lines,
+                tty_writer: &mut tty,
+                summary_out: &mut summary,
+                progress: Progress::NonTty,
+                logger: &logger,
+                now_unix: 1_700_000_000,
+                scrypt: ScryptParams::FAST,
+                loader: &counter,
+            };
+            run_validator_new_with_deps(&mut deps, &CancelToken::new()).expect("ok");
+        }
+        assert_eq!(counter.calls.load(Ordering::SeqCst), 0);
+        let logs_s = String::from_utf8_lossy(&logbuf.lock().unwrap()).into_owned();
+        assert!(
+            logs_s.contains("verified=derived-only"),
+            "--no-verify NonTty must log verified=derived-only: {logs_s}"
+        );
+        assert!(
+            !logs_s.contains("verified=full"),
+            "--no-verify must not log verified=full: {logs_s}"
+        );
+        // TTY durable line is never used here (NonTty); WARNING still on summary.
+        let summary_s = String::from_utf8(summary).unwrap();
+        assert!(
+            summary_s.contains("WARNING: --no-verify"),
+            "expected WARNING on summary: {summary_s}"
+        );
+    }
+
+    #[test]
+    fn no_verify_tty_durable_line_byte_identical() {
+        // PR-4: TTY keystore line must not gain verified= text.
+        let dir = Tmp::new("validator-cmd-test");
+        let mut cfg = base_cfg(dir.str(), 1);
+        cfg.verify_keystore = false;
+        let entropy = FixedEntropy::zero_mnemonic();
+        let pw = FixedPassphrase(b"password1".to_vec());
+        let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
+        let (_, summary) = run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("ok");
+        let summary_s = String::from_utf8(summary).unwrap();
+        for line in summary_s.lines() {
+            if let Some(rest) = line.strip_prefix("keystore ") {
+                assert!(
+                    rest.contains(": ") && rest.contains(" (pubkey=0x") && rest.ends_with(')'),
+                    "TTY durable line format changed: {line}"
+                );
+                assert!(
+                    !line.contains("verified"),
+                    "TTY durable line must not include verified=: {line}"
+                );
+            }
         }
     }
 }
