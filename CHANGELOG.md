@@ -45,6 +45,36 @@ its release notes remain on GitHub).
 > env vars now use the `ethernal` product name. Sections below that still say
 > `eth-deposit` are historical (pre-rename) unless noted.
 
+### ethernal (unreleased) — validator keygen progress + BLS verification
+
+Purely **additive** for operators who keep the default path; one optional flag
+trades the strongest check for ~2× speed.
+
+#### Added
+
+- **Per-key phase progress on `validator new` / `validator recover`.** On a TTY,
+  stderr shows a live phase line (`deriving` / `checking` / `encrypting` /
+  `writing` / `verifying`) that is erased before each durable `keystore i/N:`
+  line, so scrollback shape is unchanged. Off-TTY, phases are silent; structured
+  log events fire per completed key; scripts parsing stderr still see only the
+  durable lines.
+- **C1–C4 BLS key verification (default on).** Before writing: secret → pubkey
+  consistency (C1), G1 point validity (C2), and a sign/verify round trip (C3).
+  After writing: decrypt the keystore and compare secret **and** `pubkey` field
+  (C4 — a second scrypt, ~0.3 s per key on Apple Silicon / ~310 ms pure-scrypt).
+  C1–C3 are mandatory and cannot be skipped.
+- **`--no-verify`** on both `validator new` and `validator recover` — skips
+  **only C4**. Emits one `WARNING:` line per run. Non-TTY logs carry
+  `verified=full` (default) or `verified=derived-only` (`--no-verify`).
+
+#### Documentation
+
+- `docs/USER-GUIDE.md`: `--no-verify` in the BLS flags table; **What is verified**
+  (C1–C4 table, wall-clock cost with named hardware, what the flag does not
+  skip); progress-output note under `validator new`.
+
+---
+
 ### ethernal (unreleased) — CLI namespace restructure
 
 #### Breaking Changes

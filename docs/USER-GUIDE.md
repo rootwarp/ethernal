@@ -228,6 +228,7 @@ Derivation: signing path `m/12381/3600/i/0/0` (EIP-2333/2334).
 | `--mnemonic-passphrase [VALUE]` | Optional BIP-39 25th word. Bare → prompt; with `VALUE` → raw argv; omit → empty | empty |
 | `--mnemonic-passphrase-env VAR` | Env var for the 25th word (empty string valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
 | `--start-index N` | **`validator recover` only.** First HD index; produces `[start, start+count)` | `0` |
+| `--no-verify` | Skip the post-write keystore decrypt round-trip (C4) only. Derivation self-checks (C1–C3) always run and cannot be skipped. Halves wall-clock at the cost of the strongest correctness check. See [What is verified](#what-is-verified). | off (C4 on) |
 
 `validator new` always starts at index `0` (no `--start-index`).
 
@@ -236,11 +237,26 @@ Derivation: signing path `m/12381/3600/i/0/0` (EIP-2333/2334).
 - **Raw `--mnemonic-passphrase VALUE`** is visible in `ps` and shell history. Prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (on `validator new`, bare form is **double-entry** confirm). Scripting convenience only — not for high-value mnemonics.
 - Keystore passphrase is **NFKD-normalized** for EIP-2335 (different from EOA v3 — see [EOA interop note](#interop-note--v3-keystore-passphrase-is-raw-no-nfkd)).
 
+#### What is verified
+
+Every key from `validator new` and `validator recover` is checked before it is treated as done. Three cheap derivation self-checks always run **before** the file is written; a fourth decrypt round-trip runs **after** writing by default.
+
+| Check | When | Cost | Skippable |
+|---|---|---|---|
+| secret → public-key consistency (C1) | before writing | negligible | no |
+| public-key point validity (C2) | before writing | negligible | no |
+| sign/verify round trip (C3) | before writing | ~2 ms | no |
+| decrypt the written file and compare secret **and** `pubkey` field (C4) | after writing | ~0.3 s (a second scrypt) | `--no-verify` |
+
+**Wall-clock.** Encrypting one EIP-2335 keystore is one scrypt; C4 is a second scrypt at the same cost. Verification therefore roughly **doubles** the time per key — about **0.6 s instead of 0.3 s** on a modern laptop. Measured pure-scrypt cost is **≈ 310 ms** per call (`ScryptParams::STANDARD`, release build) on **Apple Silicon**; expect proportionally more on older servers or air-gapped boxes (realistically 2–4×). For `--count 100` that is roughly **one minute instead of thirty seconds**.
+
+**What `--no-verify` does *not* skip.** C1–C3 always run. Skipping C4 only means a bad write (corrupt file, wrong ciphertext, mismatched `pubkey` field) is discovered only when the key is next loaded — possibly after the deposit is already on-chain. Prefer the default path for any mainnet or high-value ceremony; use `--no-verify` only when you accept that trade-off (e.g. bulk recovery on trusted hardware where wall-clock dominates).
+
 ### `validator new` — create a new BLS key set
 
 ```bash
 ethernal validator new --output-dir DIR [--count N] [--passphrase-env VAR] \
-  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR] [--no-verify]
 ```
 
 **Flow**
@@ -251,7 +267,9 @@ ethernal validator new --output-dir DIR [--count N] [--passphrase-env VAR] \
 4. **Ceremony** — mnemonic displayed **once** on the controlling terminal (`/dev/tty` only — never stdout/stderr/logs). Write it down offline, then re-enter the full phrase. Mismatch → retry or abort (exit **4**); nothing on disk until re-entry succeeds.
 5. **Automatic scrollback clear** — as soon as the ceremony ends (confirmed **or** aborted), the screen **and scrollback** of the controlling terminal are cleared (ANSI `2J`/`3J`/`H`, written twice) so the mnemonic does not stay readable to anyone scrolling back later — the one leak every deposit-cli audit found. If the clear fails, `ethernal` continues (fail-open) but warns loudly: clear manually (e.g. `clear && printf '\x1b[3J'`, or Cmd+K in Terminal.app) before leaving the machine. **tmux/screen caveat:** the multiplexer keeps its **own** scrollback buffer that ANSI sequences cannot reach — clear it there too (tmux: `tmux clear-history`; screen: C-a : then `scrollback 0`).
 6. **Keystore passphrase** — env (min 8) or interactive confirm.
-7. **Derive → encrypt → write** — path `m/12381/3600/i/0/0` for `i` in `0..count`; EIP-2335 scrypt keystores at `0o600`.
+7. **Derive → self-check (C1–C3) → encrypt → write → verify (C4)** — path `m/12381/3600/i/0/0` for `i` in `0..count`; EIP-2335 scrypt keystores at `0o600`. C4 decrypts each written file and re-compares secret and `pubkey` unless `--no-verify` is set (see [What is verified](#what-is-verified)).
+
+**Progress output.** On a terminal, stderr shows a live phase line per key (`deriving` / `checking` / `encrypting` / `writing` / `verifying`) that is erased before each durable `keystore i/N:` line, so scrollback shape is unchanged. When stderr is piped (non-TTY), the transient line is not drawn; structured log events fire per completed key (including `verified=full` or `verified=derived-only`). Scripts parsing stderr therefore see only the existing durable `keystore i/N:` lines — no `\r` or CSI escape sequences.
 
 **Example**
 
@@ -280,7 +298,7 @@ unset MNEMONIC_PW KEYSTORE_PASS
 ```bash
 ethernal validator recover --output-dir DIR [--count N] [--start-index N] \
   [--passphrase-env VAR] \
-  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR] [--no-verify]
 ```
 
 No display/re-entry ceremony — the mnemonic already exists. Accepts **12 / 15 / 18 / 21 / 24** English words (wordlist + checksum validated first; bad input → exit **2**). Interactive prompt when stdin is a TTY; otherwise one line from stdin.
