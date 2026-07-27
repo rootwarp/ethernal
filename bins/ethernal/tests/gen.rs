@@ -16,7 +16,8 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use ethernal_core::bls::{self, Signer};
 use ethernal_keystore::encrypt::{encrypt, EncryptInput, ScryptParams};
@@ -748,5 +749,268 @@ fn gen_parallel4_process_sub_passphrase_succeeds() {
         4,
         "expected 4 deposit entries, got {}",
         arr.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F5-2 — read-once evidence: FIFO wall-clock, fail-fast, S-B normalizer row
+// ---------------------------------------------------------------------------
+
+/// Collect `deposit_data*.json` paths under `dir` (sorted for stable compare).
+fn deposit_data_files(dir: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("read output dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("deposit_data") && n.ends_with(".json"))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+// F5-2 / FR-22 / R4 M-d: named mkfifo as --passphrase-file with --parallel 4
+// must complete. Pre-hoist the measured failure is an indefinite block (each
+// worker opens the FIFO), not an error — so this test imposes its own wall-clock
+// deadline, kills the child on expiry, and fails rather than hanging CI.
+//
+// Reverting the read-once hoist makes this hang until the deadline (then fail).
+// Start the writer before the read (M-4: shell out to mkfifo; no new dependency).
+#[cfg(unix)]
+#[test]
+fn gen_parallel4_named_fifo_completes_under_deadline() {
+    use std::io::Read;
+
+    let ks_dir = TempDir::new("gen-fifo-ks");
+    let fifo_dir = TempDir::new("gen-fifo-pw");
+    let passphrase = b"testpassphraseok";
+    let pubkeys = write_fast_keystores(ks_dir.path(), 4, passphrase);
+    let fifo = fifo_dir.join("passphrase.fifo");
+
+    let st = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("spawn mkfifo");
+    assert!(st.success(), "mkfifo failed: {st}");
+
+    // Wall-clock deadline: FAST scrypt × 4 keys finishes in well under this;
+    // if the hoist is reverted the pool hangs and we kill + fail.
+    const DEADLINE: Duration = Duration::from_secs(30);
+
+    // Start the writer *before* the read (plan F5-2): open(O_WRONLY) blocks
+    // until gen opens for read; then write + close for EOF. Do not join on the
+    // timeout path — a blocked open with no living reader would hang the test.
+    let fifo_w = fifo.clone();
+    let writer = std::thread::spawn(move || {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&fifo_w)
+            .expect("open FIFO for write");
+        f.write_all(passphrase).expect("write passphrase to FIFO");
+    });
+
+    let mut child = ethernal()
+        .args(["deposit", "gen", "--keystore-dir"])
+        .arg(ks_dir.path())
+        .args(["--pubkeys", &pubkeys, "--network", "hoodi", "--dry-run"])
+        .args(["--parallel", "4", "--passphrase-file"])
+        .arg(&fifo)
+        .args(["--withdrawal-address", WITHDRAWAL_ADDR])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn gen --parallel 4 with named FIFO");
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait().expect("try_wait") {
+            Some(_) => break,
+            None if start.elapsed() > DEADLINE => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // Detach writer: do not join (may still be blocked if open never
+                // rendezvoused). Process exit reaps the thread.
+                std::mem::forget(writer);
+                panic!(
+                    "gen --parallel 4 with named FIFO exceeded {DEADLINE:?} wall-clock; \
+                     kill+fail rather than hang CI. Reverting the read-once hoist \
+                     (FileSource::read inside each worker) produces this indefinite block \
+                     (R4 M-d)."
+                );
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    if let Some(mut r) = child.stdout.take() {
+        r.read_to_end(&mut stdout).expect("read stdout");
+    }
+    if let Some(mut r) = child.stderr.take() {
+        r.read_to_end(&mut stderr).expect("read stderr");
+    }
+    let status = child.wait().expect("reap gen child");
+    writer.join().expect("FIFO writer thread");
+
+    assert!(
+        status.success(),
+        "FIFO --parallel 4 must complete under deadline; stderr: {}\nstdout: {}",
+        String::from_utf8_lossy(&stderr),
+        String::from_utf8_lossy(&stdout)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&stdout).expect("deposit JSON");
+    assert_eq!(
+        v.as_array().expect("array").len(),
+        4,
+        "expected 4 deposit entries"
+    );
+}
+
+// F5-2 / D-5 fail-fast: a short/invalid passphrase file fails *before any
+// worker starts* — exit 2 and zero output files (asserted, not inferred from
+// the exit code). Pre-hoist, a bad process-sub read surfaced mid-pool as
+// wrong-passphrase exit 3 on an arbitrary pubkey; the single pre-pool
+// FileSource::read converts empty/policy failures into exit 2 with no writes.
+//
+// Acceptance names a 7-character passphrase file. Gen does not wrap MinLen
+// (FR-19b is create-side on validator/account), so bare `1234567` would reach
+// workers as WrongPassphrase exit 3. The short+invalid shape that yields
+// exit 2 at the pre-pool read is a 7-char payload with residual CR
+// (`1234567\r`) — FileSource refuses it under FR-9 policy. FR-9 *evidence*
+// itself is F4-3's S-C / S-D matrix, not this row; here the CR only proves
+// fail-before-pool placement. Empty file is the pure PassphraseFileEmpty twin.
+#[test]
+fn gen_invalid_passphrase_file_exit2_zero_output_files() {
+    let ks_dir = TempDir::new("gen-failfast-ks");
+    let secrets = TempDir::new("gen-failfast-pw");
+    // Keystores exist so a mid-pool wrong-passphrase path would have work to do;
+    // the fail-fast must not reach workers.
+    let passphrase = b"testpassphraseok";
+    let pubkeys = write_fast_keystores(ks_dir.path(), 4, passphrase);
+
+    // 7-character payload + residual CR → FileSource exit 2 before any worker.
+    // (Not FR-9 evidence — that is F4-3; this asserts fail-fast placement only.)
+    let short_invalid = secret_file(&secrets, "short7.pw", b"1234567\r");
+    let out_dir = TempDir::new("gen-failfast-out");
+    let out = ethernal()
+        .args(["deposit", "gen", "--keystore-dir"])
+        .arg(ks_dir.path())
+        .args(["--pubkeys", &pubkeys, "--network", "hoodi", "--output-dir"])
+        .arg(out_dir.path())
+        .args(["--parallel", "4", "--passphrase-file"])
+        .arg(&short_invalid)
+        .args(["--withdrawal-address", WITHDRAWAL_ADDR])
+        .output()
+        .expect("run gen with short+invalid passphrase file");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "7-char + residual-CR passphrase file must exit 2 before workers; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let files: Vec<_> = std::fs::read_dir(out_dir.path())
+        .expect("read out_dir")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        files.is_empty(),
+        "output directory must contain zero files after fail-fast; got: {:?}",
+        files.iter().map(|e| e.path()).collect::<Vec<_>>()
+    );
+
+    // Empty file → PassphraseFileEmpty at the same pre-pool site → exit 2,
+    // zero files (D-5 side effect without relying on residual-CR policy).
+    let empty_pw = secret_file(&secrets, "empty.pw", b"");
+    let out_dir2 = TempDir::new("gen-failfast-out2");
+    let out2 = ethernal()
+        .args(["deposit", "gen", "--keystore-dir"])
+        .arg(ks_dir.path())
+        .args(["--pubkeys", &pubkeys, "--network", "hoodi", "--output-dir"])
+        .arg(out_dir2.path())
+        .args(["--parallel", "4", "--passphrase-file"])
+        .arg(&empty_pw)
+        .args(["--withdrawal-address", WITHDRAWAL_ADDR])
+        .output()
+        .expect("run gen with empty passphrase file");
+    assert_eq!(
+        out2.status.code(),
+        Some(2),
+        "empty passphrase file must exit 2 before workers; stderr: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let files2: Vec<_> = std::fs::read_dir(out_dir2.path())
+        .expect("read out_dir2")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        files2.is_empty(),
+        "output directory must contain zero files; got: {:?}",
+        files2.iter().map(|e| e.path()).collect::<Vec<_>>()
+    );
+}
+
+// F5-2 / FR-12 S-B regression row: `pw` vs `pw\n` produce identical
+// deposit_data*.json.
+//
+// This row **passes with or without FR-8** — `normalize_passphrase` strips both
+// `\n` and `\r` at `u <= 0x1f` (`crypto.rs`) — so it is a **normalizer guard**,
+// not byte-rule evidence. FR-9 evidence is F4-3's S-C and S-D rows, not this.
+#[test]
+fn gen_s_b_pw_vs_pw_newline_identical_deposit_data() {
+    let ks_dir = TempDir::new("gen-sb-ks");
+    let secrets = TempDir::new("gen-sb-pw");
+    // ≥8 printable so create-side min-len is irrelevant; gen decrypt path has
+    // no MinLen wrapper. FAST scrypt keeps the suite snappy.
+    let passphrase = b"testpass1";
+    let pubkeys = write_fast_keystores(ks_dir.path(), 4, passphrase);
+
+    let pw_plain = secret_file(&secrets, "pw.txt", passphrase);
+    let pw_nl = secret_file(&secrets, "pw_nl.txt", b"testpass1\n");
+
+    let out_plain = TempDir::new("gen-sb-out-plain");
+    let out_nl = TempDir::new("gen-sb-out-nl");
+
+    for (label, pw_path, out_dir) in [("pw", &pw_plain, &out_plain), ("pw\\n", &pw_nl, &out_nl)] {
+        let out = ethernal()
+            .args(["deposit", "gen", "--keystore-dir"])
+            .arg(ks_dir.path())
+            .args(["--pubkeys", &pubkeys, "--network", "hoodi", "--output-dir"])
+            .arg(out_dir.path())
+            .args(["--parallel", "4", "--passphrase-file"])
+            .arg(pw_path)
+            .args(["--withdrawal-address", WITHDRAWAL_ADDR])
+            .output()
+            .unwrap_or_else(|e| panic!("run gen S-B ({label}): {e}"));
+        assert!(
+            out.status.success(),
+            "S-B ({label}) must succeed; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let plain_files = deposit_data_files(out_plain.path());
+    let nl_files = deposit_data_files(out_nl.path());
+    assert_eq!(
+        plain_files.len(),
+        1,
+        "expected one deposit_data*.json for pw, got {plain_files:?}"
+    );
+    assert_eq!(
+        nl_files.len(),
+        1,
+        "expected one deposit_data*.json for pw\\n, got {nl_files:?}"
+    );
+
+    let plain_bytes = std::fs::read(&plain_files[0]).expect("read plain deposit_data");
+    let nl_bytes = std::fs::read(&nl_files[0]).expect("read nl deposit_data");
+    assert_eq!(
+        plain_bytes, nl_bytes,
+        "S-B: pw vs pw\\n must yield byte-identical deposit_data*.json \
+         (normalizer guard; passes with or without FR-8)"
     );
 }
