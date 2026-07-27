@@ -2,14 +2,16 @@
 //!
 //! Because each integration test file (`tests/*.rs`) compiles `mod common;` into
 //! its own test binary, a given file uses only a subset of these helpers — hence
-//! the crate-wide `dead_code` allow. The three pieces are:
+//! the crate-wide `dead_code` allow. The main pieces are:
 //!
 //!   1. `ethernal()` — a `Command` for the built binary with every
 //!      `ETHERNAL_TX_*` env-var scrubbed, so the flags' `.env(...)` fallbacks
 //!      never leak the runner's environment into a negative test.
-//!   2. Fixture-path accessors (workspace `rust/testdata/**` read-only, plus the
+//!   2. `secret_file()` — write secret fixture bytes at mode 0600 (Unix) for
+//!      file-flag tests; never land payload on a umask-default inode.
+//!   3. Fixture-path accessors (workspace `rust/testdata/**` read-only, plus the
 //!      in-crate `tests/testdata/**` pair copied from the Go tree).
-//!   3. `Stub` — a dependency-free multi-request JSON-RPC 2.0 stub server the
+//!   4. `Stub` — a dependency-free multi-request JSON-RPC 2.0 stub server the
 //!      binary can be pointed at via `--rpc-url`, driving the REAL client.
 
 #![allow(dead_code)]
@@ -63,6 +65,72 @@ pub fn ethernal() -> Command {
         c.env_remove(v);
     }
     c
+}
+
+/// Writes `bytes` to `dir/name` at mode 0600 and returns the path. Every test
+/// secret file must go through this: a 0644 file emits the FR-17 WARNING and
+/// breaks the caller's own WARNING count.
+///
+/// Writes exactly `bytes` with no trailing newline added — a test that wants a
+/// trailing `\n` (to exercise FR-8) must include it in `bytes`.
+///
+/// On Unix the file is created with `OpenOptionsExt::mode(0o600)` and then
+/// `set_permissions(0o600)` **before** any payload is written, matching
+/// production secret writers (`fs_util` / `open_0600` + `write_atomic` chmod-
+/// before-write). Mode enforcement is Unix-only (FR-17 scope).
+pub fn secret_file(dir: &TempDir, name: &str, bytes: &[u8]) -> PathBuf {
+    let path = dir.join(name);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&path).expect("create secret file");
+    // Force 0600 before write_all so secret bytes never land at umask-default
+    // mode (typically 0644). Create-time mode alone can still be umask-masked.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        f.set_permissions(perms).expect("chmod 0600 secret file");
+    }
+    f.write_all(bytes).expect("write secret file");
+    path
+}
+
+#[test]
+fn secret_file_mode_0600_no_trailing_newline_inside_tempdir() {
+    let dir = TempDir::new("secret-file");
+    // Deliberately no trailing `\n` — the helper must not add one.
+    let bytes = b"0xdeadbeef";
+    assert!(
+        !bytes.ends_with(b"\n"),
+        "test fixture must not already end with newline"
+    );
+
+    let path = secret_file(&dir, "key.hex", bytes);
+
+    assert!(
+        path.starts_with(dir.path()),
+        "returned path {path:?} is not inside {:?}",
+        dir.path()
+    );
+
+    let got = std::fs::read(&path).expect("read secret file back");
+    assert_eq!(got.as_slice(), bytes, "bytes must be written verbatim");
+    assert!(
+        !got.ends_with(b"\n"),
+        "helper must not append a trailing newline"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "secret file must be mode 0600");
+    }
 }
 
 /// Like [`ethernal`], but the child runs in a **new session with no controlling
