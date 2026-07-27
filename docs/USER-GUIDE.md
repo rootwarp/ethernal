@@ -57,7 +57,7 @@ Separately, `ethernal account` produces **Web3 Secret Storage v3** keystores for
 
 Two distinct keys are involved in the deposit path:
 - **BLS validator key** (per validator) — held in EIP-2335 keystores created by `ethernal validator` (or any compatible tool); used by `ethernal deposit gen` to sign the deposit message. Never leaves the keystore decryption boundary. See [Create BLS validator keys](#create-bls-validator-keys-ethernal-validator).
-- **secp256k1 sender key** — held in your Ledger (recommended) or env var (testing only); used by `ethernal tx sign` / `tx run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas. (You can also create a local EOA keystore with `account new` / `account recover` for testing or wallet import; see [Create EOA keystores](#create-eoa-keystores-ethernal-account).)
+- **secp256k1 sender key** — held in your Ledger (recommended) or a private-key file (testing only); used by `ethernal tx sign` / `tx run` to sign the Ethereum transaction that pays the 32 ETH. Whichever address holds this key needs ≥ 32 ETH + gas. (You can also create a local EOA keystore with `account new` / `account recover` for testing or wallet import; see [Create EOA keystores](#create-eoa-keystores-ethernal-account).)
 
 The two-phase split (`deposit build` then `tx sign`) supports air-gapped operation: build the unsigned tx on an online machine, transfer the JSON to a signing machine (which may be offline), sign there, transfer the signed JSON back online, broadcast. Prefer generating BLS keys (`validator new`) on an air-gapped machine as well.
 
@@ -81,7 +81,7 @@ validator new  →  deposit gen  →  deposit build  →  tx sign  →  tx send
                                      └──────────── tx run ────────────┘
 ```
 
-Environment variable names such as `ETHERNAL_TX_PRIVATE_KEY` (and other `ETHERNAL_TX_*` names) are retained unchanged.
+Non-secret `ETHERNAL_TX_*` flag fallbacks (`ETHERNAL_TX_RPC_URL`, `_FROM`, `_GAS_LIMIT`) remain available when those flags are omitted. Secrets (passphrases, private keys) come from **files** or a TTY prompt — never from an env-var-name flag.
 
 ---
 
@@ -126,8 +126,9 @@ End-to-end deposit on Hoodi using a Ledger:
 #    continues. Inside tmux/screen also clear the multiplexer’s own history
 #    (tmux: `tmux clear-history`; screen: C-a : then `scrollback 0`).
 mkdir -p ./keystores ./out
-export KEYSTORE_PASS=my-keystore-passphrase
-ethernal validator new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+umask 077
+printf '%s' 'my-keystore-passphrase' > ./keystore.pw
+ethernal validator new --output-dir ./keystores --count 1 --passphrase-file ./keystore.pw
 # note the pubkey printed in the summary, then:
 
 # 1. Generate deposit data (withdrawal address must be EIP-55 checksummed)
@@ -137,8 +138,7 @@ ethernal deposit gen \
   --pubkeys 0x<pubkey-from-validator-new-summary> \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out \
-  --passphrase-env KEYSTORE_PASS
-unset KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
 # 2. Build unsigned tx (use --nonce explicitly if sender has prior txs)
 ethernal deposit build \
@@ -192,12 +192,57 @@ If you already have EIP-2335 keystores from another tool, skip BLS key creation 
 | Ceremony | Display once + full re-entry | None |
 | On abort / mismatch | Exit 4; **nothing** written | N/A |
 
-**Two different passphrases** (both commands):
+**Two different passphrases** (both commands) — they are never interchangeable:
 
-1. **Keystore passphrase** — encrypts the JSON files (`--passphrase-env` or interactive prompt-with-confirm). Minimum **8 bytes**. There is no raw-argv form for this secret.
-2. **Mnemonic passphrase** (optional BIP-39 “25th word”) — mixed into seed derivation only. Empty is valid; no minimum. Three forms: bare `--mnemonic-passphrase` (prompt), `--mnemonic-passphrase-env VAR`, or raw `--mnemonic-passphrase VALUE` (avoid for high-value keys — visible in `ps` / shell history).
+1. **Keystore passphrase** — encrypts the JSON files (`--passphrase-file PATH` or interactive prompt-with-confirm). Minimum **8 bytes**. There is no raw-argv form for this secret.
+2. **Mnemonic passphrase** (optional BIP-39 “25th word”) — mixed into seed derivation only. Empty is valid; no minimum. Four forms: bare `--mnemonic-passphrase` (prompt), `--mnemonic-passphrase-file PATH`, raw `--mnemonic-passphrase VALUE` (avoid for high-value keys — visible in `ps` / shell history), or omit → empty.
 
-They are never interchangeable. Prefer a dedicated shell session for keygen work; `unset` env vars when finished (`export VAR=secret` can also land in shell history).
+Both secrets (when not prompted) come from **files**. A keystore passphrase file and a mnemonic-passphrase file are independent paths; never reuse one file for the other unless you intentionally want the same string for both roles.
+
+### Secret files — byte rule and safety
+
+**The secret is the whole file minus at most one trailing newline; a carriage return anywhere is an error.**
+
+Passphrase bytes feed scrypt / PBKDF2 and therefore *determine the derived key*. Write files carefully:
+
+```bash
+# printf does NOT append a newline; echo does. Both are fine after the rule
+# strips at most one trailing \n — the resulting secret is the same "pw".
+printf '%s' 'pw' > ./secret.pw     # preferred when you want exact bytes
+echo 'pw' > ./secret.pw            # also OK: trailing \n is stripped
+
+# A trailing SPACE is significant and is NEVER stripped:
+printf '%s' 'pw ' > ./secret.pw    # secret is three bytes: p, w, space
+```
+
+Always create secret files owner-only — never world-readable:
+
+```bash
+umask 077
+printf '%s' 'my-keystore-passphrase' > ./keystore.pw
+# or write first, then: chmod 600 ./keystore.pw
+```
+
+**No-disk-file pattern.** Prefer process substitution when the secret should not land on disk:
+
+```bash
+ethernal validator new --output-dir ./keystores \
+  --passphrase-file <(printf '%s' 'my-keystore-passphrase')
+```
+
+`/dev/fd/N` is the general escape hatch for other fd-based paths. **Do not** pass `-` as a path (rejected). Do **not** rely on `/dev/stdin` alone when stdin is already claimed (piped mnemonic on `recover`, or `tx sign --input -`).
+
+**Footgun — path, not passphrase.** A *passphrase* typed where a *path* is expected lands in argv, `ps`, shell history, **and the not-found error message**. There is no shape to key on for a passphrase, so documentation is the mitigation: always pass a real path (or `<(...)`), never the secret itself.
+
+**Deliberately unlike prior art.** ethernal’s secret-file rules diverge from geth / OpenSSL / gpg in these cases (reasons matter — these are *not* accidental omissions):
+
+| Behavior | ethernal | Others | Why |
+|---|---|---|---|
+| **Multi-line** file | exit 2 | geth / OpenSSL / gpg: first line wins | **Deliberate divergence, not parity** — geth accepts multi-line files because `--password` is a password *list* indexed per unlocked account, a feature ethernal does not have |
+| **CRLF** file (`pw\r\n`) | exit 2 | geth: `pw`; OpenSSL/gpg: `pw\r` | The three tools disagree; accepting hard-codes one reading into a derived key. Refusing is the reversible direction |
+| **non-UTF-8** bytes | exit 2 | geth’s Go strings are byte strings and would accept those bytes | No capability is lost — `std::env::var` already errored on non-UTF-8 for the replaced flags — and refusing stays the reversible direction |
+
+Hex private-key files (local signer) use a different rule: all leading/trailing ASCII whitespace is trimmed before parsing. Still create them with `umask 077` / `chmod 600` / `<(...)`.
 
 ---
 
@@ -224,9 +269,9 @@ Derivation: signing path `m/12381/3600/i/0/0` (EIP-2333/2334).
 |---|---|---|
 | `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON | — |
 | `--count N` | Number of validator keys (≥ 1) | `1` |
-| `--passphrase-env VAR` | Env var for **keystore** encryption passphrase (min 8 bytes after EIP-2335 normalization). Omit → TTY prompt-with-confirm | TTY prompt |
+| `--passphrase-file PATH` | File holding the **keystore** encryption passphrase (min 8 bytes after EIP-2335 normalization). Omit → TTY prompt-with-confirm | TTY prompt |
 | `--mnemonic-passphrase [VALUE]` | Optional BIP-39 25th word. Bare → prompt; with `VALUE` → raw argv; omit → empty | empty |
-| `--mnemonic-passphrase-env VAR` | Env var for the 25th word (empty string valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
+| `--mnemonic-passphrase-file PATH` | File holding the 25th word (empty file → empty passphrase). Conflicts with `--mnemonic-passphrase` | — |
 | `--start-index N` | **`validator recover` only.** First HD index; produces `[start, start+count)` | `0` |
 | `--no-verify` | Skip the post-write keystore decrypt round-trip (C4) only. Derivation self-checks (C1–C3) always run and cannot be skipped. Halves wall-clock at the cost of the strongest correctness check. See [What is verified](#what-is-verified). | off (C4 on) |
 
@@ -234,8 +279,9 @@ Derivation: signing path `m/12381/3600/i/0/0` (EIP-2333/2334).
 
 ### Security notes (BLS)
 
-- **Raw `--mnemonic-passphrase VALUE`** is visible in `ps` and shell history. Prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (on `validator new`, bare form is **double-entry** confirm). Scripting convenience only — not for high-value mnemonics.
-- Keystore passphrase is **NFKD-normalized** for EIP-2335 (different from EOA v3 — see [EOA interop note](#interop-note--v3-keystore-passphrase-is-raw-no-nfkd)).
+- **Raw `--mnemonic-passphrase VALUE`** is visible in `ps` and shell history. Prefer `--mnemonic-passphrase-file` or bare `--mnemonic-passphrase` (on `validator new`, bare form is **double-entry** confirm). Scripting convenience only — not for high-value mnemonics.
+- **`--passphrase-file` / `--mnemonic-passphrase-file` take a path**, not the secret. A passphrase typed as the flag value lands in argv, `ps`, shell history, and the not-found error message.
+- Keystore passphrase is **NFKD-normalized** for EIP-2335 (different from EOA v3 — see [EOA interop note](#interop-note--v3-keystore-passphrase-is-raw-no-nfkd)). See [Secret files](#secret-files--byte-rule-and-safety) for the byte rule.
 
 #### What is verified
 
@@ -255,18 +301,18 @@ Every key from `validator new` and `validator recover` is checked before it is t
 ### `validator new` — create a new BLS key set
 
 ```bash
-ethernal validator new --output-dir DIR [--count N] [--passphrase-env VAR] \
-  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR] [--no-verify]
+ethernal validator new --output-dir DIR [--count N] [--passphrase-file PATH] \
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH] [--no-verify]
 ```
 
 **Flow**
 
 1. **Non-TTY guard** — if stdin or stdout is not a terminal, exit **2** before any entropy is drawn.
 2. **Entropy → mnemonic** — 256-bit OS CSPRNG → 24-word English BIP-39 with checksum.
-3. **Mnemonic passphrase** — flag / env / prompt-with-confirm / empty.
+3. **Mnemonic passphrase** — flag / file / prompt-with-confirm / empty.
 4. **Ceremony** — mnemonic displayed **once** on the controlling terminal (`/dev/tty` only — never stdout/stderr/logs). Write it down offline, then re-enter the full phrase. Mismatch → retry or abort (exit **4**); nothing on disk until re-entry succeeds.
 5. **Automatic scrollback clear** — as soon as the ceremony ends (confirmed **or** aborted), the screen **and scrollback** of the controlling terminal are cleared (ANSI `2J`/`3J`/`H`, written twice) so the mnemonic does not stay readable to anyone scrolling back later — the one leak every deposit-cli audit found. If the clear fails, `ethernal` continues (fail-open) but warns loudly: clear manually (e.g. `clear && printf '\x1b[3J'`, or Cmd+K in Terminal.app) before leaving the machine. **tmux/screen caveat:** the multiplexer keeps its **own** scrollback buffer that ANSI sequences cannot reach — clear it there too (tmux: `tmux clear-history`; screen: C-a : then `scrollback 0`).
-6. **Keystore passphrase** — env (min 8) or interactive confirm.
+6. **Keystore passphrase** — file (min 8) or interactive confirm.
 7. **Derive → self-check (C1–C3) → encrypt → write → verify (C4)** — path `m/12381/3600/i/0/0` for `i` in `0..count`; EIP-2335 scrypt keystores at `0o600`. C4 decrypts each written file and re-compares secret and `pubkey` unless `--no-verify` is set (see [What is verified](#what-is-verified)).
 
 **Progress output.** On a terminal, stderr shows a live phase line per key (`deriving` / `checking` / `encrypting` / `writing` / `verifying`) that is erased before each durable `keystore i/N:` line, so scrollback shape is unchanged. When stderr is piped (non-TTY), the transient line is not drawn; structured log events fire per completed key (including `verified=full` or `verified=derived-only`). Scripts parsing stderr therefore see only the existing durable `keystore i/N:` lines — no `\r` or CSI escape sequences.
@@ -275,30 +321,34 @@ ethernal validator new --output-dir DIR [--count N] [--passphrase-env VAR] \
 
 ```bash
 mkdir -p ./keystores
-export KEYSTORE_PASS=my-keystore-passphrase
+umask 077
+printf '%s' 'my-keystore-passphrase' > ./keystore.pw
 
 # One validator
 ethernal validator new \
   --output-dir ./keystores \
   --count 1 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
-# Two validators + optional 25th word (env form preferred)
-export MNEMONIC_PW=...
+# Two validators + optional 25th word (file form preferred)
+printf '%s' '...' > ./mnemonic.pw
 ethernal validator new \
   --output-dir ./keystores \
   --count 2 \
-  --mnemonic-passphrase-env MNEMONIC_PW \
-  --passphrase-env KEYSTORE_PASS
-unset MNEMONIC_PW KEYSTORE_PASS
+  --mnemonic-passphrase-file ./mnemonic.pw \
+  --passphrase-file ./keystore.pw
+
+# no-disk-file alternative:
+# ethernal validator new --output-dir ./keystores --count 1 \
+#   --passphrase-file <(printf '%s' 'my-keystore-passphrase')
 ```
 
 ### `validator recover` — recreate BLS keys from a mnemonic
 
 ```bash
 ethernal validator recover --output-dir DIR [--count N] [--start-index N] \
-  [--passphrase-env VAR] \
-  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR] [--no-verify]
+  [--passphrase-file PATH] \
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH] [--no-verify]
 ```
 
 No display/re-entry ceremony — the mnemonic already exists. Accepts **12 / 15 / 18 / 21 / 24** English words (wordlist + checksum validated first; bad input → exit **2**). Interactive prompt when stdin is a TTY; otherwise one line from stdin.
@@ -309,17 +359,17 @@ ethernal validator recover \
   --output-dir ./keystores \
   --count 3 \
   --start-index 0 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
 # Piped (automation)
 echo "$MNEMONIC" | ethernal validator recover \
   --output-dir ./keystores \
   --count 1 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
 # Extend an existing set (e.g. next index after 0..2)
 ethernal validator recover --output-dir ./keystores --start-index 3 --count 1 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 ```
 
 ### After BLS key creation
@@ -356,61 +406,62 @@ Derivation: `m/44'/60'/0'/0/i` (Ethereum BIP-44; `account'` fixed at `0'`).
 |---|---|---|
 | `--output-dir DIR` *(required)* | Existing, writable directory for keystore JSON | — |
 | `--count N` | Number of EOA keystores (≥ 1) | `1` |
-| `--passphrase-env VAR` | Env var for **keystore** encryption passphrase (min 8 bytes). Omit → TTY prompt-with-confirm | TTY prompt |
+| `--passphrase-file PATH` | File holding the **keystore** encryption passphrase (min 8 bytes). Omit → TTY prompt-with-confirm | TTY prompt |
 | `--mnemonic-passphrase [VALUE]` | Optional BIP-39 25th word. Bare → prompt; with `VALUE` → raw argv; omit → empty | empty |
-| `--mnemonic-passphrase-env VAR` | Env var for the 25th word (empty valid; unset → exit 2). Conflicts with `--mnemonic-passphrase` | — |
+| `--mnemonic-passphrase-file PATH` | File holding the 25th word (empty file → empty passphrase). Conflicts with `--mnemonic-passphrase` | — |
 | `--start-index N` | **`account recover` only.** First address index; produces `[start, start+count)` | `0` |
 
 `account new` always starts at index `0` (no `--start-index`).
 
 ### Security notes (EOA)
 
-- **Raw `--mnemonic-passphrase VALUE`** — same `ps` / shell-history warning as `validator`. Prefer env or bare prompt. On `account new`, bare form is **double-entry** confirm; on `account recover`, bare form is **single-entry**.
+- **Raw `--mnemonic-passphrase VALUE`** — same `ps` / shell-history warning as `validator`. Prefer `--mnemonic-passphrase-file` or bare prompt. On `account new`, bare form is **double-entry** confirm; on `account recover`, bare form is **single-entry**.
+- **`--passphrase-file` / `--mnemonic-passphrase-file` take a path**, not the secret — same footgun as validator (argv, `ps`, shell history, not-found error message).
 - **Interop note — v3 keystore passphrase is raw (no NFKD):** scrypt consumes the keystore passphrase as **raw UTF-8 bytes** (no NFKD, no control-character strip). That matches geth and MetaMask. EIP-2335 (`validator`) *does* normalize — do not assume one passphrase form unlocks both formats for non-ASCII secrets. Prefer ASCII unless you have verified unlock in the target wallet.
 
 ### `account new` — create a new EOA key set
 
 ```bash
-ethernal account new --output-dir DIR [--count N] [--passphrase-env VAR] \
-  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
+ethernal account new --output-dir DIR [--count N] [--passphrase-file PATH] \
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH]
 ```
 
 **Flow** (same ceremony shape as `validator new`):
 
 1. **Non-TTY guard** → exit **2** before entropy.
 2. **Entropy →** 24-word BIP-39 mnemonic.
-3. **Mnemonic passphrase** → flag / env / confirm / empty.
+3. **Mnemonic passphrase** → flag / file / confirm / empty.
 4. **Ceremony** → display once on `/dev/tty`, full re-entry; mismatch → exit **4**, nothing on disk.
 5. **Automatic scrollback clear** → same clear-on-confirm as `validator new` (screen + scrollback, on confirm **and** abort; fail-open with a manual-clear warning if the ANSI write fails). **tmux/screen caveat:** multiplexers keep their own history that ANSI cannot reach — `tmux clear-history`; screen: C-a : then `scrollback 0`. Details under [`validator new` Flow](#validator-new--create-a-new-bls-key-set).
-6. **Keystore passphrase** → env or interactive confirm (min 8, **raw** bytes to KDF).
+6. **Keystore passphrase** → file or interactive confirm (min 8, **raw** bytes to KDF).
 7. **Derive → encrypt → write** → `m/44'/60'/0'/0/i`, Web3 v3 scrypt, `UTC--` names, mode `0o600`. Stderr summary lists path + **EIP-55 address**.
 
 **Example**
 
 ```bash
 mkdir -p ./eoa-keys
-export KEYSTORE_PASS=my-keystore-passphrase
+umask 077
+printf '%s' 'my-keystore-passphrase' > ./keystore.pw
 
 ethernal account new \
   --output-dir ./eoa-keys \
   --count 2 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
-# optional 25th word via env
-export MNEMONIC_PW=...
+# optional 25th word via file
+printf '%s' '...' > ./mnemonic.pw
 ethernal account new \
   --output-dir ./eoa-keys \
-  --mnemonic-passphrase-env MNEMONIC_PW \
-  --passphrase-env KEYSTORE_PASS
-unset MNEMONIC_PW KEYSTORE_PASS
+  --mnemonic-passphrase-file ./mnemonic.pw \
+  --passphrase-file ./keystore.pw
 ```
 
 ### `account recover` — recreate EOA keys from a mnemonic
 
 ```bash
 ethernal account recover --output-dir DIR [--count N] [--start-index N] \
-  [--passphrase-env VAR] \
-  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]
+  [--passphrase-file PATH] \
+  [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH]
 ```
 
 No ceremony. Same 12–24-word validation as `validator recover` (bad word reported by **1-based position**, never the token). TTY or piped stdin.
@@ -421,17 +472,17 @@ ethernal account recover \
   --output-dir ./eoa-keys \
   --count 3 \
   --start-index 0 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
 # Piped
 echo "$MNEMONIC" | ethernal account recover \
   --output-dir ./eoa-keys \
   --count 1 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
 # Next address index (e.g. after 0..2)
 ethernal account recover --output-dir ./eoa-keys --start-index 3 --count 1 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 ```
 
 ### After EOA key creation
@@ -466,7 +517,7 @@ ethernal deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --outp
 | `--network NET` *(required)* | `mainnet` or `hoodi` | — |
 | `--output-dir DIR` *(required)* | Existing, writable directory for `deposit_data-<ts>.json` | — |
 | `--withdrawal-address ADDR` *(required)* | EIP-55 **checksummed** execution address for 0x01 withdrawal credentials (`0x01 ‖ 11 zero bytes ‖ addr20`). Absent, lowercase, or checksum-mismatched → exit 2 | — |
-| `--passphrase-env VAR` | Env var holding the keystore passphrase (omit for TTY prompt) | TTY prompt |
+| `--passphrase-file PATH` | File holding the keystore passphrase (omit for TTY prompt) | TTY prompt |
 | `--i-understand-this-is-mainnet` | Required when `--network mainnet`; acknowledges irreversibility | `false` |
 | `--dry-run` | Print JSON to stdout instead of writing a file; sha256 to stderr | `false` |
 | `--parallel N` | Concurrent signing workers (1 to runtime.NumCPU()×4) | `1` |
@@ -484,7 +535,8 @@ By contrast, `deposit build`'s `--from` is **lenient**: any 0x-prefixed (or bare
 ### Example — Hoodi single validator
 
 ```bash
-export KEYSTORE_PASS=my-keystore-passphrase
+umask 077
+printf '%s' 'my-keystore-passphrase' > ./keystore.pw
 
 ethernal deposit gen \
   --network hoodi \
@@ -492,7 +544,7 @@ ethernal deposit gen \
   --pubkeys 0x8420760d0de00ed65f290ab2122e65933e168539ad261b5e444a5094c649272527a1509dd105a801922c359e46e33fb9 \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 ```
 
 ### Example — multiple validators, parallel signing
@@ -504,7 +556,7 @@ ethernal deposit gen \
   --pubkeys 0xpub1...,0xpub2...,0xpub3...,0xpub4... \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
   --output-dir ./out \
-  --passphrase-env KEYSTORE_PASS \
+  --passphrase-file ./keystore.pw \
   --parallel 4
 ```
 
@@ -522,7 +574,7 @@ ethernal deposit gen \
   --pubkeys 0xpub1... \
   --withdrawal-address 0xYourChecksummedExecutionAddress \
   --output-dir ./out \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 ```
 
 Without the flag, `--network mainnet` exits with code 2. Without `--withdrawal-address`, `deposit gen` exits with code 2 (require-choice gate — there is no default BLS-to-execution credential).
@@ -643,33 +695,35 @@ ethernal tx sign --signer local|ledger --input FILE [options]
 | `--signer TYPE` *(required)* | `local` or `ledger` | — |
 | `--input PATH` / `-i PATH` *(required)* | Path to unsigned tx JSON, or `-` for stdin | — |
 | `--output PATH` / `-o PATH` | Output file for signed tx JSON (0o600 perms); omit or `-` for stdout | stdout |
-| `--private-key-env VAR` | Env var name holding the hex private key (local signer only) | `ETHERNAL_TX_PRIVATE_KEY` |
+| `--private-key-file PATH` | Path to a file holding the hex private key (**required** with `--signer local`) | — |
 
 ### Option A — Local private key (testing only)
 
 `LocalSigner` is for development, testing, and CI — **not for real funds**. Use Ledger for any mainnet or non-trivial testnet deposit.
 
-The private key MUST come from an environment variable. There is no CLI flag to accept a key value (deliberate: never appears in argv or shell history). The env-var-name flag value must match the POSIX pattern `^[A-Z_][A-Z0-9_]*$` — if you accidentally paste the hex key as the flag value, sign refuses with exit code 2.
+The private key **must** come from a file named by `--private-key-file` (required with `--signer local`; there is no default path). There is no CLI flag that accepts a raw key value. The file holds hex (optional `0x` prefix); leading/trailing ASCII whitespace is trimmed before parsing. If the path does not exist **and** the argument looks like a 64-hex key value, sign refuses with exit code 2 without echoing the argument.
 
 ```bash
-export ETHERNAL_TX_PRIVATE_KEY=0x0101010101010101010101010101010101010101010101010101010101010101  # synthetic test key
+umask 077
+# synthetic test key — never real funds
+printf '%s' '0x0101010101010101010101010101010101010101010101010101010101010101' > ./local.key
 
 ethernal tx sign \
   --signer local \
+  --private-key-file ./local.key \
   --input ./out/unsigned_tx.json \
   --output ./out/signed_tx.json
+```
 
-unset ETHERNAL_TX_PRIVATE_KEY
+No-disk-file alternative:
+
+```bash
+ethernal tx sign --signer local \
+  --private-key-file <(printf '%s' '0x...') \
+  --input unsigned_tx.json --output signed_tx.json
 ```
 
 The key bytes are zeroized in memory when sign exits (LocalSigner.Close).
-
-To use a different env-var name (e.g., for a hosted CI secret):
-
-```bash
-export MY_DEPLOY_KEY=0x...
-ethernal tx sign --signer local --private-key-env MY_DEPLOY_KEY --input unsigned_tx.json --output signed_tx.json
-```
 
 ### Option B — Ledger Nano
 
@@ -803,16 +857,16 @@ Note: `cast send` is wrong here — that constructs a new transaction. Use `cast
 When you're signing on the same machine that has the deposit data, `tx run` collapses `deposit build` + `tx sign` into one command:
 
 ```bash
-export ETHERNAL_TX_PRIVATE_KEY=0x...
+umask 077
+printf '%s' '0x...' > ./local.key   # synthetic / test key only
 
 ethernal tx run \
   --network hoodi \
   --signer local \
+  --private-key-file ./local.key \
   --input-file ./out/deposit_data-1716000000.json \
   --nonce 17 \
   --output ./out/signed_tx.json
-
-unset ETHERNAL_TX_PRIVATE_KEY
 ```
 
 Outputs:
@@ -917,7 +971,7 @@ fi
 
 `ethernal` protects:
 
-- **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from env vars only; Ledger keys never leave the device. Mnemonics from `validator new` / `account new` are shown only on the controlling terminal and never on stdout/stderr/logs.
+- **Private keys never appear in argv, environment dumps, or shell history when used correctly.** Local-signer keys come from a private-key file only; Ledger keys never leave the device. Mnemonics from `validator new` / `account new` are shown only on the controlling terminal and never on stdout/stderr/logs.
 - **Signed artifacts and keystores are written with restricted perms** (0o600; receiver can verify a signed tx by recovering the sender and checking the tx hash).
 - **Broadcast is gated by chain-ID match and operator confirmation.** A signed-for-Holesky transaction will not be broadcast to a mainnet RPC endpoint.
 - **RPC credentials are redacted from error messages by construction.** API keys embedded in an `--rpc-url` are stripped before any error is logged or printed.
@@ -926,17 +980,17 @@ It does NOT protect:
 
 - A compromised machine. If your build/sign machine is compromised, the unsigned tx data field (which encodes the deposit) could be silently altered. Verify on the Ledger screen before pressing confirm. A compromised keygen machine can capture the mnemonic at generation time — prefer air-gapped `validator new` / `account new` for high-value keys.
 - Network-level interception of the broadcast (not a concern for signed transactions — they cannot be modified without invalidating the signature).
-- Keystore confidentiality. The keystore passphrase is your responsibility; use a strong one and clear `KEYSTORE_PASS` from your shell after use.
+- Keystore confidentiality. The keystore passphrase is your responsibility; use a strong one and keep passphrase files mode `0600` (or use `<(...)`) and delete them when done.
 - A raw `--mnemonic-passphrase VALUE` on the command line (visible in `ps` and shell history) — see [Create BLS validator keys](#create-bls-validator-keys-ethernal-validator) and [Create EOA keystores](#create-eoa-keystores-ethernal-account).
 
 ### Key handling rules
 
 - **BLS mnemonic (`validator new` / `validator recover`)** — write it down offline during the ceremony; store it offline only. Never commit it, pipe `validator new` (refused), or paste it into tickets/chat. Prefer air-gapped generation for high-value validators. Full guide: [Create BLS validator keys](#create-bls-validator-keys-ethernal-validator).
 - **EOA mnemonic (`account new` / `account recover`)** — same ceremony and offline rules as BLS; produces Web3 v3 keystores (not EIP-2335). Prefer air-gapped generation for high-value EOAs. Never pipe `account new` (refused). Full guide: [Create EOA keystores](#create-eoa-keystores-ethernal-account).
-- **Mnemonic passphrase (BIP-39 "25th word")** — prefer `--mnemonic-passphrase-env` or bare `--mnemonic-passphrase` (prompt). **Do not** use raw `--mnemonic-passphrase VALUE` for high-value mnemonics: the value is visible in the process table (`ps`) and shell history. A mistyped 25th word yields keys you cannot recover from the mnemonic alone. Applies to both `validator` and `account`.
-- **Keystore passphrase (`validator` / EIP-2335)** — env var (`--passphrase-env`) or TTY prompt-with-confirm; minimum 8 bytes after EIP-2335 **NFKD** normalization. There is no raw-argv form (unlike the mnemonic passphrase). Env vars persist for the shell lifetime (and `export VAR=secret` can land in shell history) — use a dedicated session and `unset` when done.
-- **Keystore passphrase (`account` / Web3 v3)** — same CLI surface (env or TTY prompt-with-confirm; min 8 bytes; no raw-argv form), but encryption uses the passphrase as **raw UTF-8** (no NFKD) for geth/MetaMask interop.
-- `ETHERNAL_TX_PRIVATE_KEY` — env var only. There is NO `--private-key` flag. The env-var-name flag (`--private-key-env`) is validated to match `^[A-Z_][A-Z0-9_]*$` to prevent users from accidentally passing the key value.
+- **Mnemonic passphrase (BIP-39 "25th word")** — prefer `--mnemonic-passphrase-file PATH` or bare `--mnemonic-passphrase` (prompt). **Do not** use raw `--mnemonic-passphrase VALUE` for high-value mnemonics: the value is visible in the process table (`ps`) and shell history. A mistyped 25th word yields keys you cannot recover from the mnemonic alone. Applies to both `validator` and `account`. A passphrase typed where a path is expected also lands in the not-found error message.
+- **Keystore passphrase (`validator` / EIP-2335)** — `--passphrase-file PATH` or TTY prompt-with-confirm; minimum 8 bytes after EIP-2335 **NFKD** normalization. There is no raw-argv form (unlike the mnemonic passphrase). Create files with `umask 077` / `chmod 600`, or use `<(...)`. See [Secret files](#secret-files--byte-rule-and-safety).
+- **Keystore passphrase (`account` / Web3 v3)** — same CLI surface (file or TTY prompt-with-confirm; min 8 bytes; no raw-argv form), but encryption uses the passphrase as **raw UTF-8** (no NFKD) for geth/MetaMask interop.
+- **Local private key** — `--private-key-file PATH` is **required** with `--signer local` (no default path). There is NO `--private-key` flag that takes a raw key value. Hex files are trimmed of leading/trailing ASCII whitespace; if a missing path looks like 64 hex chars, exit 2 without echoing it.
 - `LocalSigner` zeroizes the key bytes in memory when `Close()` is called (end of every `tx sign` / `tx run` invocation).
 - For mainnet: use Ledger for the deposit-tx signer. The local signer is explicitly tagged "for development only" in its docs and is not recommended for any real-fund deposit.
 - The synthetic test key in `testdata/phase3/holesky/private_key.txt` is `0x0101010101010101010101010101010101010101010101010101010101010101` (obvious pattern). Never use it with real funds; it's for tests only.
@@ -963,36 +1017,37 @@ The typed exit codes let your automation distinguish between "operator rejected"
 ### Recipe 1 — Local key, all on one machine (dev / CI)
 
 ```bash
-export KEYSTORE_PASS=test-passphrase
-export ETHERNAL_TX_PRIVATE_KEY=0x0101...   # synthetic; never real
+umask 077
+printf '%s' 'test-passphrase' > ./keystore.pw
+printf '%s' '0x0101...' > ./local.key   # synthetic; never real
 mkdir -p ./keystores ./out
 
 # Interactive validator new (or recover from a fixed test mnemonic via stdin)
-ethernal validator new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
+ethernal validator new --output-dir ./keystores --passphrase-file ./keystore.pw
 # copy pubkey from the summary:
 
 ethernal deposit gen \
   --network hoodi --keystore-dir ./keystores/ \
   --pubkeys 0x... \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
-  --output-dir ./out --passphrase-env KEYSTORE_PASS
+  --output-dir ./out --passphrase-file ./keystore.pw
 
 ethernal tx run \
   --network hoodi --signer local \
+  --private-key-file ./local.key \
   --input-file ./out/deposit_data-*.json \
   --nonce 0 --output ./out/signed_tx.json
-
-unset KEYSTORE_PASS ETHERNAL_TX_PRIVATE_KEY
 ```
 
 ### Recipe 2 — Ledger, one machine, broadcast immediately
 
 ```bash
-export KEYSTORE_PASS=...
+umask 077
+printf '%s' '...' > ./keystore.pw
 
 ethernal deposit gen ... \
   --withdrawal-address 0x... \
-  --output-dir ./out --passphrase-env KEYSTORE_PASS
+  --output-dir ./out --passphrase-file ./keystore.pw
 
 ethernal tx run \
   --network hoodi --signer ledger \
@@ -1006,7 +1061,6 @@ ethernal tx send \
   --wait-for-receipt --receipt-output ./out/receipt.json
 # (type "hoodi" to confirm broadcast)
 
-unset KEYSTORE_PASS
 ```
 
 ### Recipe 3 — Air-gapped Ledger (mainnet-ready)
@@ -1014,7 +1068,9 @@ unset KEYSTORE_PASS
 ```bash
 # Air-gapped machine B — generate BLS keys (TTY only)
 mkdir -p ./keystores
-ethernal validator new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
+umask 077
+printf '%s' '...' > ./keystore.pw
+ethernal validator new --output-dir ./keystores --passphrase-file ./keystore.pw
 # transfer keystores (encrypted) + note the pubkeys to online machine A
 # keep the mnemonic offline only
 
@@ -1022,7 +1078,7 @@ ethernal validator new --output-dir ./keystores --passphrase-env KEYSTORE_PASS
 ethernal deposit gen --network mainnet --i-understand-this-is-mainnet \
   --keystore-dir ./keystores/ --pubkeys 0x... \
   --withdrawal-address 0xYourChecksummedExecutionAddress \
-  --output-dir ./out --passphrase-env KEYSTORE_PASS
+  --output-dir ./out --passphrase-file ./keystore.pw
 ethernal deposit build --network mainnet \
   --input-file ./out/deposit_data-*.json \
   --nonce ${NONCE} --output unsigned_tx.json
@@ -1042,12 +1098,14 @@ ethernal tx send --input signed_tx.json --rpc-url https://your-mainnet-rpc
 ### Recipe 4 — Multiple validators in one shot
 
 ```bash
-ethernal validator new --output-dir ./keystores --count 3 --passphrase-env KEYSTORE_PASS
+umask 077
+printf '%s' '...' > ./keystore.pw
+ethernal validator new --output-dir ./keystores --count 3 --passphrase-file ./keystore.pw
 
 ethernal deposit gen --network hoodi --keystore-dir ./keystores/ \
   --pubkeys 0xpub1...,0xpub2...,0xpub3... \
   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
-  --output-dir ./out --passphrase-env KEYSTORE_PASS --parallel 4
+  --output-dir ./out --passphrase-file ./keystore.pw --parallel 4
 
 # One sign per validator, increment nonce
 BASE_NONCE=17
@@ -1062,19 +1120,21 @@ done
 ### Recipe 5 — Recover additional indices from an existing mnemonic
 
 ```bash
+umask 077
+printf '%s' '...' > ./keystore.pw
 # BLS: you already have indices 0..2; derive the next three
 echo "$MNEMONIC" | ethernal validator recover \
   --output-dir ./keystores \
   --start-index 3 \
   --count 3 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 
 # EOA: same idea for BIP-44 address indices
 echo "$MNEMONIC" | ethernal account recover \
   --output-dir ./eoa-keys \
   --start-index 3 \
   --count 1 \
-  --passphrase-env KEYSTORE_PASS
+  --passphrase-file ./keystore.pw
 ```
 
 ### Recipe 6 — One mnemonic → BLS and EOA keystores
@@ -1082,22 +1142,22 @@ echo "$MNEMONIC" | ethernal account recover \
 The same BIP-39 seed feeds both HD trees. Create (or recover) once, reuse the mnemonic carefully:
 
 ```bash
-export KEYSTORE_PASS=...   # or use different passphrases per format if you prefer
+# or use different passphrase files per format if you prefer
+umask 077
+printf '%s' '...' > ./keystore.pw
 mkdir -p ./keystores ./eoa-keys
 
 # Option A — fresh mnemonic via BLS ceremony; write the phrase down, then recover EOA
-ethernal validator new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+ethernal validator new --output-dir ./keystores --count 1 --passphrase-file ./keystore.pw
 # (after writing the mnemonic offline)
 echo "$MNEMONIC" | ethernal account recover \
-  --output-dir ./eoa-keys --count 1 --passphrase-env KEYSTORE_PASS
+  --output-dir ./eoa-keys --count 1 --passphrase-file ./keystore.pw
 
 # Option B — recover both from an existing mnemonic (no ceremony)
 echo "$MNEMONIC" | ethernal validator recover \
-  --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+  --output-dir ./keystores --count 1 --passphrase-file ./keystore.pw
 echo "$MNEMONIC" | ethernal account recover \
-  --output-dir ./eoa-keys --count 1 --passphrase-env KEYSTORE_PASS
-
-unset KEYSTORE_PASS
+  --output-dir ./eoa-keys --count 1 --passphrase-file ./keystore.pw
 ```
 
 If you used a BIP-39 mnemonic passphrase (25th word) for one tree, pass the **same** form to the other. BLS and EOA keystore files still differ (EIP-2335 vs Web3 v3) and must stay in separate directories.
@@ -1156,7 +1216,7 @@ cast decode-typed-tx "$RAW"
 | `--withdrawal-address: ... EIP-55 checksum mismatch` (exit 2) | Address must be correctly mixed-case EIP-55 (not all-lowercase). Tools like `cast to-check-sum-address` can re-checksum. Note: `deposit build`'s `--from` is lenient and does **not** require EIP-55 — only `--withdrawal-address` is strict. |
 | `mainnet selected; pass --i-understand-this-is-mainnet to acknowledge` (exit 2) | Add the flag. Mainnet is irreversible. |
 | `pubkey ... not found in keystore directory` (exit 2) | The pubkey listed in `--pubkeys` has no matching keystore file. Check the keystore directory contents. |
-| `decrypt: invalid passphrase` (exit 3) | Wrong `KEYSTORE_PASS`. The passphrase decrypts every keystore — all must share it. |
+| `decrypt: invalid passphrase` (exit 3) | Wrong keystore passphrase file (or interactive input). The passphrase decrypts every keystore — all must share it. |
 | `staking-deposit-cli not found in PATH` (exit 3, only with `--verify-with-deposit-cli`) | Either install `staking-deposit-cli >= 2.7.0`, set `--deposit-cli-path`, or drop the verify flag. |
 
 ### `ethernal deposit build` errors
@@ -1171,9 +1231,10 @@ cast decode-typed-tx "$RAW"
 
 | Symptom | Cause / fix |
 |---|---|
-| `environment variable "ETHERNAL_TX_PRIVATE_KEY" is not set` (exit 3) | Set the env var (or use `--private-key-env` to point at a different one). |
-| `--private-key-env: "0x..." is not a valid POSIX env var name` (exit 2) | You passed the hex key as the flag value. Pass the env var NAME instead, and put the key value into that env var. |
-| `invalid private key: expected 32 bytes` (exit 3) | The env var contents are not a valid 32-byte hex secp256k1 key. The error never includes the key bytes. |
+| `--private-key-file: required when --signer local` (exit 2) | Pass `--private-key-file PATH` with a file holding the hex key. There is no default path. |
+| `--private-key-file: ... looks like a key value, not a path` (exit 2) | You passed the hex key as the flag value. Write it to a file (`umask 077; printf '%s' '0x...' > key`) and pass that path — or use `<(printf '%s' '0x...')`. |
+| `secret file not found: ...` (exit 2) | Path does not exist. Check the path; if you typed the passphrase/key itself as the path, it also leaks into this error message — fix the invocation. |
+| `invalid private key: expected 32 bytes` (exit 3) | The file contents are not a valid 32-byte hex secp256k1 key. The error never includes the key bytes. |
 | `no Ledger device found` (exit 3) | Plug in the Ledger, unlock it, open the Ethereum app. On Linux, verify udev rules. |
 | `ledger Ethereum app is not open` (exit 3) | Open the Ethereum app on the device, then retry. |
 | `user rejected signing on Ledger` (exit 4) | You pressed the reject button on the device. Retry if intentional was confirm. |

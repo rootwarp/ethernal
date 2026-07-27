@@ -74,7 +74,7 @@ Commands are grouped into four namespaces:
 | `deposit` | Launchpad `deposit_data` (`gen`) and unsigned deposit-tx construction (`build`) |
 | `tx` | Sign (`sign`), build+sign convenience (`run`), and broadcast (`send`) |
 
-Environment variable names such as `ETHERNAL_TX_PRIVATE_KEY` are unchanged.
+Non-secret `ETHERNAL_TX_*` flag fallbacks (`ETHERNAL_TX_RPC_URL`, `_FROM`, `_GAS_LIMIT`) stay. Passphrases and the local private key come from **files** (or a TTY prompt), not env-var-name flags.
 
 ## Install
 
@@ -108,9 +108,11 @@ before you ever point it at mainnet.
 A one-look preview of the core steps:
 
 ```bash
-ethernal validator new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
+umask 077
+printf '%s' 'my-keystore-passphrase' > ./keystore.pw   # or: chmod 600 after writing
+ethernal validator new --output-dir ./keystores --count 1 --passphrase-file ./keystore.pw
 ethernal deposit gen  --network hoodi --keystore-dir ./keystores --pubkeys 0x<pubkey> \
-  --withdrawal-address 0x<your-eip55-address> --output-dir ./out --passphrase-env KEYSTORE_PASS
+  --withdrawal-address 0x<your-eip55-address> --output-dir ./out --passphrase-file ./keystore.pw
 ethernal tx run  --network hoodi --signer ledger --input-file ./out/deposit_data-*.json --output signed.json
 ethernal tx send --input signed.json --rpc-url https://your-hoodi-rpc
 ```
