@@ -1,0 +1,12 @@
+[package]
+name = "ethernal-secretfile"
+version.workspace = true
+edition.workspace = true
+description = "Secret-file read primitive: fixed-buffer, symlink-following, permission-aware"
+
+[lib]
+name = "ethernal_secretfile"
+
+[dependencies]
+zeroize = { workspace = true }
+thiserror = { workspace = true }
