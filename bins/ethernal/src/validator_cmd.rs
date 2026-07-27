@@ -2525,6 +2525,7 @@ mod tests {
             "verifying phase must not run under --no-verify: {summary_s}"
         );
         // Exactly one WARNING line for the flag.
+        // Immune to FR-17 collision: unit FixedPassphrase, no secret-file flag in play (F3-2).
         let warning_lines: Vec<_> = summary_s
             .lines()
             .filter(|l| l.contains("WARNING"))

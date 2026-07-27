@@ -492,11 +492,15 @@ fn validator_recover_no_verify_derived_only_one_warning() {
         "--no-verify must not log verified=full: {stderr}"
     );
 
-    let warning_lines: Vec<_> = stderr.lines().filter(|l| l.contains("WARNING")).collect();
+    // Kind-specific: count the --no-verify notice, not every WARNING (FR-21 / R-3).
+    let warning_lines: Vec<_> = stderr
+        .lines()
+        .filter(|l| l.contains("will not be decrypted back"))
+        .collect();
     assert_eq!(
         warning_lines.len(),
         1,
-        "expected exactly one WARNING under --no-verify, got: {stderr}"
+        "expected exactly one --no-verify WARNING, got: {stderr}"
     );
     assert!(
         warning_lines[0].contains("--no-verify"),
@@ -523,11 +527,15 @@ fn validator_recover_symlinked_output_dir_warns_and_writes() {
 
     let stderr = run_validator_recover(&link, 1);
 
-    let warning_lines: Vec<_> = stderr.lines().filter(|l| l.contains("WARNING")).collect();
+    // Kind-specific: count the symlink warning, not every WARNING (FR-21 / R-3).
+    let warning_lines: Vec<_> = stderr
+        .lines()
+        .filter(|l| l.contains("is a symlink"))
+        .collect();
     assert_eq!(
         warning_lines.len(),
         1,
-        "expected exactly one WARNING, got: {stderr}"
+        "expected exactly one symlink WARNING, got: {stderr}"
     );
     assert!(
         warning_lines[0].contains("is a symlink")

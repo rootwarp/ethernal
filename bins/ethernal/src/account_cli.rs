@@ -493,11 +493,15 @@ mod tests {
             "0",
         ])
         .expect("ok");
-        let warning_lines: Vec<_> = banner.lines().filter(|l| l.contains("WARNING")).collect();
+        // Kind-specific: count the symlink banner warning, not every WARNING (FR-21 / R-3).
+        let warning_lines: Vec<_> = banner
+            .lines()
+            .filter(|l| l.contains("is a symlink"))
+            .collect();
         assert_eq!(
             warning_lines.len(),
             1,
-            "expected exactly one WARNING, got: {banner}"
+            "expected exactly one symlink WARNING, got: {banner}"
         );
         assert!(
             warning_lines[0].contains(link.to_str().unwrap()),

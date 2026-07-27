@@ -266,6 +266,7 @@ mod tests {
         let mut buf = Vec::new();
         assert!(warn_if_symlinked_output_dir(&link, &mut buf));
         let text = String::from_utf8(buf).unwrap();
+        // Immune to FR-17 collision: unit Vec sink, no secret-file flag in play (F3-2).
         let warning_lines: Vec<_> = text.lines().filter(|l| l.contains("WARNING")).collect();
         assert_eq!(
             warning_lines.len(),
