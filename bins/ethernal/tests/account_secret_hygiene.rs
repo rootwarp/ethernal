@@ -1,14 +1,14 @@
 //! Secret-hygiene integration check for `account recover` (A4-1 / S-1 / S-2 / G5).
 //!
 //! Binary-level companion to the `AccountDeps` unit tests in `account_cmd.rs`:
-//! pipe a fixed mnemonic, encrypt with `--passphrase-env`, and assert the
+//! pipe a fixed mnemonic, encrypt with `--passphrase-file`, and assert the
 //! mnemonic, seed hex, and both passphrases never appear on stdout/stderr.
 //! Full injectible-logger coverage lives in the unit seam; this guards the
 //! production log path end-to-end on the distinct recover-stdin input surface.
 
 mod common;
 
-use common::ethernal;
+use common::{ethernal, secret_file, TempDir};
 use std::io::Write;
 use std::process::Stdio;
 
@@ -21,9 +21,10 @@ const MNEMONIC_PW: &str = "TREZOR";
 
 #[test]
 fn account_recover_secrets_absent_from_stderr() {
-    let dir = common::TempDir::new("account-hygiene");
-    let ks_var = format!("ETHERNAL_ACCT_HYGIENE_KS_{}", std::process::id());
-    let mp_var = format!("ETHERNAL_ACCT_HYGIENE_MP_{}", std::process::id());
+    let dir = TempDir::new("account-hygiene");
+    let secrets = TempDir::new("account-hygiene-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PW.as_bytes());
 
     let mut child = ethernal()
         .args(["account", "recover", "--output-dir"])
@@ -31,13 +32,11 @@ fn account_recover_secrets_absent_from_stderr() {
         .args([
             "--count",
             "1",
-            "--passphrase-env",
-            &ks_var,
-            "--mnemonic-passphrase-env",
-            &mp_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
         ])
-        .env(&ks_var, KEYSTORE_PW)
-        .env(&mp_var, MNEMONIC_PW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -98,20 +97,25 @@ fn account_recover_secrets_absent_from_stderr() {
 /// (H1 / S-2). Report 1-based position only.
 #[test]
 fn account_recover_unknown_word_token_absent_from_all_channels() {
-    let dir = common::TempDir::new("account-hygiene-unknown");
+    let dir = TempDir::new("account-hygiene-unknown");
+    let secrets = TempDir::new("account-hygiene-unknown-s");
     // Distinctive non-wordlist token — if it appears in any channel, hygiene fails.
     const BAD_TOKEN: &str = "wroth";
     // Position 7 (1-based): six abandon + wroth + five abandon.
     let mnemonic = format!(
         "abandon abandon abandon abandon abandon abandon {BAD_TOKEN} abandon abandon abandon abandon about"
     );
-    let ks_var = format!("ETHERNAL_ACCT_HYGIENE_BAD_KS_{}", std::process::id());
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
 
     let mut child = ethernal()
         .args(["account", "recover", "--output-dir"])
         .arg(dir.path())
-        .args(["--count", "1", "--passphrase-env", &ks_var])
-        .env(&ks_var, KEYSTORE_PW)
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

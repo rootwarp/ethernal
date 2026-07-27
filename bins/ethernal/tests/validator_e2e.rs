@@ -84,9 +84,12 @@ fn run_validator_recover(out_dir: &Path, count: u32) -> String {
 ///
 /// Stderr is always piped (NonTty). V5-2 asserts no TTY transient CSI/`\r` on
 /// that path so every recover e2e caller gets the guarantee for free.
+///
+/// Secret files live under a temp dir kept alive for the child process duration.
 fn run_validator_recover_ex(out_dir: &Path, count: u32, extra_args: &[&str]) -> String {
-    let ks_var = format!("ETHERNAL_K4_KS_{}", std::process::id());
-    let mp_var = format!("ETHERNAL_K4_MP_{}", std::process::id());
+    let secrets = TempDir::new("k4-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
 
     let mut child = ethernal()
         .args(["validator", "recover", "--output-dir"])
@@ -96,14 +99,12 @@ fn run_validator_recover_ex(out_dir: &Path, count: u32, extra_args: &[&str]) -> 
             &count.to_string(),
             "--start-index",
             "0",
-            "--passphrase-env",
-            &ks_var,
-            "--mnemonic-passphrase-env",
-            &mp_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
         ])
         .args(extra_args)
-        .env(&ks_var, KEYSTORE_PW)
-        .env(&mp_var, MNEMONIC_PASS)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -117,6 +118,8 @@ fn run_validator_recover_ex(out_dir: &Path, count: u32, extra_args: &[&str]) -> 
 
     let out = child.wait_with_output().expect("wait key recover");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Drop secrets only after the child has finished reading them.
+    drop(secrets);
     assert!(
         out.status.success(),
         "validator recover failed (exit {:?}): stderr={stderr}",
@@ -438,8 +441,8 @@ fn validator_recover_help_has_no_entropy_flag() {
         "validator recover must not expose an entropy flag (S-4): {help}"
     );
     assert!(
-        help.contains("--mnemonic-passphrase-env"),
-        "expected mnemonic-passphrase-env in help: {help}"
+        help.contains("--mnemonic-passphrase-file"),
+        "expected mnemonic-passphrase-file in help: {help}"
     );
 }
 
@@ -562,5 +565,291 @@ fn validator_recover_symlinked_output_dir_warns_and_writes() {
         keystore_files(&link).len(),
         1,
         "keystores must also be visible via symlink path"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F4-2 acceptance: file-flag surface for validator recover
+// ---------------------------------------------------------------------------
+
+/// FR-17 on recover: a 0644 passphrase file produces exactly one
+/// `file permissions` WARNING and the run still completes (WARNING is durable
+/// on recover — not erased by ceremony).
+#[cfg(unix)]
+#[test]
+fn validator_recover_0644_passphrase_file_warns_and_writes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new("f4-2-fr17");
+    let secrets = TempDir::new("f4-2-fr17-secrets");
+    // Write via secret_file then deliberately open to 0644 so FR-17 fires.
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+    std::fs::set_permissions(&ks_path, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "recover must complete with 0644 passphrase file: {stderr}"
+    );
+    let warning_lines: Vec<_> = stderr
+        .lines()
+        .filter(|l| l.contains("file permissions"))
+        .collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "expected exactly one file-permissions WARNING, got: {stderr}"
+    );
+    assert_eq!(keystore_files(dir.path()).len(), 1);
+}
+
+/// FR-18: empty `--passphrase-file` (0 bytes) is exit 2 end-to-end.
+#[test]
+fn validator_recover_empty_passphrase_file_exit2() {
+    let dir = TempDir::new("f4-2-empty-ks");
+    let secrets = TempDir::new("f4-2-empty-ks-secrets");
+    let ks_path = secret_file(&secrets, "empty.pw", b"");
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "empty passphrase-file must exit 2; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("empty") || stderr.contains("passphrase file"),
+        "expected empty-file message: {stderr}"
+    );
+}
+
+/// FR-18: empty `--mnemonic-passphrase-file` (0 bytes and lone `\n`) is a valid
+/// empty passphrase and yields the same pubkey set as omitting the flag.
+#[test]
+fn validator_recover_empty_mnemonic_passphrase_file_matches_omitted() {
+    // Pubkey set with no mnemonic passphrase (omit flag).
+    let dir_omit = TempDir::new("f4-2-mp-omit");
+    let secrets_omit = TempDir::new("f4-2-mp-omit-s");
+    let ks_omit = secret_file(&secrets_omit, "ks.pw", KEYSTORE_PW.as_bytes());
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir_omit.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_omit.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn omit");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait omit");
+    assert!(
+        out.status.success(),
+        "omit mp failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let omit_pubkeys: Vec<String> = keystore_files(dir_omit.path())
+        .iter()
+        .map(|f| {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(f).unwrap()).unwrap();
+            v["pubkey"].as_str().unwrap().to_owned()
+        })
+        .collect();
+
+    for (label, bytes) in [("0 bytes", &b""[..]), ("lone newline", &b"\n"[..])] {
+        let dir = TempDir::new(&format!("f4-2-mp-empty-{label}"));
+        let secrets = TempDir::new(&format!("f4-2-mp-empty-s-{label}"));
+        let ks = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+        let mp = secret_file(&secrets, "mp.pw", bytes);
+        let mut child = ethernal()
+            .args(["validator", "recover", "--output-dir"])
+            .arg(dir.path())
+            .args([
+                "--count",
+                "1",
+                "--passphrase-file",
+                ks.to_str().unwrap(),
+                "--mnemonic-passphrase-file",
+                mp.to_str().unwrap(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        {
+            let mut stdin = child.stdin.take().expect("stdin");
+            writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+        }
+        let out = child.wait_with_output().expect("wait");
+        assert!(
+            out.status.success(),
+            "empty mp ({label}) failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let pubkeys: Vec<String> = keystore_files(dir.path())
+            .iter()
+            .map(|f| {
+                let v: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(f).unwrap()).unwrap();
+                v["pubkey"].as_str().unwrap().to_owned()
+            })
+            .collect();
+        assert_eq!(
+            pubkeys, omit_pubkeys,
+            "empty mp ({label}) must match omitted flag"
+        );
+    }
+}
+
+/// FR-19b end-to-end: passphrase file holding `1234567\n` → PassphraseTooShort exit 2.
+#[test]
+fn validator_recover_passphrase_too_short_exit2() {
+    let dir = TempDir::new("f4-2-minlen");
+    let secrets = TempDir::new("f4-2-minlen-s");
+    // 8 raw bytes → FR-8 strips \n → 7 → PassphraseTooShort.
+    let ks_path = secret_file(&secrets, "short.pw", b"1234567\n");
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "short passphrase must exit 2; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("at least") || stderr.contains("bytes") || stderr.contains("passphrase"),
+        "expected PassphraseTooShort message: {stderr}"
+    );
+    // Must not echo the short passphrase content.
+    assert!(
+        !stderr.contains("1234567"),
+        "passphrase content leaked: {stderr}"
+    );
+}
+
+/// FR-6: `--passphrase-file -` and `--mnemonic-passphrase-file -` each exit 2.
+#[test]
+fn validator_recover_dash_path_rejected() {
+    let dir = TempDir::new("f4-2-dash");
+    for flag in ["--passphrase-file", "--mnemonic-passphrase-file"] {
+        let out = ethernal()
+            .args(["validator", "recover", "--output-dir"])
+            .arg(dir.path())
+            .args(["--count", "1", flag, "-"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{flag} -: expected exit 2; stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("cannot be '-'") || stderr.contains("path cannot"),
+            "{flag} -: unexpected message: {stderr}"
+        );
+    }
+}
+
+/// FR-3: `--mnemonic-passphrase VALUE` and `--mnemonic-passphrase-file PATH` conflict.
+#[test]
+fn validator_recover_mnemonic_passphrase_forms_conflict() {
+    let dir = TempDir::new("f4-2-conflict");
+    let secrets = TempDir::new("f4-2-conflict-s");
+    let mp = secret_file(&secrets, "mp.pw", b"x");
+    let out = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--mnemonic-passphrase",
+            "VALUE",
+            "--mnemonic-passphrase-file",
+            mp.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "raw and file must conflict; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

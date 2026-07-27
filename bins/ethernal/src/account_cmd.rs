@@ -19,7 +19,7 @@ use ethernal_core::hd_secp256k1::{self, Bip32Error, Bip44Path};
 use ethernal_core::output::OutputError;
 use ethernal_keystore::encrypt_v3::{encrypt_v3, v3_filename, EncryptV3Input, ScryptParams};
 use ethernal_keystore::{
-    EnvSource, KeystoreError, NewKeystorePassphrase, PassphraseSource, KEYSTORE_PASSPHRASE_MIN_LEN,
+    FileSource, KeystoreError, NewKeystorePassphrase, PassphraseSource, KEYSTORE_PASSPHRASE_MIN_LEN,
 };
 use ethernal_signer::{eip55_checksum, secret_to_address, SignerError};
 use zeroize::Zeroizing;
@@ -92,17 +92,19 @@ pub(crate) fn run_account_new(cfg: &AccountConfig, cancel: &CancelToken) -> Resu
     };
     let timestamp = wall_clock_timestamp();
 
-    // Keystore passphrase: env + min-len, or interactive confirm+≥8.
-    let env_source;
-    let checked_env;
+    // Keystore passphrase: file + min-len, or interactive confirm+≥8.
+    // FileSource is constructed here but only *read* inside finish_from_mnemonic
+    // (I-1 — same point EnvSource was consulted).
+    let file_source;
+    let checked;
     let tty_pw;
-    let keystore_pw: &dyn PassphraseSource = if !cfg.passphrase_env.is_empty() {
-        env_source = EnvSource::new(&cfg.passphrase_env);
-        checked_env = MinLenPassphrase {
-            inner: &env_source,
+    let keystore_pw: &dyn PassphraseSource = if let Some(p) = &cfg.passphrase_file {
+        file_source = FileSource::new(p.clone(), std::io::stderr());
+        checked = MinLenPassphrase {
+            inner: &file_source,
             min: KEYSTORE_PASSPHRASE_MIN_LEN,
         };
-        &checked_env
+        &checked
     } else {
         tty_pw = NewKeystorePassphrase::new(std::io::stderr());
         &tty_pw
@@ -148,17 +150,19 @@ pub(crate) fn run_account_recover(
     };
     let timestamp = wall_clock_timestamp();
 
-    // Keystore passphrase: env + min-len, or interactive confirm+≥8.
-    let env_source;
-    let checked_env;
+    // Keystore passphrase: file + min-len, or interactive confirm+≥8.
+    // FileSource is constructed here but only *read* inside finish_from_mnemonic
+    // (I-1 — same point EnvSource was consulted).
+    let file_source;
+    let checked;
     let tty_pw;
-    let keystore_pw: &dyn PassphraseSource = if !cfg.passphrase_env.is_empty() {
-        env_source = EnvSource::new(&cfg.passphrase_env);
-        checked_env = MinLenPassphrase {
-            inner: &env_source,
+    let keystore_pw: &dyn PassphraseSource = if let Some(p) = &cfg.passphrase_file {
+        file_source = FileSource::new(p.clone(), std::io::stderr());
+        checked = MinLenPassphrase {
+            inner: &file_source,
             min: KEYSTORE_PASSPHRASE_MIN_LEN,
         };
-        &checked_env
+        &checked
     } else {
         tty_pw = NewKeystorePassphrase::new(std::io::stderr());
         &tty_pw
@@ -229,7 +233,7 @@ pub(crate) fn run_account_new_with_deps(
         )));
     }
 
-    // 2. Mnemonic passphrase: flag > env > prompt-confirm; empty valid (F-12).
+    // 2. Mnemonic passphrase: flag / file / prompt-confirm; empty valid (F-12).
     check_cancel(cancel)?;
     let mnemonic_pass = resolve_mnemonic_passphrase(
         &cfg.mnemonic_passphrase,
@@ -286,7 +290,7 @@ pub(crate) fn run_account_recover_with_deps(
         &[("words", word_count.to_string())],
     );
 
-    // 3. Mnemonic passphrase: flag > env > prompt (single-entry on recover).
+    // 3. Mnemonic passphrase: flag / file / prompt (single-entry on recover).
     check_cancel(cancel)?;
     let mnemonic_pass = resolve_mnemonic_passphrase(
         &cfg.mnemonic_passphrase,
@@ -544,7 +548,7 @@ mod tests {
             count,
             output_dir: dir.into(),
             start_index: 0,
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mnemonic_passphrase: MnemonicPassphraseForm::Empty,
         }
     }
@@ -581,7 +585,7 @@ mod tests {
             count,
             output_dir: dir.into(),
             start_index,
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mnemonic_passphrase: MnemonicPassphraseForm::Empty,
         }
     }
@@ -1326,10 +1330,10 @@ mod tests {
         assert_eq!(eoa0_addr_hex(ABANDON_12, b"TREZOR"), TREZOR_EOA0_ADDR);
         assert_ne!(TREZOR_EOA0_ADDR, EMPTY_EOA0_ADDR);
 
-        // --- env form (value already resolved at clap load) ---
-        let env = resolve_mnemonic_passphrase(
-            &MnemonicPassphraseForm::Env {
-                var: "MNEMONIC_PW".into(),
+        // --- file form (value already resolved at clap load) ---
+        let file = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::File {
+                path: "/tmp/mp.pw".into(),
                 value: Zeroizing::new("TREZOR".into()),
             },
             &ScriptedLines::new(vec![]),
@@ -1337,10 +1341,10 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(env.as_slice(), b"TREZOR");
+        assert_eq!(file.as_slice(), b"TREZOR");
         assert_eq!(
             hex::encode(
-                bip39::to_seed(ABANDON_12, env.as_slice())
+                bip39::to_seed(ABANDON_12, file.as_slice())
                     .unwrap()
                     .as_slice()
             ),
@@ -1375,10 +1379,10 @@ mod tests {
         .unwrap();
         assert_eq!(single.as_slice(), b"TREZOR");
 
-        // Empty env value is valid (no ≥8 minimum — that is the keystore passphrase).
-        let env_empty = resolve_mnemonic_passphrase(
-            &MnemonicPassphraseForm::Env {
-                var: "MNEMONIC_PW".into(),
+        // Empty file value is valid (no ≥8 minimum — that is the keystore passphrase).
+        let file_empty = resolve_mnemonic_passphrase(
+            &MnemonicPassphraseForm::File {
+                path: "/tmp/mp-empty.pw".into(),
                 value: Zeroizing::new(String::new()),
             },
             &ScriptedLines::new(vec![]),
@@ -1386,16 +1390,16 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(env_empty.is_empty());
+        assert!(file_empty.is_empty());
         assert_eq!(
-            eoa0_addr_hex(ABANDON_12, env_empty.as_slice()),
+            eoa0_addr_hex(ABANDON_12, file_empty.as_slice()),
             EMPTY_EOA0_ADDR
         );
     }
 
     #[test]
     fn three_forms_honored_on_account_new_and_recover() {
-        // Cross-command AccountDeps-seam: raw / env / bare-prompt / empty on
+        // Cross-command AccountDeps-seam: raw / file / bare-prompt / empty on
         // both `new` (confirm) and `recover` (single-entry) feed to_seed.
         // Uses ABANDON_12 recover + ZERO_MNEMONIC new; addresses match derivation.
 
@@ -1415,18 +1419,18 @@ mod tests {
             assert_eq!(val["address"], TREZOR_EOA0_ADDR);
         }
 
-        // --- recover: env TREZOR → same address ---
+        // --- recover: file TREZOR → same address ---
         {
             let dir = Tmp::new("account-cmd-test");
             let mut cfg = recover_cfg(dir.str(), 1, 0);
-            cfg.mnemonic_passphrase = MnemonicPassphraseForm::Env {
-                var: "TEST_MNEMONIC_PW".into(),
+            cfg.mnemonic_passphrase = MnemonicPassphraseForm::File {
+                path: "/tmp/mp.pw".into(),
                 value: Zeroizing::new("TREZOR".into()),
             };
             let lines = ScriptedLines::new(vec![ABANDON_12]);
             let entropy = FixedEntropy::new(vec![]);
             let pw = FixedPassphrase(b"password1".to_vec());
-            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("env");
+            run_recover_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("file");
             let files = dir.v3_files();
             assert_eq!(files.len(), 1);
             let val: serde_json::Value =
@@ -1450,18 +1454,18 @@ mod tests {
             assert_eq!(val["address"], EMPTY_EOA0_ADDR);
         }
 
-        // --- new: env TREZOR (confirm bare covered by prompt mismatch + resolve) ---
+        // --- new: file TREZOR (confirm bare covered by prompt mismatch + resolve) ---
         {
             let dir = Tmp::new("account-cmd-test");
             let mut cfg = base_cfg(dir.str(), 1);
-            cfg.mnemonic_passphrase = MnemonicPassphraseForm::Env {
-                var: "TEST_MNEMONIC_PW".into(),
+            cfg.mnemonic_passphrase = MnemonicPassphraseForm::File {
+                path: "/tmp/mp.pw".into(),
                 value: Zeroizing::new("TREZOR".into()),
             };
             let entropy = FixedEntropy::zero_mnemonic();
             let pw = FixedPassphrase(b"password1".to_vec());
             let lines = ScriptedLines::new(vec![ZERO_MNEMONIC]);
-            run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("new env");
+            run_with(&cfg, &entropy, &pw, &lines, &CancelToken::new()).expect("new file");
             let seed = bip39::to_seed(ZERO_MNEMONIC, b"TREZOR").unwrap();
             assert_eq!(hex::encode(seed.as_slice()), ZERO_TREZOR_SEED_HEX);
             let derived =

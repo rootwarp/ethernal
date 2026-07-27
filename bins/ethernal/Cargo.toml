@@ -15,6 +15,7 @@ ledger = ["ethernal-signer/ledger"]
 [dependencies]
 ethernal-core = { workspace = true }
 ethernal-keystore = { workspace = true }
+ethernal-secretfile = { workspace = true }
 ethernal-tx = { workspace = true }
 ethernal-signer = { workspace = true }
 clap = { workspace = true }

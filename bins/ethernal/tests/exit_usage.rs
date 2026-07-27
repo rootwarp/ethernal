@@ -244,8 +244,9 @@ fn validator_recover_index_overflow_exits_two_no_writes() {
     use std::process::Stdio;
 
     let dir = common::TempDir::new("validator-recover-overflow");
+    let secrets = common::TempDir::new("validator-recover-overflow-s");
+    let ks_path = common::secret_file(&secrets, "ks.pw", b"password1");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
-    let pw_var = format!("ETHERNAL_TEST_OVERFLOW_PW_{}", std::process::id());
     let mut child = ethernal()
         .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
@@ -254,10 +255,9 @@ fn validator_recover_index_overflow_exits_two_no_writes() {
             "2",
             "--start-index",
             "4294967295",
-            "--passphrase-env",
-            &pw_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
         ])
-        .env(&pw_var, "password1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -293,15 +293,16 @@ fn validator_recover_index_overflow_exits_two_no_writes() {
 }
 
 /// `validator recover` is exempt from the TTY guard: piped mnemonic on non-TTY stdin
-/// is accepted (F-10). Uses --passphrase-env so no interactive keystore prompt.
+/// is accepted (F-10). Uses --passphrase-file so no interactive keystore prompt.
 #[test]
 fn validator_recover_validates_without_tty() {
     use std::io::Write;
     use std::process::Stdio;
 
     let dir = common::TempDir::new("validator-recover-ok");
+    let secrets = common::TempDir::new("validator-recover-ok-s");
+    let ks_path = common::secret_file(&secrets, "ks.pw", b"password1");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
-    let pw_var = format!("ETHERNAL_TEST_RECOVER_PW_{}", std::process::id());
     let mut child = ethernal()
         .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
@@ -310,10 +311,9 @@ fn validator_recover_validates_without_tty() {
             "1",
             "--start-index",
             "1",
-            "--passphrase-env",
-            &pw_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
         ])
-        .env(&pw_var, "password1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

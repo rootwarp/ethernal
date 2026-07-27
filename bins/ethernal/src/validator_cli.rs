@@ -4,7 +4,7 @@
 
 use std::fmt;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgMatches, Command};
 use ethernal_core::cancel::CancelToken;
@@ -38,10 +38,10 @@ pub struct ValidatorConfig {
     /// First HD derivation index. Always 0 for `validator new`; operator-set on
     /// `validator recover` (default 0).
     pub start_index: u32,
-    /// Name of the env var holding the keystore passphrase. Empty means the
-    /// runtime falls back to a TTY prompt-with-confirm (K2-3 / K3-2).
-    pub passphrase_env: String,
-    /// Resolved mnemonic-passphrase form (flag / env value / prompt / empty).
+    /// Path to the keystore passphrase file. `None` means the runtime falls
+    /// back to a TTY prompt-with-confirm (K2-3 / K3-2 / FR-5).
+    pub passphrase_file: Option<PathBuf>,
+    /// Resolved mnemonic-passphrase form (flag / file value / prompt / empty).
     pub mnemonic_passphrase: MnemonicPassphraseForm,
     /// When true (default), run C4 post-write keystore decrypt round-trip.
     /// `--no-verify` sets this false. C1–C3 always run regardless.
@@ -55,7 +55,7 @@ impl fmt::Debug for ValidatorConfig {
             .field("count", &self.count)
             .field("output_dir", &self.output_dir)
             .field("start_index", &self.start_index)
-            .field("passphrase_env", &self.passphrase_env)
+            .field("passphrase_file", &self.passphrase_file)
             // Delegates to MnemonicPassphraseForm's redacting Debug.
             .field("mnemonic_passphrase", &self.mnemonic_passphrase)
             .field("verify_keystore", &self.verify_keystore)
@@ -89,7 +89,7 @@ fn no_verify_arg() -> Arg {
 fn new_command() -> Command {
     Command::new("new")
         .about("Generate a fresh 24-word mnemonic and write EIP-2335 signing keystores (TTY only)")
-        .override_usage("ethernal validator new --output-dir DIR [--count N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
+        .override_usage("ethernal validator new --output-dir DIR [--count N] [--passphrase-file PATH] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH]")
         .long_about(
             "Generates a fresh 24-word English BIP-39 mnemonic from OS CSPRNG entropy, runs a\n\
              display-once + full re-entry ceremony on the controlling terminal, then derives\n\
@@ -98,8 +98,8 @@ fn new_command() -> Command {
              before generating anything (a mnemonic must never land on a pipe or log).\n\n\
              Examples:\n\n\
              \x20 ethernal validator new --output-dir ./keys --count 1\n\
-             \x20 ethernal validator new --output-dir ./keys --passphrase-env KEYSTORE_PW\n\
-             \x20 ethernal validator new --output-dir ./keys --mnemonic-passphrase-env MNEMONIC_PW",
+             \x20 ethernal validator new --output-dir ./keys --passphrase-file ./ks.pw\n\
+             \x20 ethernal validator new --output-dir ./keys --mnemonic-passphrase-file ./mp.pw",
         )
         .args(shared_args())
         .arg(no_verify_arg())
@@ -108,7 +108,7 @@ fn new_command() -> Command {
 fn recover_command() -> Command {
     Command::new("recover")
         .about("Recover EIP-2335 signing keystores from an existing BIP-39 mnemonic")
-        .override_usage("ethernal validator recover --output-dir DIR [--count N] [--start-index N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
+        .override_usage("ethernal validator recover --output-dir DIR [--count N] [--start-index N] [--passphrase-file PATH] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH]")
         .long_about(
             "Reads an existing BIP-39 mnemonic from an interactive TTY prompt or piped stdin,\n\
              validates word membership and checksum (12/15/18/21/24 words), then derives and\n\
@@ -154,8 +154,11 @@ pub fn run_recover(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError>
 ///
 /// Validation order (mirrors `gen_cli::load_config` style): count → start-index
 /// → index-range overflow → output-dir → mnemonic-passphrase form →
-/// passphrase-env, then confirmation banner. Bad `--count` / overflowing
+/// passphrase-file, then confirmation banner. Bad `--count` / overflowing
 /// range / unwritable `--output-dir` → exit 2.
+///
+/// I-1: keystore passphrase file is **not** read here — only the path is
+/// captured. The actual `FileSource` read fires later in `finish_from_mnemonic`.
 pub fn load_config(
     m: &ArgMatches,
     mode: ValidatorMode,
@@ -191,15 +194,17 @@ pub fn load_config(
         .map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
     fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
 
-    // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ env).
-    // Bare vs value is num_args(0..=1); absent both → empty. Values Zeroizing'd on read.
-    let mnemonic_passphrase = parse_mnemonic_passphrase_form(m)?;
+    // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ file).
+    // Bare vs value is num_args(0..=1); absent both → empty. File form reads
+    // here (I-2: permission WARNING erased on `new`, durable on `recover`).
+    let mnemonic_passphrase = parse_mnemonic_passphrase_form(m, banner_out)?;
 
-    // 5. Keystore passphrase env var name (empty → runtime TTY prompt).
-    let passphrase_env = m
-        .get_one::<String>("passphrase-env")
-        .cloned()
-        .unwrap_or_default();
+    // 5. Keystore passphrase file path (None → runtime TTY prompt). Path only —
+    // content is read later via FileSource in finish_from_mnemonic (I-1).
+    let passphrase_file = match m.get_one::<String>("passphrase-file") {
+        Some(v) => Some(fs_util::secret_file_arg("--passphrase-file", v)?),
+        None => None,
+    };
 
     // 6. --no-verify skips C4 only (default: verify). Positive name for call sites.
     let verify_keystore = !m.get_flag("no-verify");
@@ -209,7 +214,7 @@ pub fn load_config(
         count,
         output_dir,
         start_index,
-        passphrase_env,
+        passphrase_file,
         mnemonic_passphrase,
         verify_keystore,
     };
@@ -246,8 +251,31 @@ fn print_banner(w: &mut dyn Write, cfg: &ValidatorConfig) {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use crate::test_support::{Tmp, ENV_LOCK};
+    use crate::test_support::Tmp;
     use zeroize::Zeroizing;
+
+    /// Write secret fixture bytes at mode 0600 for unit tests (mirrors
+    /// `common::secret_file` for the bin unit-test seam).
+    fn write_secret(dir: &Tmp, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = dir.0.join(name);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&path).expect("create secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .expect("chmod 0600");
+        }
+        use std::io::Write;
+        f.write_all(bytes).expect("write secret");
+        path
+    }
 
     fn parse_new(args: &[&str]) -> Result<ArgMatches, String> {
         let mut argv = vec!["validator", "new"];
@@ -390,26 +418,38 @@ mod tests {
         assert_eq!(cfg.mode, ValidatorMode::New);
         assert_eq!(cfg.start_index, 0);
         assert_eq!(cfg.output_dir, dir.str());
-        assert_eq!(cfg.passphrase_env, "");
+        assert_eq!(cfg.passphrase_file, None);
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
         assert!(banner.contains("ethernal validator new:"));
         assert!(banner.contains("count=1"));
     }
 
     #[test]
-    fn count_and_passphrase_env_propagate() {
+    fn count_and_passphrase_file_propagate() {
         let dir = Tmp::new("validator-cli-test");
+        let pw = write_secret(&dir, "ks.pw", b"password1");
         let (cfg, _) = load_new(&[
             "--output-dir",
             dir.str(),
             "--count",
             "4",
-            "--passphrase-env",
-            "KS_PW",
+            "--passphrase-file",
+            pw.to_str().unwrap(),
         ])
         .expect("ok");
         assert_eq!(cfg.count, 4);
-        assert_eq!(cfg.passphrase_env, "KS_PW");
+        assert_eq!(cfg.passphrase_file.as_deref(), Some(pw.as_path()));
+    }
+
+    #[test]
+    fn passphrase_file_dash_is_exit2() {
+        let dir = Tmp::new("validator-cli-test");
+        let err = load_new_err(&["--output-dir", dir.str(), "--passphrase-file", "-"]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("cannot be '-'") || err.to_string().contains("path cannot"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
@@ -628,36 +668,86 @@ mod tests {
     }
 
     #[test]
-    fn mnemonic_passphrase_env_reads_value() {
-        let _guard = ENV_LOCK.lock().unwrap();
+    fn mnemonic_passphrase_file_reads_value() {
         let dir = Tmp::new("validator-cli-test");
-        let var = format!("ETHERNAL_TEST_MNEMONIC_PW_{}", std::process::id());
-        std::env::set_var(&var, "from-env");
-        let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
-        std::env::remove_var(&var);
-        let (cfg, _) = result.expect("ok");
+        let path = write_secret(&dir, "mp.pw", b"from-file");
+        let (cfg, _) = load_new(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            path.to_str().unwrap(),
+        ])
+        .expect("ok");
         match cfg.mnemonic_passphrase {
-            MnemonicPassphraseForm::Env { var: v, value } => {
-                assert_eq!(v, var);
-                assert_eq!(value.as_str(), "from-env");
+            MnemonicPassphraseForm::File { path: p, value } => {
+                assert_eq!(p, path.display().to_string());
+                assert_eq!(value.as_str(), "from-file");
             }
-            other => panic!("expected Env, got {other:?}"),
+            other => panic!("expected File, got {other:?}"),
         }
     }
 
     #[test]
-    fn mnemonic_passphrase_env_empty_value_accepted() {
-        let _guard = ENV_LOCK.lock().unwrap();
+    fn mnemonic_passphrase_file_empty_zero_bytes_accepted() {
         let dir = Tmp::new("validator-cli-test");
-        let var = format!("ETHERNAL_TEST_MNEMONIC_PW_EMPTY_{}", std::process::id());
-        std::env::set_var(&var, "");
-        let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
-        std::env::remove_var(&var);
-        let (cfg, _) = result.expect("empty mnemonic passphrase is valid");
+        let path = write_secret(&dir, "mp-empty.pw", b"");
+        let (cfg, _) = load_new(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            path.to_str().unwrap(),
+        ])
+        .expect("empty mnemonic passphrase is valid");
         match cfg.mnemonic_passphrase {
-            MnemonicPassphraseForm::Env { value, .. } => assert_eq!(value.as_str(), ""),
-            other => panic!("expected Env, got {other:?}"),
+            MnemonicPassphraseForm::File { value, .. } => assert_eq!(value.as_str(), ""),
+            other => panic!("expected File, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mnemonic_passphrase_file_lone_newline_accepted() {
+        let dir = Tmp::new("validator-cli-test");
+        // FR-8 strips one trailing \n → empty passphrase (FR-18).
+        let path = write_secret(&dir, "mp-nl.pw", b"\n");
+        let (cfg, _) = load_new(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            path.to_str().unwrap(),
+        ])
+        .expect("lone \\n is valid empty mnemonic passphrase");
+        match cfg.mnemonic_passphrase {
+            MnemonicPassphraseForm::File { value, .. } => assert_eq!(value.as_str(), ""),
+            other => panic!("expected File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mnemonic_passphrase_file_dash_is_exit2() {
+        let dir = Tmp::new("validator-cli-test");
+        let err = load_new_err(&["--output-dir", dir.str(), "--mnemonic-passphrase-file", "-"]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("cannot be '-'") || err.to_string().contains("path cannot"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn mnemonic_passphrase_file_missing_is_exit2() {
+        let dir = Tmp::new("validator-cli-test");
+        let missing = dir.0.join("no-such-mp.pw");
+        let err = load_new_err(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            missing.to_str().unwrap(),
+        ]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("--mnemonic-passphrase-file"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
@@ -668,7 +758,7 @@ mod tests {
             count: 1,
             output_dir: "/out".into(),
             start_index: 0,
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mnemonic_passphrase: raw,
             verify_keystore: true,
         };
@@ -680,42 +770,29 @@ mod tests {
     }
 
     #[test]
-    fn mnemonic_passphrase_env_unset_is_exit2() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new("validator-cli-test");
-        let var = format!("ETHERNAL_TEST_MNEMONIC_PW_UNSET_{}", std::process::id());
-        std::env::remove_var(&var);
-        let m = parse_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]).unwrap();
-        let mut banner = Vec::new();
-        let err = load_config(&m, ValidatorMode::New, &mut banner).unwrap_err();
-        assert_eq!(exit_code_for(&err), 2);
-        assert!(err.to_string().contains("is not set"));
-    }
-
-    #[test]
-    fn mnemonic_passphrase_raw_and_env_conflict() {
+    fn mnemonic_passphrase_raw_and_file_conflict() {
         let dir = Tmp::new("validator-cli-test");
         let err = parse_new(&[
             "--output-dir",
             dir.str(),
             "--mnemonic-passphrase",
             "x",
-            "--mnemonic-passphrase-env",
+            "--mnemonic-passphrase-file",
             "Y",
         ]);
-        assert!(err.is_err(), "raw and env must conflict");
+        assert!(err.is_err(), "raw and file must conflict");
     }
 
     #[test]
-    fn mnemonic_passphrase_bare_and_env_conflict() {
+    fn mnemonic_passphrase_bare_and_file_conflict() {
         let dir = Tmp::new("validator-cli-test");
         let err = parse_new(&[
             "--output-dir",
             dir.str(),
             "--mnemonic-passphrase",
-            "--mnemonic-passphrase-env",
+            "--mnemonic-passphrase-file",
             "Y",
         ]);
-        assert!(err.is_err(), "bare and env must conflict");
+        assert!(err.is_err(), "bare and file must conflict");
     }
 }

@@ -1,10 +1,11 @@
 //! Shared unit-test scaffolding for the ethernal binary.
 //!
 //! Test-only (`#[cfg(test)]` from `main.rs`). Not linked into release builds.
-//! Holds temp-dir helpers, process-wide env lock, and keygen test doubles so
-//! inline `mod tests` blocks do not re-declare the same scaffolding.
+//! Holds temp-dir helpers and keygen test doubles so inline `mod tests` blocks
+//! do not re-declare the same scaffolding.
 
 use std::collections::VecDeque;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -18,16 +19,6 @@ use zeroize::Zeroizing;
 
 use crate::errors::AppError;
 use crate::keygen::MnemonicSource;
-
-// ---------------------------------------------------------------------------
-// Process-wide env lock
-// ---------------------------------------------------------------------------
-
-/// Serializes tests that mutate process environment (`set_var` / `remove_var`).
-///
-/// Single lock for the whole bin so validator_cli and account_cli tests cannot
-/// race each other.
-pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // Temp directory
@@ -60,6 +51,31 @@ impl Tmp {
 
     pub(crate) fn str(&self) -> &str {
         self.0.to_str().unwrap()
+    }
+
+    /// Writes `bytes` to `name` under this temp dir at mode 0600 (Unix).
+    ///
+    /// Bin unit-test mirror of `tests/common::secret_file`: never land a
+    /// passphrase/secret fixture at umask-default 0644. No trailing newline
+    /// is added — include `\n` in `bytes` when FR-8 is under test.
+    pub(crate) fn secret_file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = self.0.join(name);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&path).expect("create secret file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .expect("chmod 0600 secret file");
+        }
+        f.write_all(bytes).expect("write secret file");
+        path
     }
 
     /// EIP-2335 validator keystore files (`keystore-*.json`).

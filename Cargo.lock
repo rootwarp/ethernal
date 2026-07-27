@@ -295,6 +295,7 @@ dependencies = [
  "clap",
  "ethernal-core",
  "ethernal-keystore",
+ "ethernal-secretfile",
  "ethernal-signer",
  "ethernal-tx",
  "hex",

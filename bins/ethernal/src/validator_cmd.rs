@@ -16,7 +16,7 @@ use ethernal_core::hd::{self, KeyPath};
 use ethernal_core::output::OutputError;
 use ethernal_keystore::encrypt::{encrypt, keystore_filename, EncryptInput, ScryptParams};
 use ethernal_keystore::{
-    EnvSource, KeyLoader, KeystoreError, Loader, NewKeystorePassphrase, PassphraseSource,
+    FileSource, KeyLoader, KeystoreError, Loader, NewKeystorePassphrase, PassphraseSource,
     KEYSTORE_PASSPHRASE_MIN_LEN,
 };
 use zeroize::Zeroizing;
@@ -87,17 +87,19 @@ pub(crate) fn run_validator_new(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    // Keystore passphrase: env + min-len, or interactive confirm+≥8.
-    let env_source;
-    let checked_env;
+    // Keystore passphrase: file + min-len, or interactive confirm+≥8.
+    // FileSource is constructed here but only *read* inside finish_from_mnemonic
+    // (I-1 — same point EnvSource was consulted).
+    let file_source;
+    let checked;
     let tty_pw;
-    let keystore_pw: &dyn PassphraseSource = if !cfg.passphrase_env.is_empty() {
-        env_source = EnvSource::new(&cfg.passphrase_env);
-        checked_env = MinLenPassphrase {
-            inner: &env_source,
+    let keystore_pw: &dyn PassphraseSource = if let Some(p) = &cfg.passphrase_file {
+        file_source = FileSource::new(p.clone(), std::io::stderr());
+        checked = MinLenPassphrase {
+            inner: &file_source,
             min: KEYSTORE_PASSPHRASE_MIN_LEN,
         };
-        &checked_env
+        &checked
     } else {
         tty_pw = NewKeystorePassphrase::new(std::io::stderr());
         &tty_pw
@@ -149,16 +151,19 @@ pub(crate) fn run_validator_recover(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    let env_source;
-    let checked_env;
+    // Keystore passphrase: file + min-len, or interactive confirm+≥8.
+    // FileSource is constructed here but only *read* inside finish_from_mnemonic
+    // (I-1 — same point EnvSource was consulted).
+    let file_source;
+    let checked;
     let tty_pw;
-    let keystore_pw: &dyn PassphraseSource = if !cfg.passphrase_env.is_empty() {
-        env_source = EnvSource::new(&cfg.passphrase_env);
-        checked_env = MinLenPassphrase {
-            inner: &env_source,
+    let keystore_pw: &dyn PassphraseSource = if let Some(p) = &cfg.passphrase_file {
+        file_source = FileSource::new(p.clone(), std::io::stderr());
+        checked = MinLenPassphrase {
+            inner: &file_source,
             min: KEYSTORE_PASSPHRASE_MIN_LEN,
         };
-        &checked_env
+        &checked
     } else {
         tty_pw = NewKeystorePassphrase::new(std::io::stderr());
         &tty_pw
@@ -221,7 +226,7 @@ pub(crate) fn run_validator_new_with_deps(
         )));
     }
 
-    // 2. Mnemonic passphrase: flag > env > prompt-confirm; empty valid (F-12).
+    // 2. Mnemonic passphrase: flag / file / prompt-confirm; empty valid (F-12).
     check_cancel(cancel)?;
     let mnemonic_pass = resolve_mnemonic_passphrase(
         &cfg.mnemonic_passphrase,
@@ -281,7 +286,7 @@ pub(crate) fn run_validator_recover_with_deps(
         &[("words", word_count.to_string())],
     );
 
-    // 3. Mnemonic passphrase: flag > env > prompt (single-entry on recover).
+    // 3. Mnemonic passphrase: flag / file / prompt (single-entry on recover).
     check_cancel(cancel)?;
     let mnemonic_pass = resolve_mnemonic_passphrase(
         &cfg.mnemonic_passphrase,
@@ -722,7 +727,7 @@ mod tests {
     use crate::errors::exit_code_for;
     use crate::keygen::{zeroizing_trim, CLEAR_SCROLLBACK_TWICE};
     use crate::test_support::{
-        CancelOnFill, FixedEntropy, FixedPassphrase, ScriptedLines, ShortPassphrase, Tmp, ENV_LOCK,
+        CancelOnFill, FixedEntropy, FixedPassphrase, ScriptedLines, ShortPassphrase, Tmp,
     };
     use crate::validator_cli::ValidatorMode;
     use ethernal_core::hd::derive_path;
@@ -743,7 +748,7 @@ mod tests {
             count,
             output_dir: dir.into(),
             start_index: 0,
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mnemonic_passphrase: MnemonicPassphraseForm::Empty,
             verify_keystore: true,
         }
@@ -783,7 +788,7 @@ mod tests {
             count,
             output_dir: dir.into(),
             start_index,
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mnemonic_passphrase: MnemonicPassphraseForm::Empty,
             verify_keystore: true,
         }
@@ -1459,21 +1464,25 @@ mod tests {
 
     #[test]
     fn min_len_passphrase_wrapper() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let env_name = format!("ETHERNAL_TEST_KS_PW_{}", std::process::id());
-        // Short value.
-        std::env::set_var(&env_name, "short7c");
-        let env = EnvSource::new(&env_name);
+        let dir = Tmp::new("min-len-pw");
+        // Via Tmp::secret_file (0600) — never raw fs::write of a passphrase.
+        let short = dir.secret_file("short.pw", b"short7c");
+        let src = FileSource::new(short, std::io::sink());
         let checked = MinLenPassphrase {
-            inner: &env,
+            inner: &src,
             min: KEYSTORE_PASSPHRASE_MIN_LEN,
         };
         let err = checked.read().unwrap_err();
         assert!(matches!(err, KeystoreError::PassphraseTooShort { .. }));
-        std::env::set_var(&env_name, "password1");
+
+        let ok_path = dir.secret_file("ok.pw", b"password1");
+        let src = FileSource::new(ok_path, std::io::sink());
+        let checked = MinLenPassphrase {
+            inner: &src,
+            min: KEYSTORE_PASSPHRASE_MIN_LEN,
+        };
         let ok = checked.read().unwrap();
         assert_eq!(ok, b"password1");
-        std::env::remove_var(&env_name);
     }
 
     /// Quiet unused-import / dead_code guards for Arc if not otherwise used.

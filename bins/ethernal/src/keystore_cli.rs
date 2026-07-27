@@ -5,6 +5,7 @@
 //! neither namespace owns the other's helpers.
 
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgMatches};
@@ -13,18 +14,18 @@ use ethernal_keystore::{KeystoreError, PassphraseSource};
 use zeroize::Zeroizing;
 
 use crate::errors::AppError;
-use crate::fs_util::{stdin_is_tty, stdout_is_tty};
+use crate::fs_util::{self, stdin_is_tty, stdout_is_tty};
 
 /// Shared overflow message for `--start-index + --count` range checks.
 pub(crate) const START_INDEX_OVERFLOW_MSG: &str = "--start-index + --count overflows u32";
 
 /// The three-form BIP-39 mnemonic passphrase input (F-12 / architecture design
-/// note (c)). Distinct from the keystore passphrase (`--passphrase-env`).
+/// note (c)). Distinct from the keystore passphrase (`--passphrase-file`).
 ///
 /// The forms are mutually exclusive at the clap layer (`conflicts_with`); only
 /// one is active per invocation. Absent both flags → [`Empty`].
 ///
-/// Secret payloads (`Raw` / `Env::value`) are wrapped in [`Zeroizing`] on read
+/// Secret payloads (`Raw` / `File::value`) are wrapped in [`Zeroizing`] on read
 /// (S-1 / design note (c)). [`Debug`] redacts those fields (S-2).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum MnemonicPassphraseForm {
@@ -32,10 +33,10 @@ pub(crate) enum MnemonicPassphraseForm {
     Empty,
     /// `--mnemonic-passphrase VALUE` raw argv value.
     Raw(Zeroizing<String>),
-    /// `--mnemonic-passphrase-env VAR` resolved to the env var's current value
-    /// (empty string is accepted; unset is rejected at load time).
-    Env {
-        var: String,
+    /// `--mnemonic-passphrase-file PATH` resolved to the file's current value
+    /// (empty string is accepted — FR-18; unreadable is rejected at load time).
+    File {
+        path: String,
         value: Zeroizing<String>,
     },
     /// Bare `--mnemonic-passphrase` (no value) — interactive prompt at runtime.
@@ -47,9 +48,9 @@ impl fmt::Debug for MnemonicPassphraseForm {
         match self {
             Self::Empty => f.write_str("Empty"),
             Self::Raw(_) => f.write_str("Raw([REDACTED])"),
-            Self::Env { var, .. } => f
-                .debug_struct("Env")
-                .field("var", var)
+            Self::File { path, .. } => f
+                .debug_struct("File")
+                .field("path", path)
                 .field("value", &"[REDACTED]")
                 .finish(),
             Self::Prompt => f.write_str("Prompt"),
@@ -71,33 +72,35 @@ pub(crate) fn shared_args() -> Vec<Arg> {
             .value_name("DIR")
             .required(true)
             .help("Existing, writable directory for the generated keystore JSON files"),
-        Arg::new("passphrase-env")
-            .long("passphrase-env")
-            .value_name("VAR")
-            .help("Name of the environment variable holding the keystore passphrase (omit for TTY prompt-with-confirm)"),
-        // Three-form mnemonic passphrase (architecture design note (c)):
+        Arg::new("passphrase-file")
+            .long("passphrase-file")
+            .value_name("PATH")
+            .help(
+                "Path to a file holding the keystore passphrase (omit for TTY prompt-with-confirm)",
+            ),
+        // Four-form mnemonic passphrase (architecture design note (c) / FR-3):
         //   --mnemonic-passphrase VALUE  → raw
         //   --mnemonic-passphrase        → prompt (num_args 0)
-        //   --mnemonic-passphrase-env VAR → env
+        //   --mnemonic-passphrase-file PATH → file
         //   absent                       → empty
         Arg::new("mnemonic-passphrase")
             .long("mnemonic-passphrase")
             .value_name("VALUE")
             .num_args(0..=1)
-            .conflicts_with("mnemonic-passphrase-env")
+            .conflicts_with("mnemonic-passphrase-file")
             .help(
                 "BIP-39 mnemonic passphrase (\"25th word\"). Provide VALUE for a raw value; \
                  pass the flag bare to prompt interactively; omit for empty (default). \
-                 Raw VALUE is visible in the process table — prefer env or prompt for \
+                 Raw VALUE is visible in the process table — prefer file or prompt for \
                  high-value mnemonics",
             ),
-        Arg::new("mnemonic-passphrase-env")
-            .long("mnemonic-passphrase-env")
-            .value_name("VAR")
+        Arg::new("mnemonic-passphrase-file")
+            .long("mnemonic-passphrase-file")
+            .value_name("PATH")
             .conflicts_with("mnemonic-passphrase")
             .help(
-                "Name of the environment variable holding the BIP-39 mnemonic passphrase \
-                 (empty value is accepted; unset is a configuration error)",
+                "Path to a file holding the BIP-39 mnemonic passphrase \
+                 (empty value is accepted; unreadable is a configuration error)",
             ),
     ]
 }
@@ -113,32 +116,39 @@ pub(crate) fn require_tty_for_new() -> Result<(), AppError> {
     ))
 }
 
-/// Parses the three mnemonic-passphrase CLI forms into a [`MnemonicPassphraseForm`].
+/// Parses the four mnemonic-passphrase CLI forms into a [`MnemonicPassphraseForm`].
 ///
 /// Forms are mutually exclusive at the clap layer (`conflicts_with`), so only
 /// one branch can fire:
 /// - `--mnemonic-passphrase VALUE` → [`Raw`] (value Zeroizing'd on read)
 /// - bare `--mnemonic-passphrase` → [`Prompt`]
-/// - `--mnemonic-passphrase-env VAR` → read env (unset → exit 2; empty OK) → [`Env`]
+/// - `--mnemonic-passphrase-file PATH` → read file (empty OK) → [`File`]
 /// - neither → [`Empty`]
+///
+/// `warn_out` receives the FR-17 loose-permission WARNING (if any) when the
+/// file form is used.
 ///
 /// Distinct from the secret-resolving [`crate::keygen::resolve_mnemonic_passphrase`].
 pub(crate) fn parse_mnemonic_passphrase_form(
     m: &ArgMatches,
+    warn_out: &mut dyn Write,
 ) -> Result<MnemonicPassphraseForm, AppError> {
-    // Env form (mutually exclusive with the raw/prompt flag via conflicts_with).
-    if let Some(var) = m.get_one::<String>("mnemonic-passphrase-env") {
-        match std::env::var(var) {
+    // File form (mutually exclusive with the raw/prompt flag via conflicts_with).
+    if let Some(raw) = m.get_one::<String>("mnemonic-passphrase-file") {
+        let path = fs_util::secret_file_arg("--mnemonic-passphrase-file", raw)?;
+        // I-2: this FR-17 permission WARNING is erased by `clear_after_ceremony` on
+        // `new` and is durable on `recover` — the same pre-existing property as the
+        // symlinked-output-dir WARNING (`validator_cli` / `account_cli` load_config).
+        // No hoist, no ceremony change. See architecture §6.3.
+        match ethernal_secretfile::read_secret_line(&path, warn_out) {
             Ok(value) => {
-                return Ok(MnemonicPassphraseForm::Env {
-                    var: var.clone(),
-                    value: Zeroizing::new(value),
+                return Ok(MnemonicPassphraseForm::File {
+                    path: path.display().to_string(),
+                    value,
                 });
             }
-            Err(_) => {
-                return Err(AppError::exit2(format!(
-                    "--mnemonic-passphrase-env: environment variable \"{var}\" is not set"
-                )));
+            Err(e) => {
+                return Err(AppError::exit2(format!("--mnemonic-passphrase-file: {e}")));
             }
         }
     }
@@ -240,16 +250,21 @@ mod tests {
         );
         assert!(dbg.contains("REDACTED"), "{dbg}");
 
-        let env = MnemonicPassphraseForm::Env {
-            var: "MNEMONIC_PW".into(),
-            value: Zeroizing::new("env-secret-value".into()),
+        // Distinctive sentinel path so FR-4 asserts path stays visible while
+        // value is redacted (Zeroizing derives Debug — never #[derive(Debug)] here).
+        let file = MnemonicPassphraseForm::File {
+            path: "/tmp/sentinel-path-MNEMONIC_PW_XYZ".into(),
+            value: Zeroizing::new("file-secret-value-NEVER-PRINT".into()),
         };
-        let dbg = format!("{env:?}");
+        let dbg = format!("{file:?}");
         assert!(
-            !dbg.contains("env-secret-value"),
-            "Debug leaked env secret: {dbg}"
+            !dbg.contains("file-secret-value-NEVER-PRINT"),
+            "Debug leaked file secret: {dbg}"
         );
-        assert!(dbg.contains("MNEMONIC_PW"), "var name should remain: {dbg}");
+        assert!(
+            dbg.contains("/tmp/sentinel-path-MNEMONIC_PW_XYZ"),
+            "path should remain: {dbg}"
+        );
         assert!(dbg.contains("REDACTED"), "{dbg}");
     }
 }

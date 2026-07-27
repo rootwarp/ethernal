@@ -41,7 +41,7 @@ pub(crate) trait MnemonicSource: Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Mnemonic passphrase resolution (flag > env > prompt > empty)
+// Mnemonic passphrase resolution (flag / file / prompt / empty)
 // ---------------------------------------------------------------------------
 
 /// Resolve the three-form CLI mnemonic passphrase into secret bytes.
@@ -59,7 +59,7 @@ pub(crate) fn resolve_mnemonic_passphrase(
     match form {
         MnemonicPassphraseForm::Empty => Ok(Zeroizing::new(Vec::new())),
         MnemonicPassphraseForm::Raw(v) => Ok(Zeroizing::new(v.as_bytes().to_vec())),
-        MnemonicPassphraseForm::Env { value, .. } => Ok(Zeroizing::new(value.as_bytes().to_vec())),
+        MnemonicPassphraseForm::File { value, .. } => Ok(Zeroizing::new(value.as_bytes().to_vec())),
         MnemonicPassphraseForm::Prompt => {
             // Echo-off secret entry (S-2).
             check_cancel(cancel)?;

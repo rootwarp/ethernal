@@ -28,7 +28,7 @@ use ethernal_keystore::decrypt_v3;
 use ethernal_keystore::encrypt_v3::{v3_filename, ScryptParams};
 use ethernal_signer::{eip55_checksum, secret_to_address};
 
-use common::{crate_testdata, ethernal, TempDir};
+use common::{crate_testdata, ethernal, secret_file, TempDir};
 
 // --- chain anchor: BIP-39 abandon×11 about + empty passphrase = cast vector ---
 
@@ -79,7 +79,8 @@ fn load_fixture() -> CrossRecoveryFixture {
 /// Run `account recover` with the fixed mnemonic over stdin (empty mnemonic
 /// passphrase — no `--mnemonic-passphrase*` flag). Returns (stdout, stderr).
 fn run_account_recover(out_dir: &Path, count: u32) -> (String, String, bool) {
-    let ks_var = format!("ETHERNAL_A5_KS_{}", std::process::id());
+    let secrets = TempDir::new("a5-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
 
     let mut child = ethernal()
         .args(["account", "recover", "--output-dir"])
@@ -89,10 +90,9 @@ fn run_account_recover(out_dir: &Path, count: u32) -> (String, String, bool) {
             &count.to_string(),
             "--start-index",
             "0",
-            "--passphrase-env",
-            &ks_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
         ])
-        .env(&ks_var, KEYSTORE_PW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -105,6 +105,7 @@ fn run_account_recover(out_dir: &Path, count: u32) -> (String, String, bool) {
     }
 
     let out = child.wait_with_output().expect("wait account recover");
+    drop(secrets);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     (stdout, stderr, out.status.success())
