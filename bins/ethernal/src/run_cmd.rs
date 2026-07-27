@@ -4,31 +4,34 @@
 //! for workflows where both phases happen on the same machine.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use ethernal_core::cancel::CancelToken;
 use ethernal_core::output::write_atomic;
-use ethernal_signer::{new_local_signer_from_env, Signer};
+use ethernal_signer::Signer;
 
 use crate::build_cmd::{build_flags, build_unsigned_tx, read_input};
 use crate::config::{self, Config};
 use crate::errors::AppError;
+use crate::fs_util;
 use crate::logging::{Format, Level, Logger};
-use crate::sign_cmd::{is_posix_env_var_name, sign_unsigned_tx, SignConfig, DEFAULT_PRIV_KEY_ENV};
+use crate::sign_cmd::{local_signer_from_file, sign_unsigned_tx, SignConfig};
 
 /// Parsed, validated inputs for the run subcommand, combining build (deposit
 /// data → unsigned tx) and sign (unsigned tx → signed tx) fields. Port of
 /// `main.RunConfig`.
+///
+/// Holds the **path** only — never key material (architecture §6.1 / D-4).
 #[derive(Debug, Clone)]
 pub struct RunConfig {
     /// Build fields (deposit data → unsigned tx).
     pub build: Config,
     /// The resolved signer type: "local" or "ledger".
     pub signer: String,
-    /// The env var name holding the hex private key (local signer only).
-    pub private_key_env_var: String,
+    /// Path to the hex private-key file (local signer only). `None` for ledger.
+    pub private_key_file: Option<PathBuf>,
     /// The output path for the signed tx. Empty means stdout.
     pub output_file: String,
     /// When true, also writes the unsigned tx to disk alongside signed.json.
@@ -42,7 +45,9 @@ pub struct RunConfig {
 pub fn command() -> Command {
     Command::new("run")
         .about("Build and sign a deposit transaction in one step (convenience command)")
-        .override_usage("ethernal tx run --input-file FILE --network NET --signer local|ledger [options]")
+        .override_usage(
+            "ethernal tx run --input-file FILE --network NET --signer local|ledger [--private-key-file PATH] [options]",
+        )
         .long_about(
             "Runs build and sign in-process without writing an intermediate unsigned tx to disk.\n\n\
              Use this when both phases happen on the same machine. For air-gapped workflows\n\
@@ -66,16 +71,15 @@ pub fn command() -> Command {
             Arg::new("signer")
                 .long("signer")
                 .value_name("METHOD")
-                .help("Signing method: \"local\" (env-var private key) or \"ledger\" (hardware wallet)"),
+                .help("Signing method: \"local\" (private-key file) or \"ledger\" (hardware wallet)"),
         )
         .arg(
-            Arg::new("private-key-env")
-                .long("private-key-env")
-                .value_name("VAR")
-                .default_value(DEFAULT_PRIV_KEY_ENV)
-                .help(format!(
-                    "Environment variable name holding the hex private key (local signer only; default: {DEFAULT_PRIV_KEY_ENV})"
-                )),
+            Arg::new("private-key-file")
+                .long("private-key-file")
+                .value_name("PATH")
+                .help(
+                    "Path to a file holding the hex private key (local signer only; required with --signer local)",
+                ),
         )
         .arg(
             Arg::new("keep-unsigned")
@@ -108,14 +112,15 @@ pub fn load_run_config(m: &ArgMatches) -> Result<RunConfig, AppError> {
         )));
     }
 
-    let env_var = m
-        .get_one::<String>("private-key-env")
-        .cloned()
-        .unwrap_or_default();
-    if !is_posix_env_var_name(&env_var) {
-        return Err(AppError::exit2(format!(
-            "--private-key-env: {env_var:?} is not a valid POSIX env var name (must match ^[A-Z_][A-Z0-9_]*$); did you accidentally pass the key value instead of a variable name?"
-        )));
+    let private_key_file = match m.get_one::<String>("private-key-file") {
+        Some(v) => Some(fs_util::secret_file_arg("--private-key-file", v)?),
+        None => None,
+    };
+    // FR-24: required when --signer local (no default path).
+    if signer == "local" && private_key_file.is_none() {
+        return Err(AppError::exit2(
+            "--private-key-file: required when --signer local",
+        ));
     }
 
     let keep_unsigned = m.get_flag("keep-unsigned");
@@ -129,7 +134,7 @@ pub fn load_run_config(m: &ArgMatches) -> Result<RunConfig, AppError> {
     Ok(RunConfig {
         build,
         signer,
-        private_key_env_var: env_var,
+        private_key_file,
         output_file,
         keep_unsigned,
         raw_output_file: m
@@ -145,7 +150,25 @@ pub fn run(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
     run_action(&mut cfg, cancel)
 }
 
+/// Builds the synthetic [`SignConfig`] used by [`run_action`] for in-process
+/// signing. **`private_key_file` is always `None`** — a live path here is dead
+/// data that invites a second open (D-4). The local signer is constructed once
+/// in `run_action` and passed forward.
+pub(crate) fn synthetic_sign_config(cfg: &RunConfig) -> SignConfig {
+    SignConfig {
+        signer: cfg.signer.clone(),
+        input_file: String::new(),
+        output_file: String::new(),
+        private_key_file: None,
+    }
+}
+
 /// Orchestrates the build → sign pipeline in-process.
+///
+/// Step order preserves today's error precedence (architecture §6.1):
+/// require_ledger_flags_for_rpc → read_input → local_signer_from_file (all local)
+/// → set `from` when RPC → build_unsigned_tx → optional keep-unsigned →
+/// sign_unsigned_tx (forwarded local) → close local.
 fn run_action(cfg: &mut RunConfig, cancel: &CancelToken) -> Result<(), AppError> {
     let logger = Logger::stderr(Level::Info, Format::Text);
 
@@ -153,21 +176,32 @@ fn run_action(cfg: &mut RunConfig, cancel: &CancelToken) -> Result<(), AppError>
     // both --nonce and --gas-limit up front (clean exit 2, no dial).
     require_ledger_flags_for_rpc(cfg)?;
 
-    // 1. Read deposit data.
+    // 1. Read deposit data (still first — pins run::invalid_input exit 2).
     let raw_data = read_input(&cfg.build.input_file)
         .map_err(|e| AppError::exit2(format!("--input-file: {e}")))?;
 
-    // 1b. Local signer + RPC mode: derive From from the signing key so the
-    // builder can fetch the pending nonce AND estimate gas (both need a funded
-    // sender). The key is read here and again in sign_unsigned_tx below; each
-    // LocalSigner zeroizes its key buffer on close.
-    if cfg.signer == "local" && !cfg.build.rpc_url.is_empty() {
-        let s = new_local_signer_from_env(&cfg.private_key_env_var)
-            .map_err(|e| AppError::context("local signer", AppError::Signer(e)))?;
-        let addr_res = s.address();
-        let _ = s.close();
-        let addr = addr_res.map_err(|e| AppError::context("local signer", AppError::Signer(e)))?;
-        cfg.build.from = addr;
+    // 1b. Exactly one LocalSigner construction for every local run (FR-22 / D-4).
+    // Must come after read_input so bad input still exits 2 before a bad key's
+    // exit 3 (R-4). Offline local also constructs here so sign never re-opens.
+    let mut err_writer = std::io::stderr();
+    let local = if cfg.signer == "local" {
+        let path = cfg.private_key_file.as_deref().ok_or_else(|| {
+            AppError::Internal("local signer missing private_key_file after load_run_config".into())
+        })?;
+        Some(local_signer_from_file(path, &mut err_writer)?)
+    } else {
+        None
+    };
+
+    // 1c. Local + RPC: derive From so the builder can fetch pending nonce and
+    // estimate gas (both need a funded sender).
+    if let Some(ref s) = local {
+        if !cfg.build.rpc_url.is_empty() {
+            let addr = s
+                .address()
+                .map_err(|e| AppError::context("local signer", AppError::Signer(e)))?;
+            cfg.build.from = addr;
+        }
     }
 
     // 2. Build unsigned tx (in-process, no disk write).
@@ -185,22 +219,28 @@ fn run_action(cfg: &mut RunConfig, cancel: &CancelToken) -> Result<(), AppError>
         logger.info("wrote unsigned tx", &[("path", unsigned_path.clone())]);
     }
 
-    // 4. Sign (in-process, no disk round-trip).
-    let sign_cfg = SignConfig {
-        signer: cfg.signer.clone(),
-        input_file: String::new(),
-        output_file: String::new(),
-        private_key_env_var: cfg.private_key_env_var.clone(),
-    };
-    let mut err_writer = std::io::stderr();
-    let signed = sign_unsigned_tx(&sign_cfg, &mut err_writer, &unsigned, cancel)?;
+    // 4. Sign (in-process). Synthetic SignConfig has private_key_file: None so
+    // nothing inside sign_unsigned_tx can re-open a path (D-4).
+    let sign_cfg = synthetic_sign_config(cfg);
+    let signed = sign_unsigned_tx(
+        &sign_cfg,
+        local.as_ref(),
+        &mut err_writer,
+        &unsigned,
+        cancel,
+    )?;
 
-    // 5. Marshal signed tx.
+    // 5. Owner closes after sign — preserve prompt-zeroize timing.
+    if let Some(ref s) = local {
+        let _ = s.close();
+    }
+
+    // 6. Marshal signed tx.
     let mut signed_json = serde_json::to_vec_pretty(&signed)
         .map_err(|e| AppError::Internal(format!("run: marshal signed: {e}")))?;
     signed_json.push(b'\n');
 
-    // 6. Write output.
+    // 7. Write output.
     if cfg.output_file.is_empty() || cfg.output_file == "-" {
         std::io::stdout()
             .write_all(&signed_json)
@@ -357,7 +397,7 @@ mod tests {
                 nonce,
             },
             signer: signer.to_string(),
-            private_key_env_var: DEFAULT_PRIV_KEY_ENV.to_string(),
+            private_key_file: None,
             output_file: String::new(),
             keep_unsigned: false,
             raw_output_file: String::new(),
@@ -405,6 +445,53 @@ mod tests {
         assert_eq!(
             unsigned_path_for("/path/to/tx.json"),
             "/path/to/unsigned-tx.json"
+        );
+    }
+
+    /// Structural guard (F6-1 / D-4): `run_action`'s synthetic `SignConfig` must
+    /// carry `private_key_file: None` so nothing can re-open a path at sign time.
+    #[test]
+    fn synthetic_sign_config_private_key_file_is_none() {
+        let mut cfg = run_cfg("local", "", 0, None);
+        cfg.private_key_file = Some(PathBuf::from("/tmp/key.hex"));
+        let sign_cfg = synthetic_sign_config(&cfg);
+        assert!(
+            sign_cfg.private_key_file.is_none(),
+            "synthetic SignConfig must set private_key_file: None (got {:?})",
+            sign_cfg.private_key_file
+        );
+        assert_eq!(sign_cfg.signer, "local");
+        // Debug of the synthetic config must not reintroduce a path.
+        let dbg = format!("{sign_cfg:?}");
+        assert!(
+            !dbg.contains("/tmp/key.hex"),
+            "synthetic SignConfig Debug must not carry a live path: {dbg}"
+        );
+    }
+
+    #[test]
+    fn private_key_file_required_for_local() {
+        // FR-24: missing --private-key-file with --signer local → exit 2.
+        // Use a real deposit fixture path so build config load is not the failure.
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/deposit-fixture.json");
+        let m = command()
+            .try_get_matches_from([
+                "run",
+                "--network",
+                "holesky",
+                "--input-file",
+                fixture.to_str().unwrap(),
+                "--signer",
+                "local",
+            ])
+            .expect("clap parse");
+        let err = load_run_config(&m).expect_err("missing key file");
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("--private-key-file"),
+            "must name --private-key-file: {}",
+            err
         );
     }
 }

@@ -6,12 +6,11 @@
 
 mod common;
 
-use common::{deposit_fixture, ethernal, Stub, PHASE3_KEY};
+use common::{deposit_fixture, ethernal, secret_file, Stub, TempDir, PHASE3_KEY};
 
 const HOLESKY_CHAIN_ID: u64 = 17000;
 /// The Ethereum address derived from `PHASE3_KEY` (checksum form from the golden).
 const DERIVED_FROM: &str = "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1";
-const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 
 fn eq_addr(got: &str, want: &str) -> bool {
     got.to_lowercase() == want.to_lowercase()
@@ -22,19 +21,15 @@ fn eq_addr(got: &str, want: &str) -> bool {
 #[test]
 fn local_signer_rpc_derives_from() {
     let stub = Stub::build_ok(HOLESKY_CHAIN_ID, 1_000_000_000, 10_000_000_000, 3, 200_000);
+    let dir = TempDir::new("run-rpc-from");
+    let key_file = secret_file(&dir, "key.hex", PHASE3_KEY.as_bytes());
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
         .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
-        .args([
-            "--rpc-url",
-            &stub.url,
-            "--signer",
-            "local",
-            "--private-key-env",
-            KEY_ENV,
-        ])
+        .args(["--rpc-url", &stub.url, "--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -76,21 +71,16 @@ fn local_signer_rpc_derives_from_for_gas_with_explicit_nonce() {
         "eth_estimateGas" => common::Reply::Ok(serde_json::Value::String(common::hex_u64(200_000))),
         other => common::Reply::Err(format!("unexpected {other}")),
     });
+    let dir = TempDir::new("run-rpc-nonce");
+    let key_file = secret_file(&dir, "key.hex", PHASE3_KEY.as_bytes());
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
         .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
-        .args([
-            "--rpc-url",
-            &stub.url,
-            "--signer",
-            "local",
-            "--private-key-env",
-            KEY_ENV,
-            "--nonce",
-            "5",
-        ])
+        .args(["--rpc-url", &stub.url, "--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&key_file)
+        .args(["--nonce", "5"])
         .output()
         .expect("run");
     assert!(
@@ -113,18 +103,15 @@ fn local_signer_rpc_derives_from_for_gas_with_explicit_nonce() {
 // (exit 3) before any dial.
 #[test]
 fn local_signer_rpc_bad_key_exit3() {
+    let dir = TempDir::new("run-rpc-badkey");
+    let key_file = secret_file(&dir, "key.hex", b"0xdeadbeefnotahexkey");
+
     let out = ethernal()
-        .env(KEY_ENV, "0xdeadbeefnotahexkey")
         .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
-        .args([
-            "--rpc-url",
-            "http://node.example",
-            "--signer",
-            "local",
-            "--private-key-env",
-            KEY_ENV,
-        ])
+        .args(["--rpc-url", "http://node.example", "--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert_eq!(
