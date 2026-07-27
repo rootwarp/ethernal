@@ -65,7 +65,7 @@ pub enum KeystoreError {
     /// `ErrNoTTY`.
     #[error(
         "no controlling terminal for passphrase prompt: cannot open /dev/tty ({detail}); \
-         for non-interactive or piped use, supply the passphrase via --passphrase-env VAR"
+         for non-interactive or piped use, supply the passphrase via --passphrase-file PATH"
     )]
     NoTty {
         /// The underlying open failure, surfaced for diagnostics.

@@ -286,7 +286,7 @@ impl MnemonicSource for StdinMnemonicSource {
             Err(err) => Err(AppError::exit2(format!(
                 "read mnemonic passphrase: {err}; \
                  for non-interactive use, supply --mnemonic-passphrase VALUE or \
-                 --mnemonic-passphrase-env VAR"
+                 --mnemonic-passphrase-file PATH"
             ))),
         }
     }
@@ -386,7 +386,7 @@ impl MnemonicSource for RecoverMnemonicSource {
             Err(err) => Err(AppError::exit2(format!(
                 "read mnemonic passphrase: {err}; \
                  for non-interactive use, supply --mnemonic-passphrase VALUE or \
-                 --mnemonic-passphrase-env VAR"
+                 --mnemonic-passphrase-file PATH"
             ))),
         }
     }

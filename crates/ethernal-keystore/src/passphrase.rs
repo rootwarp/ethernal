@@ -164,7 +164,7 @@ pub const KEYSTORE_PASSPHRASE_MIN_LEN: usize = 8;
 /// ([`normalize_passphrase`]: NFKD + strip control codes), so control-character
 /// padding cannot satisfy F-7 while yielding a short effective KDF password.
 ///
-/// Applied by keygen to the `--passphrase-env` path after reading via
+/// Applied by keygen to the `--passphrase-file` path after reading via
 /// [`EnvSource`]. Never called from `gen`'s decrypt path — short decrypt
 /// passphrases remain valid there.
 ///
@@ -287,7 +287,7 @@ mod tests {
     // Go: TestTermPromptSource_NoTTY
     //
     // Forces the controlling-terminal open to fail and asserts the returned
-    // error is tagged NoTty and points the user at the --passphrase-env escape
+    // error is tagged NoTty and points the user at the --passphrase-file escape
     // hatch. The opener is injected so the test never touches the real
     // /dev/tty.
     #[test]
@@ -304,8 +304,8 @@ mod tests {
         );
         let msg = err.to_string();
         assert!(
-            msg.contains("--passphrase-env"),
-            "Read() error = {msg:?}, want message naming --passphrase-env",
+            msg.contains("--passphrase-file"),
+            "Read() error = {msg:?}, want message naming --passphrase-file",
         );
         // The underlying open error should be surfaced for diagnostics.
         assert!(

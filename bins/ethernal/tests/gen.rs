@@ -591,7 +591,7 @@ fn gen_mainnet_with_ack_matches_golden() {
 }
 
 // T-8 / E5-2: gen without --passphrase-env when there is no controlling TTY →
-// exit 2 naming --passphrase-env.
+// exit 2 naming --passphrase-file.
 //
 // Must use `ethernal_no_tty` (setsid): plain `.output()` still inherits the
 // runner's controlling terminal, so under interactive `make test` the child
@@ -620,7 +620,7 @@ fn gen_pipe_without_passphrase_env_exit2() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--passphrase-env"),
-        "stderr must name --passphrase-env: {stderr}"
+        stderr.contains("--passphrase-file"),
+        "stderr must name --passphrase-file: {stderr}"
     );
 }
