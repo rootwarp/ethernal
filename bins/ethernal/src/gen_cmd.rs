@@ -14,11 +14,13 @@ use ethernal_core::deposit::{self, Entry, Generator, Request};
 use ethernal_core::network::{self, Network};
 use ethernal_core::output::{DryRunWriter, FsWriter, Writer as OutputWriter};
 use ethernal_keystore::{
-    scan_dir, DirectoryIndex, EnvSource, KeyLoader, Loader, PassphraseSource, TermPromptSource,
+    scan_dir, DirectoryIndex, FileSource, KeyLoader, Loader, PassphraseSource, TermPromptSource,
 };
 
 use crate::errors::AppError;
+use crate::fs_util::stderr_is_tty;
 use crate::gen_cli::GenConfig;
+use crate::keystore_cli::InMemoryPassphrase;
 use crate::logging::{Format, Level, Logger};
 
 /// Mirrors the staking-deposit-cli release used to derive the golden test
@@ -35,14 +37,7 @@ pub fn default_withdrawal_creds() -> [u8; 32] {
     [0u8; 32]
 }
 
-/// How progress is rendered (port of the isTTY branch in gen.go).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Progress {
-    /// stderr is a terminal: single updating line using \r.
-    Tty,
-    /// Pipe/buffer/CI: one log event per 10% boundary and on the last entry.
-    NonTty,
-}
+pub use crate::progress::Progress;
 
 /// Injectable dependencies for [`run_gen_with_deps`]. Production values come
 /// from [`run_gen`]; tests can replace any piece.
@@ -144,11 +139,18 @@ pub fn run_gen_with_deps(
         &[("count", index.len().to_string())],
     );
 
-    let env_source;
+    // D-5 / FR-22: read the passphrase file once before the worker pool.
+    // KeyLoader::load calls pw.read() per pubkey across --parallel threads;
+    // a process-sub or FIFO cannot survive N concurrent opens. InMemoryPassphrase
+    // is the established in-process source (keystore_cli.rs, C4's D-6) and is Sync.
+    // TermPromptSource stays per-pubkey (pre-existing UX; hoisting would change
+    // interactive behavior beyond this change's scope — architecture §6.2).
+    let file_pw;
     let tty_source;
-    let pw_src: &(dyn PassphraseSource + Sync) = if !cfg.passphrase_env.is_empty() {
-        env_source = EnvSource::new(&cfg.passphrase_env);
-        &env_source
+    let pw_src: &(dyn PassphraseSource + Sync) = if let Some(p) = &cfg.passphrase_file {
+        let src = FileSource::new(p.clone(), std::io::stderr());
+        file_pw = InMemoryPassphrase::new(src.read().map_err(AppError::Keystore)?);
+        &file_pw
     } else {
         tty_source = TermPromptSource::new(std::io::stderr());
         &tty_source
@@ -460,12 +462,6 @@ pub fn build_gen_logger(verbose: bool, json_logs: bool) -> Logger {
     Logger::stderr(level, format)
 }
 
-/// Reports whether stderr is connected to a terminal.
-fn stderr_is_tty() -> bool {
-    // SAFETY: isatty is async-signal-safe and has no preconditions.
-    unsafe { libc::isatty(2) == 1 }
-}
-
 /// The production entry point for the gen subcommand (port of runGen):
 /// assembles production deps and delegates to [`run_gen_with_deps`].
 pub fn run_gen(cfg: &GenConfig, cancel: &CancelToken) -> Result<(), AppError> {
@@ -511,6 +507,7 @@ pub fn run_gen(cfg: &GenConfig, cancel: &CancelToken) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
+    use crate::test_support::Tmp;
     use ethernal_core::bls::Signer;
     use ethernal_core::output::OutputError;
     use ethernal_keystore::{Key, KeystoreError};
@@ -611,27 +608,6 @@ mod tests {
         }
     }
 
-    /// A temp dir removed on drop.
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn new() -> Tmp {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!("gen-cmd-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn discard_logger() -> Logger {
-        Logger::new(Level::Error, Format::Text, Box::new(std::io::sink()))
-    }
-
     /// N distinct pubkeys where `pk[i][0] == i+1`.
     fn multi_pks(n: usize) -> Vec<[u8; 48]> {
         (0..n)
@@ -646,7 +622,7 @@ mod tests {
     /// Writes `{"pubkey":...}` files for `pks` into a fresh temp dir and returns
     /// a real `DirectoryIndex` over them (mapping pubkey → path).
     fn index_over(pks: &[[u8; 48]]) -> (Tmp, DirectoryIndex) {
-        let dir = Tmp::new();
+        let dir = Tmp::new("gen-cmd-test");
         for (i, pk) in pks.iter().enumerate() {
             let content = format!("{{\"pubkey\":\"{}\"}}", hex::encode(pk));
             std::fs::write(dir.0.join(format!("{i}.json")), content).unwrap();
@@ -700,7 +676,7 @@ mod tests {
             pubkeys: pks,
             network: Network::Hoodi,
             output_dir: "/tmp".to_string(),
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mainnet_ack: false,
             dry_run: false,
             verbose: false,
@@ -728,7 +704,7 @@ mod tests {
             err: false,
         };
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -784,7 +760,7 @@ mod tests {
         };
         let verify = |_: &str, _: &str| Ok(());
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let mut cfg = base_cfg(pks);
         cfg_mut(&mut cfg);
         let mut deps = GenDeps {
@@ -919,7 +895,7 @@ mod tests {
         };
         let verify = |_: &str, _: &str| Ok(());
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let cfg = base_cfg(vec![wrong]);
         let mut deps = GenDeps {
             init_bls: &init_bls,
@@ -1100,7 +1076,7 @@ mod tests {
         };
         let mut dry = DryRunWriter::new(Vec::<u8>::new());
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1192,7 +1168,7 @@ mod tests {
         let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
         let mut dry = DryRunWriter::new(SharedWriter(Arc::clone(&buf)));
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1250,7 +1226,7 @@ mod tests {
                 entries: Arc::clone(&captured),
             };
             let mut summary = Vec::<u8>::new();
-            let logger = discard_logger();
+            let logger = Logger::discard();
             let init_bls = || Ok(());
             let scanner = move |_: &Path| Ok(idx.clone());
             let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1323,7 +1299,7 @@ mod tests {
             err: false,
         };
         let mut summary = Vec::<u8>::new();
-        let logger = discard_logger();
+        let logger = Logger::discard();
         let init_bls = || Ok(());
         let scanner = move |_: &Path| Ok(idx.clone());
         let new_signer = |secret: &[u8]| -> Result<Box<dyn Signer + Send>, BlsError> {
@@ -1396,7 +1372,7 @@ mod tests {
             }))
         };
         let verify = |_: &str, _: &str| Ok(());
-        let logger = discard_logger();
+        let logger = Logger::discard();
 
         // Repeat under max parallelism so first-received selection would flake.
         for _ in 0..20 {
@@ -1652,7 +1628,7 @@ mod tests {
             }))
         };
         let verify = |_: &str, _: &str| Ok(());
-        let logger = discard_logger();
+        let logger = Logger::discard();
 
         // (a) all-zero placeholder (default_withdrawal_creds / future non-CLI path).
         {

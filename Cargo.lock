@@ -295,6 +295,7 @@ dependencies = [
  "clap",
  "ethernal-core",
  "ethernal-keystore",
+ "ethernal-secretfile",
  "ethernal-signer",
  "ethernal-tx",
  "hex",
@@ -331,6 +332,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "ctr",
+ "ethernal-secretfile",
  "hex",
  "hmac",
  "pbkdf2",
@@ -346,9 +348,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ethernal-secretfile"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "ethernal-signer"
 version = "0.1.0"
 dependencies = [
+ "ethernal-secretfile",
  "ethernal-tx",
  "hex",
  "hidapi",

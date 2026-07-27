@@ -1,100 +1,152 @@
 # ethernal
 
-CLI for Ethereum validator deposits: BIP-39 keystores → Launchpad deposit data →
-signed Beacon Chain deposit transaction → broadcast. Also generates Web3 v3 EOA
-keystores (`account new|recover`) for geth / Foundry / MetaMask.
+**Deposit ETH to run an Ethereum validator — safely, from the command line.**
+
+`ethernal` walks you through the whole deposit, one clear step at a time: create
+your keys, produce the Launchpad deposit data, build and sign the deposit
+transaction (hardware wallet recommended), and broadcast it. It can also create
+ordinary wallet (EOA) keystores that geth, Foundry, and MetaMask can import.
 
 ```text
-mnemonic / keystores  →  deposit_data JSON  →  signed EIP-1559 tx  →  chain
-     key new|recover           gen              build / sign / run      send
-
-mnemonic  →  Web3 v3 EOA keystores (geth / cast / MetaMask)
-  account new|recover
+create keys     →  deposit data  →  unsigned tx  →  signed tx  →  broadcast
+  validator new      deposit gen     deposit build    tx sign       tx send
+                                       └────────── tx run ──────────┘
 ```
 
-**Status:** unreleased (`0.1.0`). Formerly the `eth-deposit` binary in the
-`eth-utils` repository — see [CHANGELOG.md](CHANGELOG.md) for the rename and
-history.
+**New here? This page is the introduction — start below, then follow the
+[User Guide](docs/USER-GUIDE.md) for the full walkthrough, every flag, and the
+security details.**
 
-Full command reference, security guidance, air-gapped recipes, and
-troubleshooting: **[User Guide](docs/USER-GUIDE.md)**.
+## Is this for me?
 
-Key creation:
+Use `ethernal` if you want to run one or more Ethereum validators and would
+rather stay on the command line — with your validator mnemonic written down
+offline and your deposit signed on a Ledger — than paste keys into a website.
 
-- [Create BLS validator keys](docs/USER-GUIDE.md#create-bls-validator-keys-ethernal-key) (`key new` / `key recover`)
-- [Create EOA keystores](docs/USER-GUIDE.md#create-eoa-keystores-ethernal-account) (`account new` / `account recover`)
-- [Key creation overview](docs/USER-GUIDE.md#key-creation-overview) (when to use which)
+You'll want:
+
+- A **testnet** to practice on first (Hoodi). Never rehearse on mainnet.
+- **~32 ETH per validator plus gas**, held by the account that signs the deposit.
+- A **Ledger** for any real deposit (a local key is available, but for testing only).
+- Rust installed (the tool builds from source — see below).
+
+Already have EIP-2335 validator keystores from another tool? Skip key creation
+and hand them straight to `ethernal deposit gen`.
+
+## The pieces
+
+A validator deposit moves through three artifacts:
+
+1. **Keystores** — your encrypted BLS validator keys (`ethernal validator new`).
+2. **Deposit data** — the Launchpad JSON, signed by your validator key (`ethernal deposit gen`).
+3. **A signed transaction** — sends 32 ETH to the deposit contract, signed by
+   *your wallet* (`ethernal deposit build` + `tx sign`, or `tx run`), then broadcast (`tx send`).
+
+Two different keys are involved, and they never mix: the **BLS validator key**
+stays inside its keystore and only signs the deposit *message*; the
+**secp256k1 wallet key** (on your Ledger) signs the *transaction* that pays the
+32 ETH. The [User Guide](docs/USER-GUIDE.md#concepts-and-workflow-model)
+explains this model in full.
+
+## Commands at a glance
+
+| Command | What it does |
+|---------|--------------|
+| `ethernal validator new` / `validator recover` | Create / recover **BLS validator** keystores (EIP-2335) from a mnemonic |
+| `ethernal account new` / `account recover` | Create / recover **wallet (EOA)** keystores (Web3 v3) for geth / Foundry / MetaMask |
+| `ethernal deposit gen` | Keystores → Launchpad `deposit_data` JSON |
+| `ethernal deposit build` | Deposit data → unsigned deposit transaction |
+| `ethernal tx sign` | Sign the transaction (Ledger, or a local key for testing) |
+| `ethernal tx run` | `deposit build` + `tx sign` in one step |
+| `ethernal tx send` | Broadcast the signed transaction |
+
+Full flags, examples, and exit codes are in the
+[User Guide](docs/USER-GUIDE.md).
+
+## Command structure
+
+Commands are grouped into four namespaces:
+
+| Namespace | Groups |
+|-----------|--------|
+| `validator` | EIP-2335 BLS keystores by role (`new` / `recover`) |
+| `account` | Web3 v3 EOA keystores by role (`new` / `recover`) |
+| `deposit` | Launchpad `deposit_data` (`gen`) and unsigned deposit-tx construction (`build`) |
+| `tx` | Sign (`sign`), build+sign convenience (`run`), and broadcast (`send`) |
+
+Non-secret `ETHERNAL_TX_*` flag fallbacks (`ETHERNAL_TX_RPC_URL`, `_FROM`, `_GAS_LIMIT`) stay. Passphrases and the local private key come from **files** (or a TTY prompt), not env-var-name flags.
 
 ## Install
+
+Builds from source; no prebuilt binaries yet.
 
 ```bash
 git clone https://github.com/rootwarp/ethernal.git
 cd ethernal
 make build                    # → target/release/ethernal
-# optional Ledger HID support:
+```
+
+For a real deposit, build with Ledger support:
+
+```bash
 cargo build --release --features ledger
 ```
 
-Requires a stable Rust toolchain and a C compiler (`blst`). Windows is not
-supported. On Linux, enable the `ledger` feature only after installing
-`libudev-dev` (or equivalent) and [Ledger udev rules](https://github.com/LedgerHQ/udev-rules).
+You need a stable Rust toolchain and a C compiler (for the `blst` BLS library).
+Windows is not supported. Linux needs `libudev-dev` (or equivalent) and
+[Ledger udev rules](https://github.com/LedgerHQ/udev-rules) before the `ledger`
+feature will build. Platform-by-platform notes are in the
+[User Guide](docs/USER-GUIDE.md#install).
 
-## Subcommands
+## Your first deposit (on a testnet)
 
-| Command | Purpose |
-|---------|---------|
-| `ethernal key new` | Fresh BIP-39 mnemonic (TTY ceremony) → EIP-2335 v4 scrypt BLS keystores |
-| `ethernal key recover` | Existing mnemonic (TTY or stdin) → EIP-2335 BLS keystores |
-| `ethernal account new` | Fresh BIP-39 mnemonic (TTY ceremony) → Web3 v3 EOA keystores |
-| `ethernal account recover` | Existing mnemonic (TTY or stdin) → Web3 v3 EOA keystores |
-| `ethernal gen` | EIP-2335 keystores → Launchpad `deposit_data` JSON (requires EIP-55 `--withdrawal-address`) |
-| `ethernal build` | Deposit data → unsigned EIP-1559 deposit tx (offline or `--rpc-url`) |
-| `ethernal sign` | Sign with Ledger (recommended) or local key (`ETHERNAL_TX_PRIVATE_KEY`) |
-| `ethernal run` | `build` + `sign` in one shot |
-| `ethernal send` | Broadcast signed tx (explicit network-name confirm) |
+The shortest path is the guide's **[Quick start
+(Hoodi)](docs/USER-GUIDE.md#quick-start-hoodi-testnet)** — create a keystore,
+generate deposit data, then `tx run` and `tx send`. Practice the whole flow on Hoodi
+before you ever point it at mainnet.
 
-Exit codes: `0` ok · `1` internal · `2` bad input/config · `3` signer/crypto ·
-`4` user abort · `5` broadcast/RPC.
-
-## Quickstart (Hoodi)
+A one-look preview of the core steps:
 
 ```bash
-mkdir -p ./keystores ./out
-export KEYSTORE_PASS=...   # ≥ 8 bytes; prefer a dedicated shell session
-
-# 0. Create EIP-2335 validator keystores (TTY-only; write down the mnemonic)
-ethernal key new --output-dir ./keystores --count 1 --passphrase-env KEYSTORE_PASS
-# note the BLS pubkey from the summary on stderr
-
-# 1. Deposit data — withdrawal address must be EIP-55 checksummed
-ethernal gen --network hoodi --keystore-dir ./keystores \
-  --pubkeys 0x<your-pubkey> \
-  --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
-  --output-dir ./out --passphrase-env KEYSTORE_PASS
-unset KEYSTORE_PASS
-
-# 2. Build + sign (Ledger recommended for real funds)
-ethernal run --network hoodi --input-file ./out/deposit_data-*.json \
-  --signer ledger --output signed.json
-# local signer (test only):
-#   export ETHERNAL_TX_PRIVATE_KEY=0x...
-#   ethernal run --network hoodi --input-file ./out/deposit_data-*.json \
-#     --signer local --output signed.json
-#   unset ETHERNAL_TX_PRIVATE_KEY
-
-# 3. Broadcast
-ethernal send --input signed.json --rpc-url https://hoodi.example/rpc
+umask 077
+printf '%s' 'my-keystore-passphrase' > ./keystore.pw   # or: chmod 600 after writing
+ethernal validator new --output-dir ./keystores --count 1 --passphrase-file ./keystore.pw
+ethernal deposit gen  --network hoodi --keystore-dir ./keystores --pubkeys 0x<pubkey> \
+  --withdrawal-address 0x<your-eip55-address> --output-dir ./out --passphrase-file ./keystore.pw
+ethernal tx run  --network hoodi --signer ledger --input-file ./out/deposit_data-*.json --output signed.json
+ethernal tx send --input signed.json --rpc-url https://your-hoodi-rpc
 ```
 
-`key recover` / `account recover` rebuild keystores from an existing mnemonic
-(TTY prompt or piped stdin). Prefer `--mnemonic-passphrase-env` or a bare
-`--mnemonic-passphrase` prompt over raw `--mnemonic-passphrase VALUE` (visible
-in `ps` / shell history).
+`--signer ledger` needs the `--features ledger` build; to rehearse on testnet
+from the quick `make build`, use `--signer local` with a throwaway key (see the
+guide's [local-signer note](docs/USER-GUIDE.md#option-a--local-private-key-testing-only)).
 
-`account` writes geth-style `UTC--…` **v3** files (BIP-44 `m/44'/60'/0'/0/i`);
-`key` writes EIP-2335 **v4** BLS keystores. Do not pass v3 files to `gen`. v3
-encryption uses the keystore passphrase as **raw UTF-8** (no NFKD), matching
-geth/MetaMask — see [User Guide](docs/USER-GUIDE.md#create-eoa-keystores-ethernal-account).
+## Please read this before mainnet
+
+`ethernal` has guardrails, but the irreversible parts are on you:
+
+- **Mainnet deposits cannot be undone.** `deposit gen --network mainnet` refuses to run
+  without `--i-understand-this-is-mainnet`. Rehearse on Hoodi first.
+- **Your mnemonic is the master key.** `validator new` / `account new` show it once, on
+  the terminal only, and clear the screen afterward. Write it down offline —
+  never screenshot it, paste it into chat, or store it in the cloud.
+- **Verify on the Ledger screen before you confirm.** Check the chain ID, the
+  deposit-contract address, and that the value is exactly 32 ETH. If anything
+  looks off, reject on the device.
+- **The local signer is for testing only** — use a Ledger for real funds.
+
+The [Security](docs/USER-GUIDE.md#security) section covers the threat model, key
+handling, and air-gapped signing.
+
+## Documentation
+
+- **[User Guide](docs/USER-GUIDE.md)** — the comprehensive reference: full
+  walkthrough, every command and flag, networks, exit codes, security, recipes,
+  and troubleshooting.
+- Key creation: [BLS validator keys](docs/USER-GUIDE.md#create-bls-validator-keys-ethernal-validator)
+  · [EOA keystores](docs/USER-GUIDE.md#create-eoa-keystores-ethernal-account)
+  · [which to use](docs/USER-GUIDE.md#key-creation-overview)
+- [CHANGELOG.md](CHANGELOG.md) — history, and divergences from the retired Go port.
 
 ## Build & test
 
@@ -106,8 +158,8 @@ make e2e-mock      # build+sign+send via mock broadcaster (no real RPC)
 ```
 
 Without `--features ledger`, `--signer ledger` exits `3` with a message pointing
-at the flag. HID/APDU is compile-verified only — validate on real hardware
-before any real-fund use.
+at the flag. The HID/APDU path is compile-verified only — validate on real
+hardware before any real-fund use.
 
 ## Repository layout
 
@@ -122,22 +174,9 @@ before any real-fund use.
 | `testdata/` | Golden fixtures (synthetic keys only) |
 | `scripts/devnet/` | Docker EL+CL devnet for end-to-end testing |
 
-## Notable details
+## Status & license
 
-| Topic | Behavior |
-|-------|----------|
-| Withdrawal credentials | `gen` **requires** `--withdrawal-address` (strict EIP-55) → real `0x01` creds; zero address rejected |
-| `--from` (build only) | Lenient any-case 20-byte hex; `run` has no `--from` (sender from signing key) |
-| `key` vs `account` | BLS EIP-2335 v4 (`key`) vs secp256k1 Web3 v3 (`account`); additive — `key`/`gen` surface unchanged |
-| v3 keystore passphrase | Raw UTF-8 into scrypt (**no NFKD**); geth/MetaMask interop |
-| Local private key | Env only (`ETHERNAL_TX_PRIVATE_KEY` by default) — never a CLI flag |
-| RPC | `http`/`https` only (`ws://` rejected); API keys redacted from errors by construction |
-| Wei quantities | `u128` (values ≥ 2^128 wei rejected) |
-
-Documented divergences from the retired Go port (log timestamps UTC, receipt
-timeout suffixes, broadcast hash from the node response, etc.) are listed in
-[CHANGELOG.md](CHANGELOG.md) and the migration notes under `docs/plan/`.
-
-## License
+Unreleased (`0.1.0`). Formerly the `eth-deposit` binary in the `eth-utils`
+repository — see [CHANGELOG.md](CHANGELOG.md) for the rename and history.
 
 MIT — see [LICENSE](LICENSE).

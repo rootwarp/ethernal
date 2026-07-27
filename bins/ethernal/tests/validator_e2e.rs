@@ -1,0 +1,1036 @@
+//! K4-1 — in-binary E2E: fixed mnemonic → `validator recover` → keystores →
+//! `gen --withdrawal-address` (BLS self-verify on) → byte-stable deposit data.
+//!
+//! Determinism is via the fixed BIP-39 mnemonic + TREZOR passphrase through
+//! `validator recover` — **no** hidden `--entropy-*` flag (S-4 / PRD Q4).
+//!
+//! Fixtures (frozen once post-K5, real 0x01 creds):
+//!   tests/testdata/keygen/pubkeys.json
+//!   tests/testdata/keygen/deposit_data-golden.json
+
+mod common;
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+use ethernal_core::bip39;
+use ethernal_core::hd::{self, KeyPath};
+use ethernal_keystore::{KeyLoader, Loader, PassphraseSource};
+
+use common::{crate_testdata, ethernal, secret_file, TempDir};
+
+// --- chain anchor: BIP-39 abandon×11 about + "TREZOR" = EIP-2333 case-0 seed ---
+
+const ABANDON_12: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const MNEMONIC_PASS: &str = "TREZOR";
+const TREZOR_SEED_HEX: &str =
+    "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";
+const KEYSTORE_PW: &str = "password1";
+/// Known EIP-55 checksummed address (same as gen.rs / signer local test key).
+const WITHDRAWAL_ADDR: &str = "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1";
+const WITHDRAWAL_CREDS_HEX: &str =
+    "0100000000000000000000001a642f0e3c3af545e7acbd38b07251b3990914f1";
+/// Two indices so multi-key ordering is frozen in the golden.
+const COUNT: u32 = 2;
+
+fn keygen_testdata() -> PathBuf {
+    crate_testdata().join("keygen")
+}
+
+fn pubkeys_fixture() -> PathBuf {
+    keygen_testdata().join("pubkeys.json")
+}
+
+fn deposit_data_golden() -> PathBuf {
+    keygen_testdata().join("deposit_data-golden.json")
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PubkeysFixture {
+    seed_hex: String,
+    withdrawal_address: String,
+    indices: Vec<IndexFixture>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct IndexFixture {
+    index: u32,
+    signing_path: String,
+    withdrawal_path: String,
+    signing_pubkey: String,
+    withdrawal_pubkey: String,
+}
+
+struct FixedPw(Vec<u8>);
+impl PassphraseSource for FixedPw {
+    fn read(&self) -> Result<Vec<u8>, ethernal_keystore::KeystoreError> {
+        Ok(self.0.clone())
+    }
+}
+
+fn load_pubkeys_fixture() -> PubkeysFixture {
+    let raw = std::fs::read_to_string(pubkeys_fixture()).expect("read pubkeys.json");
+    serde_json::from_str(&raw).expect("parse pubkeys.json")
+}
+
+/// Run `validator recover` with the fixed mnemonic over stdin; return stderr.
+fn run_validator_recover(out_dir: &Path, count: u32) -> String {
+    run_validator_recover_ex(out_dir, count, &[])
+}
+
+/// Like [`run_validator_recover`], with optional extra CLI args (e.g. `--no-verify`).
+///
+/// Stderr is always piped (NonTty). V5-2 asserts no TTY transient CSI/`\r` on
+/// that path so every recover e2e caller gets the guarantee for free.
+///
+/// Secret files live under a temp dir kept alive for the child process duration.
+fn run_validator_recover_ex(out_dir: &Path, count: u32, extra_args: &[&str]) -> String {
+    let secrets = TempDir::new("k4-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(out_dir)
+        .args([
+            "--count",
+            &count.to_string(),
+            "--start-index",
+            "0",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
+        ])
+        .args(extra_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn key recover");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+
+    let out = child.wait_with_output().expect("wait key recover");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Drop secrets only after the child has finished reading them.
+    drop(secrets);
+    assert!(
+        out.status.success(),
+        "validator recover failed (exit {:?}): stderr={stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("ethernal validator recover:"),
+        "banner missing: {stderr}"
+    );
+    // S-4: no entropy-injection flag on the recover surface.
+    assert!(
+        !stderr.to_lowercase().contains("entropy"),
+        "unexpected entropy mention (determinism must be mnemonic-only): {stderr}"
+    );
+    // V5-2 / PR-8: piped (NonTty) path must never emit TTY transient rendering.
+    assert!(
+        !stderr.contains('\r'),
+        "piped recover stderr must not contain \\r: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("\x1b["),
+        "piped recover stderr must not contain CSI \\x1b[: {stderr:?}"
+    );
+    stderr
+}
+
+fn keystore_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .expect("read keystore dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("keystore-") && n.ends_with(".json"))
+                .unwrap_or(false)
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+/// Seed from the fixed mnemonic + TREZOR matches the EIP-2333 case-0 anchor
+/// and the committed fixture; HD-derived signing + withdrawal pubkeys match
+/// the fixture index-for-index.
+#[test]
+fn recover_seed_and_pubkeys_match_fixture() {
+    let fx = load_pubkeys_fixture();
+    assert_eq!(fx.seed_hex, TREZOR_SEED_HEX);
+    assert_eq!(fx.withdrawal_address, WITHDRAWAL_ADDR);
+
+    let seed = bip39::to_seed(ABANDON_12, MNEMONIC_PASS.as_bytes()).unwrap();
+    assert_eq!(
+        hex::encode(seed.as_slice()),
+        TREZOR_SEED_HEX,
+        "BIP-39 seed must be EIP-2333 case-0 / Trezor vector"
+    );
+    assert_eq!(hex::encode(seed.as_slice()), fx.seed_hex);
+
+    assert_eq!(fx.indices.len(), COUNT as usize);
+    for entry in &fx.indices {
+        let signing = hd::derive_path(seed.as_slice(), &KeyPath::signing(entry.index))
+            .expect("derive signing");
+        let withdrawal = hd::derive_path(seed.as_slice(), &KeyPath::withdrawal(entry.index))
+            .expect("derive withdrawal");
+        assert_eq!(
+            hex::encode(signing.public_key()),
+            entry.signing_pubkey,
+            "signing pubkey index {}",
+            entry.index
+        );
+        assert_eq!(
+            hex::encode(withdrawal.public_key()),
+            entry.withdrawal_pubkey,
+            "withdrawal pubkey index {}",
+            entry.index
+        );
+        assert_eq!(
+            KeyPath::signing(entry.index).to_string(),
+            entry.signing_path
+        );
+        assert_eq!(
+            KeyPath::withdrawal(entry.index).to_string(),
+            entry.withdrawal_path
+        );
+    }
+}
+
+/// Binary `validator recover` writes keystores whose signing pubkeys match the
+/// fixture; Loader round-trip recovers the HD-derived secret.
+#[test]
+fn validator_recover_keystores_match_fixture_and_loader_round_trip() {
+    let fx = load_pubkeys_fixture();
+    let dir = TempDir::new("k4-recover");
+    run_validator_recover(dir.path(), COUNT);
+
+    let files = keystore_files(dir.path());
+    assert_eq!(
+        files.len(),
+        COUNT as usize,
+        "expected {COUNT} keystores, got {files:?}"
+    );
+
+    let seed = bip39::to_seed(ABANDON_12, MNEMONIC_PASS.as_bytes()).unwrap();
+    let loader = Loader::new();
+    let pw = FixedPw(KEYSTORE_PW.as_bytes().to_vec());
+
+    for f in &files {
+        let raw = std::fs::read(f).expect("read keystore");
+        let v: serde_json::Value = serde_json::from_slice(&raw).expect("keystore JSON");
+        assert_eq!(v["version"], 4);
+        assert_eq!(v["crypto"]["kdf"]["function"], "scrypt");
+
+        let name = f.file_name().unwrap().to_string_lossy();
+        // keystore-m_12381_3600_<i>_0_0-<ts>.json
+        let idx: u32 = name
+            .split('_')
+            .nth(3)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("index in filename: {name}"));
+        let want = fx
+            .indices
+            .iter()
+            .find(|e| e.index == idx)
+            .unwrap_or_else(|| panic!("fixture missing index {idx}"));
+
+        let pubkey_field = v["pubkey"].as_str().expect("pubkey field");
+        assert_eq!(
+            pubkey_field, want.signing_pubkey,
+            "keystore JSON pubkey index {idx}"
+        );
+        assert_eq!(v["path"].as_str().unwrap(), want.signing_path);
+
+        let key = loader.load(f, &pw).expect("Loader::load");
+        assert_eq!(key.pubkey_hex, want.signing_pubkey);
+
+        let derived = hd::derive_path(seed.as_slice(), &KeyPath::signing(idx)).unwrap();
+        assert_eq!(
+            key.secret.as_slice(),
+            derived.to_bytes().as_slice(),
+            "Loader secret must match HD signing key index {idx}"
+        );
+        assert_eq!(key.pubkey_hex, hex::encode(derived.public_key()));
+    }
+}
+
+/// Full front-of-pipeline: `validator recover` → `gen --withdrawal-address` (BLS
+/// self-verify on by default) → deposit data with real 0x01 creds, byte-stable
+/// against the committed golden.
+#[test]
+fn validator_recover_then_gen_deposit_data_byte_stable() {
+    let fx = load_pubkeys_fixture();
+    let dir = TempDir::new("k4-e2e");
+    run_validator_recover(dir.path(), COUNT);
+
+    let pubkeys_csv: String = fx
+        .indices
+        .iter()
+        .map(|e| e.signing_pubkey.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // deposit gen passphrase (F5-1): file flag via common::secret_file.
+    let pw_dir = TempDir::new("k4-e2e-gen-pw");
+    let pw_path = secret_file(&pw_dir, "passphrase.txt", KEYSTORE_PW.as_bytes());
+    let out = ethernal()
+        .args(["deposit", "gen", "--keystore-dir"])
+        .arg(dir.path())
+        .args([
+            "--pubkeys",
+            &pubkeys_csv,
+            "--network",
+            "hoodi",
+            "--dry-run",
+            "--passphrase-file",
+        ])
+        .arg(&pw_path)
+        .args(["--withdrawal-address", WITHDRAWAL_ADDR])
+        .output()
+        .expect("run gen");
+    assert!(
+        out.status.success(),
+        "gen failed (exit {:?}): stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ethernal gen:"),
+        "gen banner missing: {stderr}"
+    );
+    assert!(
+        stderr.contains("wrote <stdout>"),
+        "dry-run summary: {stderr}"
+    );
+
+    // Real 0x01 credentials in every entry.
+    let entries: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout is deposit JSON");
+    let arr = entries.as_array().expect("array");
+    assert_eq!(arr.len(), COUNT as usize);
+    for (i, entry) in arr.iter().enumerate() {
+        assert_eq!(
+            entry["withdrawal_credentials"].as_str().unwrap(),
+            WITHDRAWAL_CREDS_HEX,
+            "entry[{i}] must carry 0x01 execution-address credentials"
+        );
+        assert_eq!(
+            entry["pubkey"].as_str().unwrap(),
+            fx.indices[i].signing_pubkey,
+            "entry[{i}] pubkey order"
+        );
+        assert_eq!(entry["network_name"], "hoodi");
+        assert_eq!(entry["amount"], 32_000_000_000u64);
+    }
+
+    // Byte-stable against the committed golden (compact JSON, no pretty-print).
+    let golden = std::fs::read(deposit_data_golden()).expect("read deposit_data-golden.json");
+    assert_eq!(
+        out.stdout,
+        golden,
+        "deposit data must be byte-identical to tests/testdata/keygen/deposit_data-golden.json\n\
+         got: {}\nwant: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&golden)
+    );
+}
+
+/// G4 / GHSA-c6rv-g6pj-r6qx — batch salt/IV/uuid must be pairwise-distinct under
+/// real OS entropy. `recover --count 3` exercises the encrypt-time CSPRNG loop
+/// without a TTY; fields are compared as raw JSON (no decrypt).
+///
+/// Bite-proof (local, throwaway, never commit): temporarily wire FixedEntropy /
+/// fixed bytes in place of OsEntropy in the CLI encrypt path, rebuild, run only
+/// this test and `account_recover_batch_salt_iv_id_pairwise_distinct` → salt/iv
+/// HashSets collapse to size 1 → both go red; revert before any commit.
+#[test]
+fn validator_recover_batch_salt_iv_uuid_pairwise_distinct() {
+    let dir = TempDir::new("g4-key-batch");
+    run_validator_recover(dir.path(), 3);
+
+    let files = keystore_files(dir.path());
+    assert_eq!(files.len(), 3, "expected 3 keystores, got {files:?}");
+
+    let mut salts = Vec::with_capacity(3);
+    let mut ivs = Vec::with_capacity(3);
+    let mut uuids = Vec::with_capacity(3);
+    let mut pubkeys = Vec::with_capacity(3);
+    let mut paths = Vec::with_capacity(3);
+
+    for f in &files {
+        let raw = std::fs::read(f).expect("read keystore");
+        let v: serde_json::Value = serde_json::from_slice(&raw).expect("keystore JSON");
+        salts.push(
+            v["crypto"]["kdf"]["params"]["salt"]
+                .as_str()
+                .expect("salt")
+                .to_owned(),
+        );
+        ivs.push(
+            v["crypto"]["cipher"]["params"]["iv"]
+                .as_str()
+                .expect("iv")
+                .to_owned(),
+        );
+        uuids.push(v["uuid"].as_str().expect("uuid").to_owned());
+        pubkeys.push(v["pubkey"].as_str().expect("pubkey").to_owned());
+        paths.push(v["path"].as_str().expect("path").to_owned());
+    }
+
+    assert_eq!(
+        salts.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "salts must be pairwise-distinct across the batch: {salts:?}"
+    );
+    assert_eq!(
+        ivs.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "ivs must be pairwise-distinct across the batch: {ivs:?}"
+    );
+    assert_eq!(
+        uuids.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "uuids must be pairwise-distinct across the batch: {uuids:?}"
+    );
+    assert_eq!(
+        pubkeys
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        3,
+        "pubkeys must be pairwise-distinct (3 real validators, not copies): {pubkeys:?}"
+    );
+    assert_eq!(
+        paths.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "paths must be pairwise-distinct: {paths:?}"
+    );
+}
+
+/// CLI surface has no hidden entropy-injection flag: determinism is the fixed
+/// mnemonic through recover (S-4).
+#[test]
+fn validator_recover_help_has_no_entropy_flag() {
+    let out = ethernal()
+        .args(["validator", "recover", "--help"])
+        .output()
+        .expect("help");
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout);
+    let help_l = help.to_lowercase();
+    assert!(
+        !help_l.contains("--entropy") && !help_l.contains("entropy-"),
+        "validator recover must not expose an entropy flag (S-4): {help}"
+    );
+    assert!(
+        help.contains("--mnemonic-passphrase-file"),
+        "expected mnemonic-passphrase-file in help: {help}"
+    );
+}
+
+/// V5-2 / PR-8 / PR-19 — default `validator recover` (production STANDARD scrypt
+/// ×2 per key; keep `--count 1`) on the piped path: durable 1/1 progress marker,
+/// `verified=full`, and no TTY CSI (asserted in the helper).
+#[test]
+fn validator_recover_default_verified_full_and_progress() {
+    let dir = TempDir::new("v5-2-recover-full");
+    let stderr = run_validator_recover(dir.path(), 1);
+
+    // TTY durable shape is `keystore 1/1: …`; NonTty (this e2e) logs the
+    // structured event with done/total instead. Accept either so the shape is
+    // locked without requiring a PTY.
+    assert!(
+        stderr.contains("keystore 1/1:")
+            || (stderr.contains("done=1") && stderr.contains("total=1")),
+        "expected keystore 1/1 progress marker (TTY line or NonTty done/total): {stderr}"
+    );
+    assert!(
+        stderr.contains("verified=full"),
+        "default path must log verified=full: {stderr}"
+    );
+    assert!(
+        !stderr.contains("verified=derived-only"),
+        "default path must not log verified=derived-only: {stderr}"
+    );
+    assert!(
+        !stderr.contains("WARNING: --no-verify"),
+        "default path must not emit --no-verify WARNING: {stderr}"
+    );
+
+    let files = keystore_files(dir.path());
+    assert_eq!(files.len(), 1, "expected 1 keystore, got {files:?}");
+}
+
+/// V5-2 — `--no-verify` skips C4 only: `verified=derived-only` and exactly one
+/// WARNING. Uses `--count 1` (one STANDARD scrypt, no second C4 decrypt).
+#[test]
+fn validator_recover_no_verify_derived_only_one_warning() {
+    let dir = TempDir::new("v5-2-recover-no-verify");
+    let stderr = run_validator_recover_ex(dir.path(), 1, &["--no-verify"]);
+
+    assert!(
+        stderr.contains("verified=derived-only"),
+        "--no-verify must log verified=derived-only: {stderr}"
+    );
+    assert!(
+        !stderr.contains("verified=full"),
+        "--no-verify must not log verified=full: {stderr}"
+    );
+
+    // Kind-specific: count the --no-verify notice, not every WARNING (FR-21 / R-3).
+    let warning_lines: Vec<_> = stderr
+        .lines()
+        .filter(|l| l.contains("will not be decrypted back"))
+        .collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "expected exactly one --no-verify WARNING, got: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains("--no-verify"),
+        "WARNING must name --no-verify: {stderr}"
+    );
+
+    let files = keystore_files(dir.path());
+    assert_eq!(files.len(), 1, "expected 1 keystore, got {files:?}");
+}
+
+/// T-12·recover / E4-2 — symlinked `--output-dir` on the recover/stdin path
+/// emits the documented WARNING (`1736843`) and still writes keystores.
+#[cfg(unix)]
+#[test]
+fn validator_recover_symlinked_output_dir_warns_and_writes() {
+    use std::os::unix::fs::symlink;
+
+    let base = TempDir::new("e4-2-key-symlink");
+    let real = base.join("real-out");
+    std::fs::create_dir(&real).expect("create real-out");
+    let link = base.join("link-out");
+    symlink(&real, &link).expect("symlink link-out -> real-out");
+    let resolved = std::fs::canonicalize(&real).expect("canonicalize real-out");
+
+    let stderr = run_validator_recover(&link, 1);
+
+    // Kind-specific: count the symlink warning, not every WARNING (FR-21 / R-3).
+    let warning_lines: Vec<_> = stderr
+        .lines()
+        .filter(|l| l.contains("is a symlink"))
+        .collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "expected exactly one symlink WARNING, got: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains("is a symlink")
+            && warning_lines[0].contains("keystores will be written to"),
+        "documented symlink warning text: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains(link.to_str().unwrap()),
+        "must name given path: {stderr}"
+    );
+    assert!(
+        warning_lines[0].contains(resolved.to_str().unwrap()),
+        "must name resolved path: {stderr}"
+    );
+
+    // Warn + still write (into the real dir via the symlink).
+    let files = keystore_files(&real);
+    assert_eq!(
+        files.len(),
+        1,
+        "expected 1 keystore under real path, got {files:?}"
+    );
+    assert_eq!(
+        keystore_files(&link).len(),
+        1,
+        "keystores must also be visible via symlink path"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F4-2 acceptance: file-flag surface for validator recover
+// ---------------------------------------------------------------------------
+
+/// FR-17 on recover: a 0644 passphrase file produces exactly one
+/// `file permissions` WARNING and the run still completes (WARNING is durable
+/// on recover — not erased by ceremony).
+#[cfg(unix)]
+#[test]
+fn validator_recover_0644_passphrase_file_warns_and_writes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new("f4-2-fr17");
+    let secrets = TempDir::new("f4-2-fr17-secrets");
+    // Write via secret_file then deliberately open to 0644 so FR-17 fires.
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+    std::fs::set_permissions(&ks_path, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "recover must complete with 0644 passphrase file: {stderr}"
+    );
+    let warning_lines: Vec<_> = stderr
+        .lines()
+        .filter(|l| l.contains("file permissions"))
+        .collect();
+    assert_eq!(
+        warning_lines.len(),
+        1,
+        "expected exactly one file-permissions WARNING, got: {stderr}"
+    );
+    assert_eq!(keystore_files(dir.path()).len(), 1);
+}
+
+/// FR-18: empty `--passphrase-file` (0 bytes) is exit 2 end-to-end.
+#[test]
+fn validator_recover_empty_passphrase_file_exit2() {
+    let dir = TempDir::new("f4-2-empty-ks");
+    let secrets = TempDir::new("f4-2-empty-ks-secrets");
+    let ks_path = secret_file(&secrets, "empty.pw", b"");
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "empty passphrase-file must exit 2; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("empty") || stderr.contains("passphrase file"),
+        "expected empty-file message: {stderr}"
+    );
+}
+
+/// FR-18: empty `--mnemonic-passphrase-file` (0 bytes and lone `\n`) is a valid
+/// empty passphrase and yields the same pubkey set as omitting the flag.
+#[test]
+fn validator_recover_empty_mnemonic_passphrase_file_matches_omitted() {
+    // Pubkey set with no mnemonic passphrase (omit flag).
+    let dir_omit = TempDir::new("f4-2-mp-omit");
+    let secrets_omit = TempDir::new("f4-2-mp-omit-s");
+    let ks_omit = secret_file(&secrets_omit, "ks.pw", KEYSTORE_PW.as_bytes());
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir_omit.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_omit.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn omit");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait omit");
+    assert!(
+        out.status.success(),
+        "omit mp failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let omit_pubkeys: Vec<String> = keystore_files(dir_omit.path())
+        .iter()
+        .map(|f| {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(f).unwrap()).unwrap();
+            v["pubkey"].as_str().unwrap().to_owned()
+        })
+        .collect();
+
+    for (label, bytes) in [("0 bytes", &b""[..]), ("lone newline", &b"\n"[..])] {
+        let dir = TempDir::new(&format!("f4-2-mp-empty-{label}"));
+        let secrets = TempDir::new(&format!("f4-2-mp-empty-s-{label}"));
+        let ks = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+        let mp = secret_file(&secrets, "mp.pw", bytes);
+        let mut child = ethernal()
+            .args(["validator", "recover", "--output-dir"])
+            .arg(dir.path())
+            .args([
+                "--count",
+                "1",
+                "--passphrase-file",
+                ks.to_str().unwrap(),
+                "--mnemonic-passphrase-file",
+                mp.to_str().unwrap(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        {
+            let mut stdin = child.stdin.take().expect("stdin");
+            writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+        }
+        let out = child.wait_with_output().expect("wait");
+        assert!(
+            out.status.success(),
+            "empty mp ({label}) failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let pubkeys: Vec<String> = keystore_files(dir.path())
+            .iter()
+            .map(|f| {
+                let v: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(f).unwrap()).unwrap();
+                v["pubkey"].as_str().unwrap().to_owned()
+            })
+            .collect();
+        assert_eq!(
+            pubkeys, omit_pubkeys,
+            "empty mp ({label}) must match omitted flag"
+        );
+    }
+}
+
+/// FR-19b end-to-end: passphrase file holding `1234567\n` → PassphraseTooShort exit 2.
+#[test]
+fn validator_recover_passphrase_too_short_exit2() {
+    let dir = TempDir::new("f4-2-minlen");
+    let secrets = TempDir::new("f4-2-minlen-s");
+    // 8 raw bytes → FR-8 strips \n → 7 → PassphraseTooShort.
+    let ks_path = secret_file(&secrets, "short.pw", b"1234567\n");
+    let mp_path = secret_file(&secrets, "mp.pw", MNEMONIC_PASS.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--count",
+            "1",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+            "--mnemonic-passphrase-file",
+            mp_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "short passphrase must exit 2; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("at least") || stderr.contains("bytes") || stderr.contains("passphrase"),
+        "expected PassphraseTooShort message: {stderr}"
+    );
+    // Must not echo the short passphrase content.
+    assert!(
+        !stderr.contains("1234567"),
+        "passphrase content leaked: {stderr}"
+    );
+}
+
+/// FR-6: `--passphrase-file -` and `--mnemonic-passphrase-file -` each exit 2.
+#[test]
+fn validator_recover_dash_path_rejected() {
+    let dir = TempDir::new("f4-2-dash");
+    for flag in ["--passphrase-file", "--mnemonic-passphrase-file"] {
+        let out = ethernal()
+            .args(["validator", "recover", "--output-dir"])
+            .arg(dir.path())
+            .args(["--count", "1", flag, "-"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{flag} -: expected exit 2; stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("cannot be '-'") || stderr.contains("path cannot"),
+            "{flag} -: unexpected message: {stderr}"
+        );
+    }
+}
+
+/// FR-3: `--mnemonic-passphrase VALUE` and `--mnemonic-passphrase-file PATH` conflict.
+#[test]
+fn validator_recover_mnemonic_passphrase_forms_conflict() {
+    let dir = TempDir::new("f4-2-conflict");
+    let secrets = TempDir::new("f4-2-conflict-s");
+    let mp = secret_file(&secrets, "mp.pw", b"x");
+    let out = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args([
+            "--mnemonic-passphrase",
+            "VALUE",
+            "--mnemonic-passphrase-file",
+            mp.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "raw and file must conflict; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F4-3 / FR-12 — S-D byte-rule matrix (mnemonic passphrase → BIP-39 seed)
+// ---------------------------------------------------------------------------
+
+/// S-D matrix value: plan's `pw` — no min-length on mnemonic passphrase.
+const SD_MNEMONIC_PW: &str = "pw";
+
+/// Collect signing pubkeys from keystore-*.json under `dir` (sorted by path).
+fn signing_pubkeys(dir: &Path) -> Vec<String> {
+    keystore_files(dir)
+        .iter()
+        .map(|f| {
+            let v: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(f).expect("read ks")).expect("json");
+            v["pubkey"].as_str().expect("pubkey").to_owned()
+        })
+        .collect()
+}
+
+/// Run `validator recover` with fixed mnemonic, custom mnemonic-passphrase
+/// source, and a valid keystore passphrase file. Returns (stderr, success, code).
+fn run_validator_recover_mp(
+    out_dir: &Path,
+    count: u32,
+    mp_args: &[&str],
+) -> (String, bool, Option<i32>) {
+    let secrets = TempDir::new("f4-3-sd-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(out_dir)
+        .args([
+            "--count",
+            &count.to_string(),
+            "--start-index",
+            "0",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+        ])
+        .args(mp_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn validator recover");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+
+    let out = child.wait_with_output().expect("wait");
+    drop(secrets);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (stderr, out.status.success(), out.status.code())
+}
+
+/// FR-12 S-D: `pw` vs `pw\n` mnemonic-passphrase files → identical pubkey set,
+/// and both equal `--mnemonic-passphrase pw`. Production scrypt; `--count 1`.
+#[test]
+fn validator_recover_sd_trailing_nl_pubkeys_match_cli() {
+    let secrets = TempDir::new("f4-3-sd-pw-files");
+    let mp_plain = secret_file(&secrets, "mp.pw", SD_MNEMONIC_PW.as_bytes());
+    let mp_nl = secret_file(&secrets, "mp_nl.pw", b"pw\n");
+
+    let dir_plain = TempDir::new("f4-3-sd-plain");
+    let (stderr_plain, ok_plain, _) = run_validator_recover_mp(
+        dir_plain.path(),
+        1,
+        &["--mnemonic-passphrase-file", mp_plain.to_str().unwrap()],
+    );
+    assert!(
+        ok_plain,
+        "validator recover (mp file pw) failed: {stderr_plain}"
+    );
+
+    let dir_nl = TempDir::new("f4-3-sd-nl");
+    let (stderr_nl, ok_nl, _) = run_validator_recover_mp(
+        dir_nl.path(),
+        1,
+        &["--mnemonic-passphrase-file", mp_nl.to_str().unwrap()],
+    );
+    assert!(
+        ok_nl,
+        "validator recover (mp file pw\\n) failed: {stderr_nl}"
+    );
+
+    let dir_cli = TempDir::new("f4-3-sd-cli");
+    let (stderr_cli, ok_cli, _) = run_validator_recover_mp(
+        dir_cli.path(),
+        1,
+        &["--mnemonic-passphrase", SD_MNEMONIC_PW],
+    );
+    assert!(
+        ok_cli,
+        "validator recover (--mnemonic-passphrase pw) failed: {stderr_cli}"
+    );
+
+    let pubkeys_plain = signing_pubkeys(dir_plain.path());
+    let pubkeys_nl = signing_pubkeys(dir_nl.path());
+    let pubkeys_cli = signing_pubkeys(dir_cli.path());
+    assert_eq!(pubkeys_plain.len(), 1);
+    assert_eq!(
+        pubkeys_plain, pubkeys_nl,
+        "pw and pw\\n mnemonic-passphrase files must yield identical pubkey sets"
+    );
+    assert_eq!(
+        pubkeys_plain, pubkeys_cli,
+        "file path must match --mnemonic-passphrase pw"
+    );
+}
+
+/// FR-12 / FR-9 S-D CR rows: `pw\r`, `pw\r\n`, `pw\r\r\n` each exit 2.
+///
+/// This row — not S-B — is the automated evidence that FR-9's widened residual
+/// clause (reject every residual `\r`) is live. S-B passes under
+/// `normalize_passphrase` whether or not FR-8/FR-9 exist.
+#[test]
+fn validator_recover_sd_cr_shapes_exit2() {
+    // Distinctive sentinel so a content leak is unambiguous (M-3).
+    const SENTINEL: &str = "F43_SD_pw";
+    for (label, bytes) in [
+        ("cr", &b"F43_SD_pw\r"[..]),
+        ("crlf", &b"F43_SD_pw\r\n"[..]),
+        ("crcrlf", &b"F43_SD_pw\r\r\n"[..]),
+    ] {
+        // Comment required by F4-3 acceptance: this row, not S-B, is the evidence
+        // FR-9's widened clause is live — do not delete as "duplicate coverage".
+        let dir = TempDir::new(&format!("f4-3-sd-{label}"));
+        let secrets = TempDir::new(&format!("f4-3-sd-s-{label}"));
+        let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+        let mp_path = secret_file(&secrets, "mp.pw", bytes);
+        let path_str = mp_path.to_str().unwrap().to_owned();
+
+        let mut child = ethernal()
+            .args(["validator", "recover", "--output-dir"])
+            .arg(dir.path())
+            .args([
+                "--count",
+                "1",
+                "--passphrase-file",
+                ks_path.to_str().unwrap(),
+                "--mnemonic-passphrase-file",
+                mp_path.to_str().unwrap(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        {
+            let mut stdin = child.stdin.take().expect("stdin");
+            writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+        }
+        let out = child.wait_with_output().expect("wait");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "S-D {label}: expected exit 2; stderr={stderr}"
+        );
+        assert!(
+            stderr.contains("carriage return"),
+            "S-D {label}: message must name shape 'carriage return', got: {stderr}"
+        );
+        assert!(
+            stderr.contains(&path_str),
+            "S-D {label}: message must name path {path_str}, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains(SENTINEL),
+            "S-D {label}: passphrase content leaked into error: {stderr}"
+        );
+        assert!(
+            keystore_files(dir.path()).is_empty(),
+            "S-D {label}: must not write a keystore on CR reject"
+        );
+    }
+}

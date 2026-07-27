@@ -17,7 +17,7 @@ use common::{
 #[test]
 fn build_golden_output() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
         .expect("run build");
@@ -38,7 +38,7 @@ fn build_golden_output() {
 #[test]
 fn phase2_holesky_golden() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(phase2_fixture())
         .output()
         .expect("run build");
@@ -61,7 +61,7 @@ fn app_help() {
     let out = ethernal().arg("--help").output().expect("run --help");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("ethernal"), "help missing app name: {s}");
-    for sub in ["build", "sign", "run"] {
+    for sub in ["validator", "account", "deposit", "tx"] {
         assert!(s.contains(sub), "help missing subcommand {sub}: {s}");
     }
 }
@@ -80,7 +80,10 @@ fn app_version() {
 // Go: TestBuildSubcommand_Help
 #[test]
 fn build_subcommand_help() {
-    let out = ethernal().args(["build", "--help"]).output().expect("run");
+    let out = ethernal()
+        .args(["deposit", "build", "--help"])
+        .output()
+        .expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("input-file"), "build --help missing flag: {s}");
 }
@@ -88,7 +91,10 @@ fn build_subcommand_help() {
 // Go: TestSignSubcommand_Help
 #[test]
 fn sign_subcommand_help() {
-    let out = ethernal().args(["sign", "--help"]).output().expect("run");
+    let out = ethernal()
+        .args(["tx", "sign", "--help"])
+        .output()
+        .expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("signer"), "sign --help missing --signer: {s}");
     assert!(s.contains("ledger"), "sign --help missing ledger: {s}");
@@ -98,7 +104,7 @@ fn sign_subcommand_help() {
 #[test]
 fn build_action_success() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
         .expect("run");
@@ -130,7 +136,14 @@ fn build_action_success() {
 fn build_action_stdin_input() {
     let raw = std::fs::read(deposit_fixture()).expect("read fixture");
     let mut child = ethernal()
-        .args(["build", "--network", "holesky", "--input-file", "-"])
+        .args([
+            "deposit",
+            "build",
+            "--network",
+            "holesky",
+            "--input-file",
+            "-",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -150,7 +163,7 @@ fn build_action_stdin_input() {
 #[test]
 fn build_action_stdout_default() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
         .expect("run");
@@ -164,7 +177,7 @@ fn build_action_output_to_file() {
     let dir = TempDir::new("build-out");
     let out_file = dir.join("unsigned.json");
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .arg("--output")
         .arg(&out_file)
@@ -183,7 +196,7 @@ fn build_action_output_to_file() {
 #[test]
 fn build_action_output_dash_is_stdout() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--output", "-"])
         .output()
@@ -196,7 +209,7 @@ fn build_action_output_dash_is_stdout() {
 #[test]
 fn build_input_alias() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input"])
+        .args(["deposit", "build", "--network", "holesky", "--input"])
         .arg(deposit_fixture())
         .output()
         .expect("run");
@@ -213,6 +226,7 @@ fn build_input_alias() {
 fn build_action_missing_input_file() {
     let out = ethernal()
         .args([
+            "deposit",
             "build",
             "--network",
             "holesky",
@@ -235,7 +249,7 @@ fn build_action_invalid_json() {
     let dir = TempDir::new("build-badjson");
     let bad = dir.write("bad.json", b"not json at all");
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(&bad)
         .output()
         .expect("run");
@@ -246,7 +260,7 @@ fn build_action_invalid_json() {
 #[test]
 fn build_action_index_out_of_bounds() {
     let out = ethernal()
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--index", "5"])
         .output()
@@ -259,6 +273,7 @@ fn build_action_index_out_of_bounds() {
 fn build_action_bad_network() {
     let out = ethernal()
         .args([
+            "deposit",
             "build",
             "--network",
             "badnet",
@@ -277,7 +292,7 @@ fn build_action_bad_network() {
 fn build_gas_limit_env_var() {
     let out = ethernal()
         .env("ETHERNAL_TX_GAS_LIMIT", "500000")
-        .args(["build", "--network", "holesky", "--input-file"])
+        .args(["deposit", "build", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
         .expect("run");

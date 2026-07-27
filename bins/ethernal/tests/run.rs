@@ -4,24 +4,29 @@
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
-use common::{deposit_fixture, ethernal, TempDir, PHASE3_KEY};
+use common::{deposit_fixture, ethernal, secret_file, TempDir, PHASE3_KEY};
 
-const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
+/// Writes `PHASE3_KEY` at mode 0600 and returns the path (FR-17 hygiene).
+fn phase3_key_file(dir: &TempDir) -> PathBuf {
+    secret_file(dir, "key.hex", PHASE3_KEY.as_bytes())
+}
 
 // Go: TestRunCommand_LocalSigner_HappyPath
 #[test]
 fn local_signer_happy_path() {
     let dir = TempDir::new("run-ok");
     let out_file = dir.join("signed.json");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -47,11 +52,15 @@ fn local_signer_happy_path() {
 // Go: TestRunCommand_LocalSigner_StdoutOutput
 #[test]
 fn local_signer_stdout_output() {
+    let dir = TempDir::new("run-stdout");
+    let key_file = phase3_key_file(&dir);
+
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
-        .args(["--signer", "local", "--private-key-env", KEY_ENV])
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -68,14 +77,16 @@ fn local_signer_stdout_output() {
 fn local_signer_keep_unsigned() {
     let dir = TempDir::new("run-keepu");
     let out_file = dir.join("signed.json");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
-        .args(["--keep-unsigned", "--private-key-env", KEY_ENV])
+        .arg("--keep-unsigned")
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -101,16 +112,17 @@ fn local_signer_raw_output() {
     let dir = TempDir::new("run-raw");
     let out_file = dir.join("signed.json");
     let raw_file = dir.join("custom.raw");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
         .arg("--raw-output")
         .arg(&raw_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -132,18 +144,122 @@ fn local_signer_raw_output() {
 #[test]
 fn missing_signer_flag() {
     let out = ethernal()
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(2));
 }
 
+// FR-24: --signer local with no --private-key-file → exit 2 naming the flag.
+#[test]
+fn private_key_file_required_for_local() {
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--private-key-file"),
+        "error should name --private-key-file: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// F6-2 / architecture §11 divergence 4 / FR-13: missing key file → exit 2
+// (not 3). Names the path; no file contents in the message.
+#[test]
+fn local_signer_missing_key_file() {
+    let dir = TempDir::new("run-missingkey");
+    let missing = dir.join("no-such-key.hex");
+
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&missing)
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "missing key file must exit 2 (not 3); stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(missing.to_str().unwrap()),
+        "error should name the path: {stderr}"
+    );
+}
+
+// F6-2 / FR-13: permission-denied key file → exit 2; path named, no contents.
+#[cfg(unix)]
+#[test]
+fn local_signer_unreadable_key_file_exit2() {
+    // SAFETY: getuid has no preconditions.
+    if unsafe { libc::getuid() } == 0 {
+        // Root bypasses mode 000; skip like crate-level secretfile tests.
+        return;
+    }
+
+    let dir = TempDir::new("run-unreadable");
+    // Distinctive sentinel that must never appear in the rendered error.
+    const SENTINEL: &str = "SENTINEL_RUN_KEY_f6_2_never_in_error";
+    let key_file = secret_file(&dir, "locked.hex", SENTINEL.as_bytes());
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&key_file)
+        .output()
+        .expect("run");
+    // Restore so TempDir can clean up.
+    let _ = std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600));
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "permission-denied key file must exit 2 (not 3); stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(key_file.to_str().unwrap()),
+        "error should name the path: {stderr}"
+    );
+    assert!(
+        !stderr.contains(SENTINEL),
+        "error must not leak file contents: {stderr}"
+    );
+}
+
+// FR-6: --private-key-file - → exit 2.
+#[test]
+fn private_key_file_dash_exit2() {
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local", "--private-key-file", "-"])
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--private-key-file"),
+        "error should name the flag: {stderr}"
+    );
+}
+
 // Go: TestRunCommand_LedgerNoDevice → exit 3.
 #[test]
 fn ledger_no_device() {
     let out = ethernal()
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "ledger"])
         .output()
@@ -157,29 +273,38 @@ fn ledger_no_device() {
 }
 
 // Go: TestRunCommand_InvalidInput → exit 2.
+// R-4: bad JSON + good key → exit 2 (read_input still precedes signer construction
+// for the file-read step; parse failure is at build). Exit-code assertion fixed.
 #[test]
 fn invalid_input() {
     let dir = TempDir::new("run-badinput");
     let bad = dir.write("bad.json", b"not json at all");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(&bad)
-        .args(["--signer", "local", "--private-key-env", KEY_ENV])
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(2));
 }
 
 // Go: TestRunCommand_BadKey → exit 3.
+// R-4: bad hex + good fixture → exit 3 (InvalidKey, not file-policy).
 #[test]
 fn bad_key() {
+    let dir = TempDir::new("run-badkey");
+    let key_file = secret_file(&dir, "key.hex", b"0xdeadbeefnotahexkey");
+
     let out = ethernal()
-        .env(KEY_ENV, "0xdeadbeefnotahexkey")
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
-        .args(["--signer", "local", "--private-key-env", KEY_ENV])
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(3));
@@ -192,14 +317,15 @@ fn atomic_write_on_rename_failure() {
     let dir = TempDir::new("run-rename");
     let out_dir = dir.join("signed.json");
     std::fs::create_dir(&out_dir).expect("mkdir output path");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_dir)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -222,17 +348,15 @@ fn atomic_write_on_rename_failure() {
 // Go: TestRunCommand_KeepUnsigned_RequiresOutputFile → exit 2.
 #[test]
 fn keep_unsigned_requires_output_file() {
+    let dir = TempDir::new("run-keep-noout");
+    let key_file = phase3_key_file(&dir);
+
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
-        .args([
-            "--signer",
-            "local",
-            "--keep-unsigned",
-            "--private-key-env",
-            KEY_ENV,
-        ])
+        .args(["--signer", "local", "--keep-unsigned"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(2));
@@ -243,14 +367,15 @@ fn keep_unsigned_requires_output_file() {
 fn output_file_permissions() {
     let dir = TempDir::new("run-perm");
     let out_file = dir.join("signed.json");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(out.status.success());
@@ -264,20 +389,15 @@ fn output_file_permissions() {
 #[test]
 fn output_dash_is_stdout() {
     let dir = TempDir::new("run-dash");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
         .current_dir(dir.path())
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
-        .args([
-            "--signer",
-            "local",
-            "--output",
-            "-",
-            "--private-key-env",
-            KEY_ENV,
-        ])
+        .args(["--signer", "local", "--output", "-"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(out.status.success());
@@ -294,14 +414,126 @@ fn output_dash_is_stdout() {
     );
 }
 
+// FR-19 / FR-32: hex-shaped missing path → exit 2 without echoing the argument.
+const HEX_GUARD_SENTINEL: &str =
+    "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+#[test]
+fn private_key_file_hex_shaped_not_found_exit2_no_echo() {
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(HEX_GUARD_SENTINEL)
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        stderr.contains("looks like a key value, not a path"),
+        "FR-19 wording: {stderr}"
+    );
+    assert!(
+        !combined.contains(HEX_GUARD_SENTINEL) && !combined.contains("deadbeef"),
+        "FR-32: rejected argument must not appear in stdout/stderr: {combined}"
+    );
+}
+
+// FR-19: guard is NotFound-only — existing hex-named file is a path.
+#[test]
+fn private_key_file_hex_shaped_existing_name_ok() {
+    let dir = TempDir::new("run-hex-existing");
+    let name = "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe";
+    let _key_file = secret_file(&dir, name, PHASE3_KEY.as_bytes());
+
+    let out = ethernal()
+        .current_dir(dir.path())
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(name)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "existing hex-named key file must work as a path; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// FR-19: 63- and 65-char hex-ish args fall through to ordinary NotFound.
+#[test]
+fn private_key_file_hex_ish_wrong_length_is_ordinary_not_found() {
+    let short = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbee";
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(short)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "63-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(short) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+
+    let long = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeeff";
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(long)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "65-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(long) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+}
+
 // Go: TestRunSubcommand_Help
 #[test]
 fn run_subcommand_help() {
-    let out = ethernal().args(["run", "--help"]).output().expect("run");
+    let out = ethernal()
+        .args(["tx", "run", "--help"])
+        .output()
+        .expect("run");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("signer"), "run --help missing --signer");
     assert!(
         s.contains("keep-unsigned"),
         "run --help missing --keep-unsigned"
+    );
+    assert!(
+        s.contains("private-key-file"),
+        "run --help missing --private-key-file"
+    );
+    // FR-30: local signer is a file path, not an environment-variable source.
+    assert!(
+        !s.contains("environment variable") && !s.to_ascii_lowercase().contains("env var"),
+        "run --help must not describe an environment-variable key source: {s}"
     );
 }

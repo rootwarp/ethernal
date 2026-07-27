@@ -22,30 +22,31 @@ fn assert_exit2(args: &[&str], name: &str) {
 #[test]
 fn build_missing_input_file() {
     assert_exit2(
-        &["build", "--network", "holesky"],
+        &["deposit", "build", "--network", "holesky"],
         "build missing --input-file",
     );
 }
 
 #[test]
 fn gen_missing_required_flags() {
-    assert_exit2(&["gen"], "gen missing required flags");
+    assert_exit2(&["deposit", "gen"], "gen missing required flags");
 }
 
 #[test]
 fn sign_missing_signer() {
-    assert_exit2(&["sign"], "sign missing --signer");
+    assert_exit2(&["tx", "sign"], "sign missing --signer");
 }
 
 #[test]
 fn run_missing_input_file() {
-    assert_exit2(&["run"], "run missing --input-file");
+    assert_exit2(&["tx", "run"], "run missing --input-file");
 }
 
 #[test]
 fn build_bad_index_value() {
     assert_exit2(
         &[
+            "deposit",
             "build",
             "--network",
             "holesky",
@@ -59,18 +60,42 @@ fn build_bad_index_value() {
 }
 
 #[test]
-fn key_missing_subcommand() {
-    assert_exit2(&["key"], "key missing subcommand");
+fn validator_missing_subcommand() {
+    assert_exit2(&["validator"], "validator missing subcommand");
 }
 
 #[test]
-fn key_new_missing_output_dir() {
-    assert_exit2(&["key", "new"], "key new missing --output-dir");
+fn deposit_missing_subcommand() {
+    // arg_required_else_help prints help and exits 2 (clap usage) for bare group.
+    assert_exit2(&["deposit"], "deposit missing subcommand");
 }
 
 #[test]
-fn key_recover_missing_output_dir() {
-    assert_exit2(&["key", "recover"], "key recover missing --output-dir");
+fn tx_missing_subcommand() {
+    assert_exit2(&["tx"], "tx missing subcommand");
+}
+
+#[test]
+fn deposit_unknown_leaf() {
+    assert_exit2(&["deposit", "nope"], "deposit unknown leaf");
+}
+
+#[test]
+fn tx_unknown_leaf() {
+    assert_exit2(&["tx", "nope"], "tx unknown leaf");
+}
+
+#[test]
+fn validator_new_missing_output_dir() {
+    assert_exit2(&["validator", "new"], "validator new missing --output-dir");
+}
+
+#[test]
+fn validator_recover_missing_output_dir() {
+    assert_exit2(
+        &["validator", "recover"],
+        "validator recover missing --output-dir",
+    );
 }
 
 #[test]
@@ -91,20 +116,20 @@ fn account_recover_missing_output_dir() {
     );
 }
 
-/// F-5: `key new` must exit 2 before generating when stdin/stdout are not TTYs.
+/// F-5: `validator new` must exit 2 before generating when stdin/stdout are not TTYs.
 /// Integration tests drive the binary with piped stdio, so isatty fails.
 #[test]
-fn key_new_non_tty_exits_two() {
-    let dir = common::TempDir::new("key-new-nontty");
+fn validator_new_non_tty_exits_two() {
+    let dir = common::TempDir::new("validator-new-nontty");
     let out = ethernal()
-        .args(["key", "new", "--output-dir"])
+        .args(["validator", "new", "--output-dir"])
         .arg(dir.path())
         .output()
         .expect("run");
     assert_eq!(
         out.status.code(),
         Some(2),
-        "key new non-TTY: expected exit 2, got {:?}; stderr: {}",
+        "validator new non-TTY: expected exit 2, got {:?}; stderr: {}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -119,17 +144,17 @@ fn key_new_non_tty_exits_two() {
         .collect();
     assert!(
         entries.is_empty(),
-        "non-TTY key new must write nothing; found {entries:?}"
+        "non-TTY validator new must write nothing; found {entries:?}"
     );
 }
 
 #[test]
-fn key_new_bad_count_exits_two() {
+fn validator_new_bad_count_exits_two() {
     // Bad --count is validated after the TTY guard; on non-TTY the guard wins
     // first (still exit 2). Exercise clap-level rejection of a non-u32 count.
     assert_exit2(
-        &["key", "new", "--output-dir", "/tmp", "--count", "abc"],
-        "key new bad --count value",
+        &["validator", "new", "--output-dir", "/tmp", "--count", "abc"],
+        "validator new bad --count value",
     );
 }
 
@@ -194,18 +219,18 @@ fn account_recover_nonexistent_output_dir_exits_two() {
 }
 
 #[test]
-fn key_recover_nonexistent_output_dir_exits_two() {
-    let dir = common::TempDir::new("key-recover-missing-out");
+fn validator_recover_nonexistent_output_dir_exits_two() {
+    let dir = common::TempDir::new("validator-recover-missing-out");
     let missing = dir.path().join("does-not-exist");
     let out = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(&missing)
         .output()
         .expect("run");
     assert_eq!(
         out.status.code(),
         Some(2),
-        "key recover bad output-dir: expected exit 2, got {:?}; stderr: {}",
+        "validator recover bad output-dir: expected exit 2, got {:?}; stderr: {}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -214,25 +239,25 @@ fn key_recover_nonexistent_output_dir_exits_two() {
 /// H4 / K3-L2: overflowing `--start-index + --count` is rejected in load_config
 /// (exit 2) before any keystore write — output dir stays empty.
 #[test]
-fn key_recover_index_overflow_exits_two_no_writes() {
+fn validator_recover_index_overflow_exits_two_no_writes() {
     use std::io::Write;
     use std::process::Stdio;
 
-    let dir = common::TempDir::new("key-recover-overflow");
+    let dir = common::TempDir::new("validator-recover-overflow");
+    let secrets = common::TempDir::new("validator-recover-overflow-s");
+    let ks_path = common::secret_file(&secrets, "ks.pw", b"password1");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
-    let pw_var = format!("ETHERNAL_TEST_OVERFLOW_PW_{}", std::process::id());
     let mut child = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
             "--count",
             "2",
             "--start-index",
             "4294967295",
-            "--passphrase-env",
-            &pw_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
         ])
-        .env(&pw_var, "password1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -267,28 +292,28 @@ fn key_recover_index_overflow_exits_two_no_writes() {
     );
 }
 
-/// `key recover` is exempt from the TTY guard: piped mnemonic on non-TTY stdin
-/// is accepted (F-10). Uses --passphrase-env so no interactive keystore prompt.
+/// `validator recover` is exempt from the TTY guard: piped mnemonic on non-TTY stdin
+/// is accepted (F-10). Uses --passphrase-file so no interactive keystore prompt.
 #[test]
-fn key_recover_validates_without_tty() {
+fn validator_recover_validates_without_tty() {
     use std::io::Write;
     use std::process::Stdio;
 
-    let dir = common::TempDir::new("key-recover-ok");
+    let dir = common::TempDir::new("validator-recover-ok");
+    let secrets = common::TempDir::new("validator-recover-ok-s");
+    let ks_path = common::secret_file(&secrets, "ks.pw", b"password1");
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
-    let pw_var = format!("ETHERNAL_TEST_RECOVER_PW_{}", std::process::id());
     let mut child = ethernal()
-        .args(["key", "recover", "--output-dir"])
+        .args(["validator", "recover", "--output-dir"])
         .arg(dir.path())
         .args([
             "--count",
             "1",
             "--start-index",
             "1",
-            "--passphrase-env",
-            &pw_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
         ])
-        .env(&pw_var, "password1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -303,12 +328,12 @@ fn key_recover_validates_without_tty() {
     let out = child.wait_with_output().expect("wait");
     assert!(
         out.status.success(),
-        "key recover should accept piped mnemonic on non-TTY; stderr: {}",
+        "validator recover should accept piped mnemonic on non-TTY; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("ethernal key recover:"),
+        stderr.contains("ethernal validator recover:"),
         "banner missing: {stderr}"
     );
     assert!(stderr.contains("start_index=1"), "banner: {stderr}");
@@ -327,5 +352,191 @@ fn key_recover_validates_without_tty() {
         entries.len(),
         1,
         "expected one keystore at index 1: {entries:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F7-3 / FR-1 / FR-34 — removed file-secret `-env` flags are unknown flags
+// (clap exit 2). One case per command that previously accepted each flag.
+//
+// Names are assembled at runtime so a source inventory of the old flag
+// spellings under bins/ethernal/tests stays empty (help/positive assertions
+// must not require names that no longer exist).
+// ---------------------------------------------------------------------------
+
+fn removed_env_flag(base: &str) -> String {
+    // base is e.g. "--passphrase"; append the removed "env" suffix form.
+    format!("{base}-{}", "env")
+}
+
+/// Commands that used to take the keystore passphrase env-var-name flag.
+#[test]
+fn removed_passphrase_env_unknown_flag() {
+    let flag = removed_env_flag("--passphrase");
+    for prefix in [
+        &["deposit", "gen"][..],
+        &["validator", "new"][..],
+        &["validator", "recover"][..],
+        &["account", "new"][..],
+        &["account", "recover"][..],
+    ] {
+        let mut args: Vec<&str> = prefix.to_vec();
+        args.push(&flag);
+        args.push("FOO");
+        let name = format!("{} {flag}", prefix.join(" "));
+        assert_exit2(&args, &name);
+    }
+}
+
+/// Commands that used to take the mnemonic-passphrase env-var-name flag.
+#[test]
+fn removed_mnemonic_passphrase_env_unknown_flag() {
+    let flag = removed_env_flag("--mnemonic-passphrase");
+    for prefix in [
+        &["validator", "new"][..],
+        &["validator", "recover"][..],
+        &["account", "new"][..],
+        &["account", "recover"][..],
+    ] {
+        let mut args: Vec<&str> = prefix.to_vec();
+        args.push(&flag);
+        args.push("FOO");
+        let name = format!("{} {flag}", prefix.join(" "));
+        assert_exit2(&args, &name);
+    }
+}
+
+/// Commands that used to take the private-key env-var-name flag.
+#[test]
+fn removed_private_key_env_unknown_flag() {
+    let flag = removed_env_flag("--private-key");
+    for prefix in [&["tx", "sign"][..], &["tx", "run"][..]] {
+        let mut args: Vec<&str> = prefix.to_vec();
+        args.push(&flag);
+        args.push("FOO");
+        let name = format!("{} {flag}", prefix.join(" "));
+        assert_exit2(&args, &name);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F7-3 / FR-34 — new exit-2 paths introduced by the env→file flip.
+// ---------------------------------------------------------------------------
+
+/// FR-24: `--signer local` without `--private-key-file` → exit 2.
+#[test]
+fn sign_missing_private_key_file() {
+    // --input must be present so load reaches the FR-24 private-key-file check
+    // (missing --input would also exit 2, but for a different reason).
+    assert_exit2(
+        &["tx", "sign", "--signer", "local", "--input", "x"],
+        "tx sign local missing --private-key-file",
+    );
+}
+
+/// FR-24: `tx run --signer local` without `--private-key-file` → exit 2.
+#[test]
+fn run_missing_private_key_file() {
+    assert_exit2(
+        &[
+            "tx",
+            "run",
+            "--network",
+            "holesky",
+            "--input-file",
+            "x",
+            "--signer",
+            "local",
+        ],
+        "tx run local missing --private-key-file",
+    );
+}
+
+/// FR-6: `-` is not a valid secret-file path (stdin sentinel rejected).
+#[test]
+fn passphrase_file_dash_rejected() {
+    assert_exit2(
+        &[
+            "validator",
+            "recover",
+            "--output-dir",
+            "/tmp",
+            "--passphrase-file",
+            "-",
+        ],
+        "validator recover --passphrase-file -",
+    );
+}
+
+/// FR-6: `-` is not a valid private-key-file path.
+///
+/// `--input` must be present so load reaches `secret_file_arg` on
+/// `--private-key-file` (missing `--input` would also exit 2).
+#[test]
+fn private_key_file_dash_rejected() {
+    let out = ethernal()
+        .args([
+            "tx",
+            "sign",
+            "--signer",
+            "local",
+            "--input",
+            "x",
+            "--private-key-file",
+            "-",
+        ])
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "tx sign --private-key-file -: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("path cannot be '-'"),
+        "expected FR-6 dash rejection message, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--private-key-file"),
+        "error should name the flag: {stderr}"
+    );
+}
+
+/// FR-18: empty `--passphrase-file` (0 bytes) → exit 2.
+#[test]
+fn empty_passphrase_file_exit2() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = common::TempDir::new("exit-usage-empty-pw");
+    let secrets = common::TempDir::new("exit-usage-empty-pw-s");
+    let ks_path = common::secret_file(&secrets, "empty.pw", b"");
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args(["--count", "1", "--passphrase-file"])
+        .arg(&ks_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin
+            .write_all(mnemonic.as_bytes())
+            .expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "empty --passphrase-file: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
     );
 }

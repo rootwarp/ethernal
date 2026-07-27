@@ -1,12 +1,45 @@
-//! Shared filesystem probes for CLI validation.
+//! Shared filesystem probes and TTY helpers for CLI validation.
 //!
 //! The writability probe must not follow a pre-planted symlink at the probe
 //! name (K3-L4 / H5): use exclusive create (`O_EXCL` / `create_new`) so an
 //! existing symlink fails instead of truncating its target.
+//!
+//! TTY helpers (`stdin_is_tty` / `stdout_is_tty` / `stderr_is_tty` /
+//! `open_tty_writer`) are the single home for fd isatty checks and the
+//! controlling-terminal open used by keygen mnemonic display (S-2).
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+use crate::errors::AppError;
+
+// ---------------------------------------------------------------------------
+// TTY helpers (single home — T1.2)
+// ---------------------------------------------------------------------------
+
+/// Reports whether stdin (fd 0) is connected to a terminal.
+pub(crate) fn stdin_is_tty() -> bool {
+    // SAFETY: isatty is async-signal-safe and has no preconditions.
+    unsafe { libc::isatty(0) == 1 }
+}
+
+/// Reports whether stdout (fd 1) is connected to a terminal.
+pub(crate) fn stdout_is_tty() -> bool {
+    // SAFETY: isatty is async-signal-safe and has no preconditions.
+    unsafe { libc::isatty(1) == 1 }
+}
+
+/// Reports whether stderr (fd 2) is connected to a terminal.
+pub(crate) fn stderr_is_tty() -> bool {
+    // SAFETY: isatty is async-signal-safe and has no preconditions.
+    unsafe { libc::isatty(2) == 1 }
+}
+
+/// Opens `/dev/tty` for the mnemonic display only. **No stderr fallback** (S-2).
+pub(crate) fn open_tty_writer() -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).open("/dev/tty")
+}
 
 /// If `dir`'s FINAL component is a symlink, returns its fully-resolved real path.
 /// `None` for a normal directory on ANY platform — including macOS temp dirs
@@ -74,54 +107,72 @@ pub(crate) fn probe_dir_writable(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Checks that `dir` exists and the process can write to it via the shared
+/// exclusive create+remove probe ([`probe_dir_writable`]).
+pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
+    let meta = match std::fs::metadata(dir) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("directory \"{dir}\" does not exist"));
+        }
+        Err(e) => return Err(format!("cannot stat directory \"{dir}\": {e}")),
+    };
+    if !meta.is_dir() {
+        return Err(format!("\"{dir}\" is not a directory"));
+    }
+
+    probe_dir_writable(Path::new(dir))
+        .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
+}
+
+/// Validates a secret-file flag argument. `-` is rejected (exit 2): stdin is
+/// already claimed by `tx sign --input -` and by `validator recover`'s
+/// piped-mnemonic path, and `require_tty_for_new` reasons about stdin being a
+/// TTY. The message points at process substitution — `<(gpg -d pw.gpg)` — as
+/// the no-disk-file pattern, and mentions `/dev/fd/N` only as the general
+/// escape hatch: naming `/dev/stdin` alone would send an operator straight
+/// into the collision the rejection exists to avoid.
+///
+/// Call sites: F4–F6 secret-file flags (`--passphrase-file`, etc.).
+pub(crate) fn secret_file_arg(flag: &str, value: &str) -> Result<PathBuf, AppError> {
+    if value == "-" {
+        return Err(AppError::exit2(format!(
+            "{flag}: path cannot be '-'; stdin is already claimed by other flags \
+             and interactive prompts. For a no-disk-file secret, use process \
+             substitution: {flag} <(gpg -d pw.gpg). As a general escape hatch, \
+             a path under /dev/fd/N may also work."
+        )));
+    }
+    Ok(PathBuf::from(value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    struct Tmp(PathBuf);
-
-    impl Tmp {
-        fn new() -> Self {
-            static N: AtomicU64 = AtomicU64::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!(
-                "ethernal-fs-util-{}-{}-{n}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-    }
-
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            // Best-effort restore write bits so remove_dir_all can succeed
-            // after read-only tests.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&self.0) {
-                    let mut perms = meta.permissions();
-                    perms.set_mode(0o755);
-                    let _ = std::fs::set_permissions(&self.0, perms);
-                }
-            }
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::Tmp;
 
     #[test]
     fn probe_happy_path() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         probe_dir_writable(&dir.0).expect("writable dir");
         // No leftover probe.
         assert!(!probe_path(&dir.0).exists());
+    }
+
+    #[test]
+    fn validate_output_dir_negative() {
+        let dir = Tmp::new("ethernal-fs-util");
+        let missing = dir.0.join("missing");
+        let err = validate_output_dir(missing.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+
+        let file = dir.0.join("not-dir");
+        std::fs::write(&file, b"x").unwrap();
+        let err = validate_output_dir(file.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("not a directory"), "{err}");
+
+        // Happy path: existing writable dir.
+        assert!(validate_output_dir(dir.str()).is_ok());
     }
 
     #[cfg(unix)]
@@ -129,7 +180,7 @@ mod tests {
     fn symlink_probe_does_not_touch_canary_target() {
         use std::os::unix::fs::symlink;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let canary = dir.0.join("canary-target");
         std::fs::write(&canary, b"do-not-truncate").unwrap();
 
@@ -154,7 +205,7 @@ mod tests {
     fn unwritable_dir_probe_fails() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let locked = dir.0.join("locked");
         std::fs::create_dir(&locked).unwrap();
         let mut perms = std::fs::metadata(&locked).unwrap().permissions();
@@ -177,7 +228,7 @@ mod tests {
         // Create ok, then lose write on the parent so unlink fails. Exercise
         // the same create→remove sequence as probe_dir_writable with a gap
         // between the steps so we can assert remove errors are not discarded.
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let probe = probe_path(&dir.0);
         create_exclusive_0600(&probe).unwrap();
 
@@ -208,7 +259,7 @@ mod tests {
 
     #[test]
     fn real_dir_is_not_symlinked_output_dir() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         assert!(symlinked_output_dir(&dir.0).is_none());
 
         let mut buf = Vec::new();
@@ -225,7 +276,7 @@ mod tests {
     fn symlinked_output_dir_detects_final_component_link() {
         use std::os::unix::fs::symlink;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("ethernal-fs-util");
         let real = dir.0.join("real-out");
         std::fs::create_dir(&real).unwrap();
         let link = dir.0.join("link-out");
@@ -238,6 +289,7 @@ mod tests {
         let mut buf = Vec::new();
         assert!(warn_if_symlinked_output_dir(&link, &mut buf));
         let text = String::from_utf8(buf).unwrap();
+        // Immune to FR-17 collision: unit Vec sink, no secret-file flag in play (F3-2).
         let warning_lines: Vec<_> = text.lines().filter(|l| l.contains("WARNING")).collect();
         assert_eq!(
             warning_lines.len(),
@@ -252,5 +304,33 @@ mod tests {
             warning_lines[0].contains(resolved.to_str().unwrap()),
             "warning must name resolved path: {text}"
         );
+    }
+
+    #[test]
+    fn secret_file_arg_rejects_dash() {
+        use crate::errors::exit_code_for;
+
+        let err = secret_file_arg("--passphrase-file", "-").expect_err("'-' must fail");
+        assert_eq!(exit_code_for(&err), 2, "secret_file_arg('-') must exit 2");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("<(") && msg.contains(")"),
+            "message must mention process substitution <(...), got: {msg:?}"
+        );
+        assert!(
+            msg.contains("/dev/fd/"),
+            "message may mention /dev/fd/N as escape hatch, got: {msg:?}"
+        );
+        // Must not recommend /dev/stdin alone (collides with stdin consumers).
+        assert!(
+            !msg.contains("/dev/stdin"),
+            "message must not recommend /dev/stdin alone, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn secret_file_arg_round_trips_path() {
+        let p = secret_file_arg("--passphrase-file", "/tmp/secret.txt").expect("path ok");
+        assert_eq!(p, PathBuf::from("/tmp/secret.txt"));
     }
 }

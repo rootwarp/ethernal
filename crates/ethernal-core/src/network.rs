@@ -77,11 +77,6 @@ pub struct Params {
     /// Source: eth-clients/<network>/metadata/config.yaml DEPOSIT_CONTRACT_ADDRESS.
     pub deposit_contract_address: [u8; 20],
 
-    /// An optional well-known public RPC endpoint for this network. Empty
-    /// string means no default ships with this tool (callers must supply
-    /// --rpc-url explicitly).
-    pub default_rpc_url: &'static str,
-
     /// The base URL of the block explorer for this network
     /// (e.g. "https://etherscan.io"). Used to format tx hash links.
     /// Source: etherscan.io per-network subdomains.
@@ -112,7 +107,6 @@ pub fn lookup(n: Network) -> Params {
             genesis_fork_version: [0x00, 0x00, 0x00, 0x00],
             chain_id: 1,
             deposit_contract_address: hex_literal("00000000219ab540356cbb839cbe05303d7705fa"),
-            default_rpc_url: "",
             explorer_url: "https://etherscan.io",
         },
         Network::Hoodi => Params {
@@ -120,7 +114,6 @@ pub fn lookup(n: Network) -> Params {
             genesis_fork_version: [0x10, 0x00, 0x09, 0x10],
             chain_id: 560048,
             deposit_contract_address: hex_literal("00000000219ab540356cbb839cbe05303d7705fa"),
-            default_rpc_url: "",
             explorer_url: "https://hoodi.etherscan.io",
         },
         Network::Sepolia => Params {
@@ -128,7 +121,6 @@ pub fn lookup(n: Network) -> Params {
             genesis_fork_version: [0x90, 0x00, 0x00, 0x69],
             chain_id: 11155111,
             deposit_contract_address: hex_literal("7f02c3e3c98b133055b8b348b2ac625669ed295d"),
-            default_rpc_url: "",
             explorer_url: "https://sepolia.etherscan.io",
         },
         Network::Holesky => Params {
@@ -136,7 +128,6 @@ pub fn lookup(n: Network) -> Params {
             genesis_fork_version: [0x01, 0x01, 0x70, 0x00],
             chain_id: 17000,
             deposit_contract_address: hex_literal("4242424242424242424242424242424242424242"),
-            default_rpc_url: "",
             explorer_url: "https://holesky.etherscan.io",
         },
     }

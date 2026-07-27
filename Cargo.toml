@@ -16,6 +16,7 @@ edition = "2021"
 # Internal crates
 ethernal-core = { path = "crates/ethernal-core" }
 ethernal-keystore = { path = "crates/ethernal-keystore" }
+ethernal-secretfile = { path = "crates/ethernal-secretfile" }
 ethernal-tx = { path = "crates/ethernal-tx" }
 ethernal-signer = { path = "crates/ethernal-signer" }
 

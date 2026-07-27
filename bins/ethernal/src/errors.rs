@@ -5,7 +5,8 @@
 //!       missing/malformed file, invalid hex, out-of-bounds --index, negative
 //!       fees, build-side RPC chain-ID mismatch)
 //!   3 — signer / crypto errors (bad key, no Ledger device, Ethereum app not
-//!       open, signer-side chain ID mismatch, signer closed)
+//!       open, signer-side chain ID mismatch, signer closed; exception:
+//!       SignerError::KeyFile is exit 2 — key *file* config failure, FR-13)
 //!   4 — user abort (SIGINT / cancellation / Ledger device rejection)
 //!   5 — broadcast / RPC errors (dial failure, gas/nonce estimation failure,
 //!       eth_sendRawTransaction error, broadcast-side chain ID mismatch)
@@ -60,7 +61,7 @@ pub enum AppError {
     Deposit(DepositError),
     Network(NetworkError),
     /// Deposit-data write path (`gen`). Exit code 1 via fallback — keystore
-    /// writes from `key new`/`recover` must use call-site `Exit{code:3}` so
+    /// writes from `validator new`/`recover` must use call-site `Exit{code:3}` so
     /// this arm stays gen-only (architecture fork (a)).
     Output(OutputError),
     Tx(TxError),
@@ -100,6 +101,16 @@ pub enum AppError {
     /// gen: the external staking-deposit-cli exited non-zero. Exit code 3.
     DepositCliFailed {
         output: String,
+    },
+
+    /// A derivation or post-write self-check failed (C1–C4). Carries no key material:
+    /// check tag, index, HD or file path, and a secret-free detail only. Exit code 3.
+    KeyVerifyFailed {
+        check: &'static str, // "C1" | "C2" | "C3" | "C4"
+        index: u32,
+        /// HD path for C1–C3; written file path for C4 (PR-15 retention messaging).
+        path: String,
+        detail: String,
     },
 
     /// A context-message wrapper that preserves the source's classification
@@ -146,6 +157,25 @@ impl fmt::Display for AppError {
             ),
             AppError::DepositCliFailed { output } => {
                 write!(f, "deposit CLI verification failed: {output}")
+            }
+            AppError::KeyVerifyFailed {
+                check,
+                index,
+                path,
+                detail,
+            } => {
+                // Base line for C1–C4; C4 appends file-retention lines (PR-15 / D-5).
+                write!(
+                    f,
+                    "keystore self-check failed for index {index} ({check}): {detail}"
+                )?;
+                if *check == "C4" {
+                    write!(
+                        f,
+                        "\n  file: {path}\n  the file was NOT removed; do not use it. No further keys were created."
+                    )?;
+                }
+                Ok(())
             }
             AppError::Context { msg, source } => write!(f, "{msg}: {source}"),
             AppError::Internal(msg) => f.write_str(msg),
@@ -276,18 +306,24 @@ pub fn exit_code_for(err: &AppError) -> i32 {
         AppError::Hd(_) => 3,
         AppError::Bip32(_) => 3,
         AppError::Deposit(DepositError::SelfVerifyFailed { .. }) => 3,
+        AppError::KeyVerifyFailed { .. } => 3,
         AppError::BlsInit(_) => 3,
         AppError::DepositCliFailed { .. } => 3,
 
         // Signer/crypto errors (build/sign/run). The order mirrors Go's
         // exit.go: user-rejected (a device decision) and cancellation classify
-        // as user abort (4); every other signer sentinel is a crypto/signer
-        // failure (3). Walk the Context chain via `.sentinel()` — the analogue
-        // of Go's `errors.Is`. Cancelled is handled here rather than the exit-4
-        // block above because a signer error never also wraps an RPC-estimation
-        // tag, so there is no cancel-before-RPC ordering hazard.
+        // as user abort (4); a key *file* configuration failure is user/config
+        // (2, FR-13); every other signer sentinel is a crypto/signer failure
+        // (3). Walk the Context chain via `.sentinel()` — the analogue of Go's
+        // `errors.Is`. Cancelled is handled here rather than the exit-4 block
+        // above because a signer error never also wraps an RPC-estimation tag,
+        // so there is no cancel-before-RPC ordering hazard.
         AppError::Signer(e) => match e.sentinel() {
             SignerError::UserRejected | SignerError::Cancelled => 4,
+            // A key *file* configuration failure is a user error (FR-13), not a
+            // crypto failure — unlike every other SignerError. Explicit, above
+            // the exit-3 list (architecture §7 / D-7).
+            SignerError::KeyFile(_) => 2,
             SignerError::SignerClosed
             | SignerError::NoDevice
             | SignerError::AppNotOpen
@@ -316,6 +352,7 @@ pub fn exit_code_for(err: &AppError) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ethernal_signer::SecretFileError;
 
     /// Shorthand for `exit_code_for` over a constructed error.
     fn code(e: AppError) -> i32 {
@@ -428,6 +465,30 @@ mod tests {
         );
     }
 
+    // F2-3 / FR-13 / D-7: key *file* config is exit 2; a sibling pin keeps
+    // InvalidKey at 3 so run::bad_key stays green when F6 flips call sites.
+    #[test]
+    fn signer_key_file_is_exit2_invalid_key_stays_exit3() {
+        assert_eq!(
+            code(AppError::Signer(SignerError::KeyFile(
+                SecretFileError::NotFound {
+                    path: "/key.hex".into()
+                }
+            ))),
+            2
+        );
+        assert_eq!(
+            code(AppError::context(
+                "wrap",
+                AppError::Signer(SignerError::KeyFile(SecretFileError::PermissionDenied {
+                    path: "/key.hex".into()
+                }))
+            )),
+            2
+        );
+        assert_eq!(code(AppError::Signer(SignerError::InvalidKey)), 3);
+    }
+
     // --- exit 5: broadcast / RPC ---
     #[test]
     fn tx_broadcast_and_rpc_are_exit5() {
@@ -503,6 +564,22 @@ mod tests {
         assert_eq!(
             code(AppError::Keystore(KeystoreError::EnvVarEmpty {
                 var: "V".into()
+            })),
+            2
+        );
+        // F2-3 / FR-27: passphrase-file policy failures must be exit 2 explicitly
+        // (not only via the `_ => 2` catch-all).
+        assert_eq!(
+            code(AppError::Keystore(KeystoreError::PassphraseFile(
+                SecretFileError::NotFound {
+                    path: "/pw.txt".into()
+                }
+            ))),
+            2
+        );
+        assert_eq!(
+            code(AppError::Keystore(KeystoreError::PassphraseFileEmpty {
+                path: "/pw.txt".into()
             })),
             2
         );
@@ -672,7 +749,7 @@ mod tests {
 
     #[test]
     fn keystore_write_call_site_exit3() {
-        // key_cmd::map_write_err shape — not AppError::Output.
+        // validator_cmd::map_write_err shape — not AppError::Output.
         assert_eq!(
             code(AppError::Exit {
                 msg: "output: file already exists".into(),
@@ -691,5 +768,106 @@ mod tests {
             4
         );
         assert_eq!(code(AppError::Aborted("interrupted".into())), 4);
+    }
+
+    // --- keygen self-check (V3-1 / PR-14, PR-16) ---
+
+    #[test]
+    fn key_verify_failed_is_exit3() {
+        assert_eq!(
+            code(AppError::KeyVerifyFailed {
+                check: "C1",
+                index: 0,
+                path: "m/12381/3600/0/0/0".into(),
+                detail: "pubkey mismatch".into(),
+            }),
+            3
+        );
+        assert_eq!(
+            code(AppError::context(
+                "derive",
+                AppError::KeyVerifyFailed {
+                    check: "C4",
+                    index: 2,
+                    path: "/tmp/keystore.json".into(),
+                    detail: "decrypt round-trip failed".into(),
+                }
+            )),
+            3
+        );
+    }
+
+    #[test]
+    fn key_verify_failed_display_has_check_and_index_no_secret() {
+        let e = AppError::KeyVerifyFailed {
+            check: "C2",
+            index: 7,
+            path: "m/12381/3600/7/0/0".into(),
+            detail: "signature verify failed against derived pubkey".into(),
+        };
+        let AppError::KeyVerifyFailed {
+            check,
+            index,
+            path,
+            detail,
+        } = &e
+        else {
+            panic!("expected KeyVerifyFailed");
+        };
+        assert_eq!(*check, "C2");
+        assert_eq!(*index, 7);
+        assert_eq!(path, "m/12381/3600/7/0/0");
+        assert!(!detail.is_empty());
+
+        let s = e.to_string();
+        assert!(
+            s.contains("C2") && s.contains("7"),
+            "Display must include check tag and index: {s}"
+        );
+        assert!(
+            s.contains("keystore self-check failed for index 7 (C2):"),
+            "Display shape: {s}"
+        );
+        // PR-16: no secret-shaped material (no 64-hex-char run).
+        let has_64_hex = s
+            .as_bytes()
+            .windows(64)
+            .any(|w| w.iter().all(|b| b.is_ascii_hexdigit()));
+        assert!(!has_64_hex, "Display must not contain a 64-hex run: {s}");
+    }
+
+    #[test]
+    fn key_verify_failed_c4_display_includes_file_retention() {
+        let e = AppError::KeyVerifyFailed {
+            check: "C4",
+            index: 2,
+            path: "/tmp/out/keystore-m_12381_3600_2_0_0-1700000000.json".into(),
+            detail: "decrypted secret does not match the derived secret".into(),
+        };
+        let s = e.to_string();
+        assert!(
+            s.contains("keystore self-check failed for index 2 (C4):"),
+            "base line: {s}"
+        );
+        assert!(
+            s.contains("file: /tmp/out/keystore-m_12381_3600_2_0_0-1700000000.json"),
+            "must name the file: {s}"
+        );
+        assert!(
+            s.contains("the file was NOT removed; do not use it. No further keys were created."),
+            "PR-15 retention line: {s}"
+        );
+        // C1–C3 Display must stay single-line (no retention boilerplate).
+        let c1 = AppError::KeyVerifyFailed {
+            check: "C1",
+            index: 0,
+            path: "m/12381/3600/0/0/0".into(),
+            detail: "pubkey mismatch".into(),
+        };
+        let c1s = c1.to_string();
+        assert!(
+            !c1s.contains("was NOT removed"),
+            "C1 Display must not include C4 retention lines: {c1s}"
+        );
     }
 }

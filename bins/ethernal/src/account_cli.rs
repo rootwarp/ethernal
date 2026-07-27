@@ -4,16 +4,17 @@
 
 use std::fmt;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgMatches, Command};
 use ethernal_core::cancel::CancelToken;
 
 use crate::account_cmd;
 use crate::errors::AppError;
-use crate::key_cli::{
-    require_tty_for_new, resolve_mnemonic_passphrase, shared_args, validate_output_dir,
-    MnemonicPassphraseForm,
+use crate::fs_util;
+use crate::keystore_cli::{
+    parse_mnemonic_passphrase_form, require_tty_for_new, shared_args, MnemonicPassphraseForm,
+    START_INDEX_OVERFLOW_MSG,
 };
 
 /// Which `account` subcommand is being run.
@@ -25,7 +26,7 @@ pub enum AccountMode {
 
 /// Validated inputs for `account new` / `account recover`.
 ///
-/// Identical shape to [`crate::key_cli::KeyConfig`] minus pubkey/withdrawal
+/// Identical shape to [`crate::validator_cli::ValidatorConfig`] minus pubkey/withdrawal
 /// concerns (EOA = one keypair; the `account` namespace is the type selector —
 /// F-8, U-3). [`Debug`] redacts mnemonic-passphrase secret payloads (S-2).
 #[derive(Clone, PartialEq, Eq)]
@@ -38,10 +39,10 @@ pub struct AccountConfig {
     /// First HD derivation index. Always 0 for `account new`; operator-set on
     /// `account recover` (default 0).
     pub start_index: u32,
-    /// Name of the env var holding the keystore passphrase. Empty means the
-    /// runtime falls back to a TTY prompt-with-confirm (A3-4).
-    pub passphrase_env: String,
-    /// Resolved mnemonic-passphrase form (flag / env value / prompt / empty).
+    /// Path to the keystore passphrase file. `None` means the runtime falls
+    /// back to a TTY prompt-with-confirm (A3-4 / FR-5).
+    pub passphrase_file: Option<PathBuf>,
+    /// Resolved mnemonic-passphrase form (flag / file value / prompt / empty).
     pub mnemonic_passphrase: MnemonicPassphraseForm,
 }
 
@@ -52,7 +53,7 @@ impl fmt::Debug for AccountConfig {
             .field("count", &self.count)
             .field("output_dir", &self.output_dir)
             .field("start_index", &self.start_index)
-            .field("passphrase_env", &self.passphrase_env)
+            .field("passphrase_file", &self.passphrase_file)
             // Delegates to MnemonicPassphraseForm's redacting Debug.
             .field("mnemonic_passphrase", &self.mnemonic_passphrase)
             .finish()
@@ -77,7 +78,7 @@ fn new_command() -> Command {
         .about(
             "Generate a fresh 24-word mnemonic and write Web3 v3 EOA keystores (TTY only)",
         )
-        .override_usage("ethernal account new --output-dir DIR [--count N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
+        .override_usage("ethernal account new --output-dir DIR [--count N] [--passphrase-file PATH] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH]")
         .long_about(
             "Generates a fresh 24-word English BIP-39 mnemonic from OS CSPRNG entropy, runs a\n\
              display-once + full re-entry ceremony on the controlling terminal, then derives\n\
@@ -87,8 +88,8 @@ fn new_command() -> Command {
              before generating anything (a mnemonic must never land on a pipe or log).\n\n\
              Examples:\n\n\
              \x20 ethernal account new --output-dir ./keys --count 1\n\
-             \x20 ethernal account new --output-dir ./keys --passphrase-env KEYSTORE_PW\n\
-             \x20 ethernal account new --output-dir ./keys --mnemonic-passphrase-env MNEMONIC_PW",
+             \x20 ethernal account new --output-dir ./keys --passphrase-file ./ks.pw\n\
+             \x20 ethernal account new --output-dir ./keys --mnemonic-passphrase-file ./mp.pw",
         )
         .args(shared_args())
 }
@@ -96,7 +97,7 @@ fn new_command() -> Command {
 fn recover_command() -> Command {
     Command::new("recover")
         .about("Recover Web3 v3 EOA keystores from an existing BIP-39 mnemonic")
-        .override_usage("ethernal account recover --output-dir DIR [--count N] [--start-index N] [--passphrase-env VAR] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-env VAR]")
+        .override_usage("ethernal account recover --output-dir DIR [--count N] [--start-index N] [--passphrase-file PATH] [--mnemonic-passphrase [VALUE] | --mnemonic-passphrase-file PATH]")
         .long_about(
             "Reads an existing BIP-39 mnemonic from an interactive TTY prompt or piped stdin,\n\
              validates word membership and checksum (12/15/18/21/24 words), then derives and\n\
@@ -140,10 +141,13 @@ pub fn run_recover(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError>
 
 /// Builds a validated [`AccountConfig`] from parsed flags.
 ///
-/// Validation order mirrors [`crate::key_cli::load_config`]: count → start-index
+/// Validation order mirrors [`crate::validator_cli::load_config`]: count → start-index
 /// → index-range overflow → output-dir → mnemonic-passphrase form →
-/// passphrase-env, then confirmation banner. Bad `--count` / overflowing
+/// passphrase-file, then confirmation banner. Bad `--count` / overflowing
 /// range / unwritable `--output-dir` → exit 2.
+///
+/// I-1: keystore passphrase file is **not** read here — only the path is
+/// captured. The actual `FileSource` read fires later in `finish_from_mnemonic`.
 pub fn load_config(
     m: &ArgMatches,
     mode: AccountMode,
@@ -164,7 +168,7 @@ pub fn load_config(
     // 2b. Index range must fit u32 before any ceremony/write.
     // Inclusive last index is start_index + count - 1; count ≥ 1 here.
     if start_index.checked_add(count - 1).is_none() {
-        return Err(AppError::exit2("--start-index + --count overflows u32"));
+        return Err(AppError::exit2(START_INDEX_OVERFLOW_MSG));
     }
 
     // 3. --output-dir: required existing writable directory.
@@ -175,24 +179,28 @@ pub fn load_config(
     if output_dir.is_empty() {
         return Err(AppError::exit2("--output-dir: required flag not set"));
     }
-    validate_output_dir(&output_dir).map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
-    crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
+    fs_util::validate_output_dir(&output_dir)
+        .map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
+    fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
 
-    // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ env).
-    let mnemonic_passphrase = resolve_mnemonic_passphrase(m)?;
+    // 4. Mnemonic passphrase form (XOR via conflicts_with: raw/prompt ⊥ file).
+    // File form reads here (I-2: permission WARNING erased on `new`, durable on
+    // `recover` — same property as the symlinked-output-dir WARNING above).
+    let mnemonic_passphrase = parse_mnemonic_passphrase_form(m, banner_out)?;
 
-    // 5. Keystore passphrase env var name (empty → runtime TTY prompt).
-    let passphrase_env = m
-        .get_one::<String>("passphrase-env")
-        .cloned()
-        .unwrap_or_default();
+    // 5. Keystore passphrase file path (None → runtime TTY prompt). Path only —
+    // content is read later via FileSource in finish_from_mnemonic (I-1).
+    let passphrase_file = match m.get_one::<String>("passphrase-file") {
+        Some(v) => Some(fs_util::secret_file_arg("--passphrase-file", v)?),
+        None => None,
+    };
 
     let cfg = AccountConfig {
         mode,
         count,
         output_dir,
         start_index,
-        passphrase_env,
+        passphrase_file,
         mnemonic_passphrase,
     };
 
@@ -228,32 +236,30 @@ fn print_banner(w: &mut dyn Write, cfg: &AccountConfig) {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
+    use crate::test_support::Tmp;
     use zeroize::Zeroizing;
 
-    /// Serializes tests that mutate process environment.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// A temp directory that removes itself on drop.
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn new() -> Tmp {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let p =
-                std::env::temp_dir().join(format!("account-cli-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
+    /// Write secret fixture bytes at mode 0600 for unit tests (mirrors
+    /// `common::secret_file` for the bin unit-test seam).
+    fn write_secret(dir: &Tmp, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = dir.0.join(name);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
         }
-        fn str(&self) -> &str {
-            self.0.to_str().unwrap()
+        let mut f = opts.open(&path).expect("create secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .expect("chmod 0600");
         }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
+        use std::io::Write;
+        f.write_all(bytes).expect("write secret");
+        path
     }
 
     fn parse_new(args: &[&str]) -> Result<ArgMatches, String> {
@@ -318,7 +324,7 @@ mod tests {
 
     #[test]
     fn account_new_and_recover_parse() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         assert!(parse_new(&["--output-dir", dir.str()]).is_ok());
         assert!(parse_recover(&["--output-dir", dir.str()]).is_ok());
     }
@@ -347,37 +353,49 @@ mod tests {
 
     #[test]
     fn count_defaults_to_one() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let (cfg, banner) = load_new(&["--output-dir", dir.str()]).expect("ok");
         assert_eq!(cfg.count, 1);
         assert_eq!(cfg.mode, AccountMode::New);
         assert_eq!(cfg.start_index, 0);
         assert_eq!(cfg.output_dir, dir.str());
-        assert_eq!(cfg.passphrase_env, "");
+        assert_eq!(cfg.passphrase_file, None);
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
         assert!(banner.contains("ethernal account new:"));
         assert!(banner.contains("count=1"));
     }
 
     #[test]
-    fn count_and_passphrase_env_propagate() {
-        let dir = Tmp::new();
+    fn count_and_passphrase_file_propagate() {
+        let dir = Tmp::new("account-cli-test");
+        let pw = write_secret(&dir, "ks.pw", b"password1");
         let (cfg, _) = load_new(&[
             "--output-dir",
             dir.str(),
             "--count",
             "4",
-            "--passphrase-env",
-            "KS_PW",
+            "--passphrase-file",
+            pw.to_str().unwrap(),
         ])
         .expect("ok");
         assert_eq!(cfg.count, 4);
-        assert_eq!(cfg.passphrase_env, "KS_PW");
+        assert_eq!(cfg.passphrase_file.as_deref(), Some(pw.as_path()));
+    }
+
+    #[test]
+    fn passphrase_file_dash_is_exit2() {
+        let dir = Tmp::new("account-cli-test");
+        let err = load_new_err(&["--output-dir", dir.str(), "--passphrase-file", "-"]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("cannot be '-'") || err.to_string().contains("path cannot"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
     fn recover_start_index_default_and_set() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let (cfg, banner) = load_recover(&["--output-dir", dir.str()]).expect("ok");
         assert_eq!(cfg.start_index, 0);
         assert_eq!(cfg.mode, AccountMode::Recover);
@@ -401,7 +419,7 @@ mod tests {
     #[test]
     fn new_ignores_start_index_flag_absence() {
         // `account new` has no --start-index; config always reports 0.
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let (cfg, _) = load_new(&["--output-dir", dir.str()]).unwrap();
         assert_eq!(cfg.start_index, 0);
         assert!(parse_new(&["--output-dir", dir.str(), "--start-index", "1"]).is_err());
@@ -411,7 +429,7 @@ mod tests {
 
     #[test]
     fn bad_count_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let err = load_new_err(&["--output-dir", dir.str(), "--count", "0"]);
         assert_eq!(exit_code_for(&err), 2);
         assert!(err.to_string().contains("--count"));
@@ -421,7 +439,7 @@ mod tests {
 
     #[test]
     fn start_index_plus_count_overflow_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let err = load_recover_err(&[
             "--output-dir",
             dir.str(),
@@ -439,7 +457,7 @@ mod tests {
 
     #[test]
     fn start_index_max_with_count_one_ok() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let (cfg, _) = load_recover(&[
             "--output-dir",
             dir.str(),
@@ -463,7 +481,7 @@ mod tests {
 
     #[test]
     fn nonexistent_output_dir_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let missing = dir.0.join("no-such");
         let err = load_new_err(&["--output-dir", missing.to_str().unwrap()]);
         assert_eq!(exit_code_for(&err), 2);
@@ -472,7 +490,7 @@ mod tests {
 
     #[test]
     fn file_as_output_dir_is_exit2() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let file = dir.0.join("a-file");
         std::fs::write(&file, b"x").unwrap();
         let err = load_new_err(&["--output-dir", file.to_str().unwrap()]);
@@ -482,17 +500,17 @@ mod tests {
 
     #[test]
     fn validate_output_dir_negative() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let missing = dir.0.join("missing");
-        let err = validate_output_dir(missing.to_str().unwrap()).unwrap_err();
+        let err = fs_util::validate_output_dir(missing.to_str().unwrap()).unwrap_err();
         assert!(err.contains("does not exist"), "{err}");
 
         let file = dir.0.join("not-dir");
         std::fs::write(&file, b"x").unwrap();
-        let err = validate_output_dir(file.to_str().unwrap()).unwrap_err();
+        let err = fs_util::validate_output_dir(file.to_str().unwrap()).unwrap_err();
         assert!(err.contains("not a directory"), "{err}");
 
-        assert!(validate_output_dir(dir.str()).is_ok());
+        assert!(fs_util::validate_output_dir(dir.str()).is_ok());
     }
 
     #[cfg(unix)]
@@ -500,7 +518,7 @@ mod tests {
     fn recover_load_config_warns_on_symlinked_output_dir() {
         use std::os::unix::fs::symlink;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let real = dir.0.join("real-out");
         std::fs::create_dir(&real).unwrap();
         let link = dir.0.join("link-out");
@@ -516,11 +534,15 @@ mod tests {
             "0",
         ])
         .expect("ok");
-        let warning_lines: Vec<_> = banner.lines().filter(|l| l.contains("WARNING")).collect();
+        // Kind-specific: count the symlink banner warning, not every WARNING (FR-21 / R-3).
+        let warning_lines: Vec<_> = banner
+            .lines()
+            .filter(|l| l.contains("is a symlink"))
+            .collect();
         assert_eq!(
             warning_lines.len(),
             1,
-            "expected exactly one WARNING, got: {banner}"
+            "expected exactly one symlink WARNING, got: {banner}"
         );
         assert!(
             warning_lines[0].contains(link.to_str().unwrap()),
@@ -551,7 +573,7 @@ mod tests {
     fn unwritable_output_dir_is_exit2() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let locked = dir.0.join("locked");
         std::fs::create_dir(&locked).unwrap();
         let mut perms = std::fs::metadata(&locked).unwrap().permissions();
@@ -574,14 +596,14 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_absent_is_empty() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let (cfg, _) = load_new(&["--output-dir", dir.str()]).unwrap();
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
     }
 
     #[test]
     fn mnemonic_passphrase_raw_value() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let (cfg, _) =
             load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase", "TREZOR"]).unwrap();
         assert_eq!(
@@ -592,45 +614,74 @@ mod tests {
 
     #[test]
     fn mnemonic_passphrase_bare_is_prompt() {
-        let dir = Tmp::new();
+        let dir = Tmp::new("account-cli-test");
         let (cfg, _) = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase"]).unwrap();
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Prompt);
     }
 
     #[test]
-    fn mnemonic_passphrase_env_reads_value() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new();
-        let var = format!("ETHERNAL_TEST_ACCT_MNEMONIC_PW_{}", std::process::id());
-        std::env::set_var(&var, "from-env");
-        let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
-        std::env::remove_var(&var);
-        let (cfg, _) = result.expect("ok");
+    fn mnemonic_passphrase_file_reads_value() {
+        let dir = Tmp::new("account-cli-test");
+        let path = write_secret(&dir, "mp.pw", b"from-file");
+        let (cfg, _) = load_new(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            path.to_str().unwrap(),
+        ])
+        .expect("ok");
         match cfg.mnemonic_passphrase {
-            MnemonicPassphraseForm::Env { var: v, value } => {
-                assert_eq!(v, var);
-                assert_eq!(value.as_str(), "from-env");
+            MnemonicPassphraseForm::File { path: p, value } => {
+                assert_eq!(p, path.display().to_string());
+                assert_eq!(value.as_str(), "from-file");
             }
-            other => panic!("expected Env, got {other:?}"),
+            other => panic!("expected File, got {other:?}"),
         }
     }
 
     #[test]
-    fn mnemonic_passphrase_env_empty_value_accepted() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new();
-        let var = format!(
-            "ETHERNAL_TEST_ACCT_MNEMONIC_PW_EMPTY_{}",
-            std::process::id()
-        );
-        std::env::set_var(&var, "");
-        let result = load_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
-        std::env::remove_var(&var);
-        let (cfg, _) = result.expect("empty mnemonic passphrase is valid");
+    fn mnemonic_passphrase_file_empty_zero_bytes_accepted() {
+        let dir = Tmp::new("account-cli-test");
+        let path = write_secret(&dir, "mp-empty.pw", b"");
+        let (cfg, _) = load_new(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            path.to_str().unwrap(),
+        ])
+        .expect("empty mnemonic passphrase is valid");
         match cfg.mnemonic_passphrase {
-            MnemonicPassphraseForm::Env { value, .. } => assert_eq!(value.as_str(), ""),
-            other => panic!("expected Env, got {other:?}"),
+            MnemonicPassphraseForm::File { value, .. } => assert_eq!(value.as_str(), ""),
+            other => panic!("expected File, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mnemonic_passphrase_file_lone_newline_accepted() {
+        let dir = Tmp::new("account-cli-test");
+        let path = write_secret(&dir, "mp-nl.pw", b"\n");
+        let (cfg, _) = load_new(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            path.to_str().unwrap(),
+        ])
+        .expect("lone \\n is valid empty mnemonic passphrase");
+        match cfg.mnemonic_passphrase {
+            MnemonicPassphraseForm::File { value, .. } => assert_eq!(value.as_str(), ""),
+            other => panic!("expected File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mnemonic_passphrase_file_dash_is_exit2() {
+        let dir = Tmp::new("account-cli-test");
+        let err = load_new_err(&["--output-dir", dir.str(), "--mnemonic-passphrase-file", "-"]);
+        assert_eq!(exit_code_for(&err), 2);
+        assert!(
+            err.to_string().contains("cannot be '-'") || err.to_string().contains("path cannot"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
@@ -641,7 +692,7 @@ mod tests {
             count: 1,
             output_dir: "/out".into(),
             start_index: 0,
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mnemonic_passphrase: raw,
         };
         let dbg = format!("{cfg:?}");
@@ -653,53 +704,37 @@ mod tests {
     }
 
     #[test]
-    fn mnemonic_passphrase_env_unset_is_exit2() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new();
-        let var = format!(
-            "ETHERNAL_TEST_ACCT_MNEMONIC_PW_UNSET_{}",
-            std::process::id()
-        );
-        std::env::remove_var(&var);
-        let m = parse_new(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]).unwrap();
-        let mut banner = Vec::new();
-        let err = load_config(&m, AccountMode::New, &mut banner).unwrap_err();
-        assert_eq!(exit_code_for(&err), 2);
-        assert!(err.to_string().contains("is not set"));
-    }
-
-    #[test]
-    fn mnemonic_passphrase_raw_and_env_conflict() {
-        let dir = Tmp::new();
+    fn mnemonic_passphrase_raw_and_file_conflict() {
+        let dir = Tmp::new("account-cli-test");
         let err = parse_new(&[
             "--output-dir",
             dir.str(),
             "--mnemonic-passphrase",
             "x",
-            "--mnemonic-passphrase-env",
+            "--mnemonic-passphrase-file",
             "Y",
         ]);
-        assert!(err.is_err(), "raw and env must conflict");
+        assert!(err.is_err(), "raw and file must conflict");
     }
 
     #[test]
-    fn mnemonic_passphrase_bare_and_env_conflict() {
-        let dir = Tmp::new();
+    fn mnemonic_passphrase_bare_and_file_conflict() {
+        let dir = Tmp::new("account-cli-test");
         let err = parse_new(&[
             "--output-dir",
             dir.str(),
             "--mnemonic-passphrase",
-            "--mnemonic-passphrase-env",
+            "--mnemonic-passphrase-file",
             "Y",
         ]);
-        assert!(err.is_err(), "bare and env must conflict");
+        assert!(err.is_err(), "bare and file must conflict");
     }
 
-    // --- recover: same three forms (shared args; A4-2 F-12 both commands) ---
+    // --- recover: same four forms (shared args; A4-2 F-12 both commands) ---
 
     #[test]
-    fn recover_mnemonic_passphrase_three_forms_and_empty_default() {
-        let dir = Tmp::new();
+    fn recover_mnemonic_passphrase_four_forms_and_empty_default() {
+        let dir = Tmp::new("account-cli-test");
         let (cfg, _) = load_recover(&["--output-dir", dir.str()]).unwrap();
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Empty);
 
@@ -713,35 +748,40 @@ mod tests {
         let (cfg, _) = load_recover(&["--output-dir", dir.str(), "--mnemonic-passphrase"]).unwrap();
         assert_eq!(cfg.mnemonic_passphrase, MnemonicPassphraseForm::Prompt);
 
-        let _guard = ENV_LOCK.lock().unwrap();
-        let var = format!("ETHERNAL_TEST_ACCT_REC_MNEMONIC_PW_{}", std::process::id());
-        std::env::set_var(&var, "from-env");
-        let result = load_recover(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]);
-        std::env::remove_var(&var);
-        let (cfg, _) = result.expect("ok");
+        let path = write_secret(&dir, "rec-mp.pw", b"from-file");
+        let (cfg, _) = load_recover(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            path.to_str().unwrap(),
+        ])
+        .expect("ok");
         match cfg.mnemonic_passphrase {
-            MnemonicPassphraseForm::Env { var: v, value } => {
-                assert_eq!(v, var);
-                assert_eq!(value.as_str(), "from-env");
+            MnemonicPassphraseForm::File { path: p, value } => {
+                assert_eq!(p, path.display().to_string());
+                assert_eq!(value.as_str(), "from-file");
             }
-            other => panic!("expected Env, got {other:?}"),
+            other => panic!("expected File, got {other:?}"),
         }
     }
 
     #[test]
-    fn recover_mnemonic_passphrase_env_unset_is_exit2() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = Tmp::new();
-        let var = format!(
-            "ETHERNAL_TEST_ACCT_REC_MNEMONIC_PW_UNSET_{}",
-            std::process::id()
-        );
-        std::env::remove_var(&var);
-        let m =
-            parse_recover(&["--output-dir", dir.str(), "--mnemonic-passphrase-env", &var]).unwrap();
+    fn recover_mnemonic_passphrase_file_missing_is_exit2() {
+        let dir = Tmp::new("account-cli-test");
+        let missing = dir.0.join("no-such-mp.pw");
+        let m = parse_recover(&[
+            "--output-dir",
+            dir.str(),
+            "--mnemonic-passphrase-file",
+            missing.to_str().unwrap(),
+        ])
+        .unwrap();
         let mut banner = Vec::new();
         let err = load_config(&m, AccountMode::Recover, &mut banner).unwrap_err();
         assert_eq!(exit_code_for(&err), 2);
-        assert!(err.to_string().contains("is not set"));
+        assert!(
+            err.to_string().contains("--mnemonic-passphrase-file"),
+            "unexpected: {err}"
+        );
     }
 }

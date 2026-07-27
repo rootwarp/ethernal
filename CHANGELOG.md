@@ -45,30 +45,85 @@ its release notes remain on GitHub).
 > env vars now use the `ethernal` product name. Sections below that still say
 > `eth-deposit` are historical (pre-rename) unless noted.
 
-### ethernal (unreleased) — rename eth-deposit → ethernal
+### [ethernal 3.0.0] - 2026-07-28 — secret source flags: env → file
 
-#### Breaking
+**Breaking change** (no deprecation window; no `#[deprecated]`). The three CLI flags
+that took an environment **variable name** as the secret source are removed in favor
+of flags that take a **file path**. Library items `EnvSource` and
+`new_local_signer_from_env` are **retained** — only the CLI flags are removed
+(semver-major library removal is not implied).
 
-- **Binary:** `eth-deposit` → **`ethernal`** (`bins/ethernal`, `target/release/ethernal`).
-- **Crates / dirs:** packages `eth-deposit-{core,keystore,signer,tx}` and paths
-  `crates/{core,keystore,signer,tx}` → packages **`ethernal-*`** under
-  **`crates/ethernal-*`**.
-- **Env vars (keep `_TX_` middle segment):**
+#### Removed
 
-  | Old | New |
-  |---|---|
-  | `ETH_DEPOSIT_TX_*` | `ETHERNAL_TX_*` |
-  | `ETH_DEPOSIT_TX_PRIVATE_KEY` | `ETHERNAL_TX_PRIVATE_KEY` |
-  | `ETH_DEPOSIT_VERSION` / `_COMMIT` / `_DATE` | `ETHERNAL_VERSION` / `_COMMIT` / `_DATE` |
+- **`--passphrase-env VAR`** → migrate to **`--passphrase-file PATH`**
+  (`deposit gen`, `validator new`/`recover`, `account new`/`recover`).
+- **`--mnemonic-passphrase-env VAR`** → migrate to **`--mnemonic-passphrase-file PATH`**
+  (`validator`/`account` `new`/`recover`).
+- **`--private-key-env VAR`** (previously defaulted to `ETHERNAL_TX_PRIVATE_KEY`) →
+  migrate to **`--private-key-file PATH`** (`tx sign` / `tx run` with `--signer local`).
 
-- **Writability probe file:** `.eth-deposit-probe-<pid>` → `.ethernal-probe-<pid>`.
-- **GitHub repository (R6):** `rootwarp/eth-utils` → **`rootwarp/ethernal`**.
-
-No dual-accept of old binary/env names (tool still unreleased).
+**FR-24 zero-flag regression:** `ethernal tx sign --signer local` no longer works
+with no key flag. `--private-key-env` had `default_value(DEFAULT_PRIV_KEY_ENV)`, so
+a set `ETHERNAL_TX_PRIVATE_KEY` was enough; there is no defensible default *path*,
+so `--private-key-file` is now **required** when `--signer local` on both `tx sign`
+and `tx run`.
 
 ---
 
-### ethernal (unreleased) — `account` namespace (Web3 v3 EOA keystores)
+### [ethernal 3.0.0] - 2026-07-28 — validator keygen progress + BLS verification
+
+Purely **additive** for operators who keep the default path; one optional flag
+trades the strongest check for ~2× speed.
+
+#### Added
+
+- **Per-key phase progress on `validator new` / `validator recover`.** On a TTY,
+  stderr shows a live phase line (`deriving` / `checking` / `encrypting` /
+  `writing` / `verifying`) that is erased before each durable `keystore i/N:`
+  line, so scrollback shape is unchanged. Off-TTY, phases are silent; structured
+  log events fire per completed key; scripts parsing stderr still see only the
+  durable lines.
+- **C1–C4 BLS key verification (default on).** Before writing: secret → pubkey
+  consistency (C1), G1 point validity (C2), and a sign/verify round trip (C3).
+  After writing: decrypt the keystore and compare secret **and** `pubkey` field
+  (C4 — a second scrypt, ~0.3 s per key on Apple Silicon / ~310 ms pure-scrypt).
+  C1–C3 are mandatory and cannot be skipped.
+- **`--no-verify`** on both `validator new` and `validator recover` — skips
+  **only C4**. Emits one `WARNING:` line per run. Non-TTY logs carry
+  `verified=full` (default) or `verified=derived-only` (`--no-verify`).
+
+#### Documentation
+
+- `docs/USER-GUIDE.md`: `--no-verify` in the BLS flags table; **What is verified**
+  (C1–C4 table, wall-clock cost with named hardware, what the flag does not
+  skip); progress-output note under `validator new`.
+
+---
+
+### [ethernal 3.0.0] - 2026-07-28 — CLI namespace restructure
+
+#### Breaking Changes
+
+Top-level verbs are nested under four namespaces: **`validator`**, **`account`**,
+**`deposit`**, and **`tx`**. Flags, defaults, exit codes, stdin/stdout contracts,
+and fixture/golden behavior are unchanged. **No back-compat aliases** ship for
+the old top-level paths (D5) — scripts must use the nested commands.
+
+| Old | New |
+|---|---|
+| `gen` | `deposit gen` |
+| `build` | `deposit build` |
+| `sign` | `tx sign` |
+| `send` | `tx send` |
+| `run` | `tx run` |
+| `key` (`new` / `recover`) | `validator` (`new` / `recover`) |
+
+`account` stays top-level (already namespaced). Group help: bare `deposit` /
+`tx` / `validator` / `account` print the group's subcommands and require a leaf.
+
+---
+
+### [ethernal 2.0.0] - 2026-07-19 — `account` namespace (Web3 v3 EOA keystores)
 
 Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
 
@@ -105,19 +160,45 @@ Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
 
 ---
 
+### [ethernal 1.1.0] - 2026-07-18 — rename eth-deposit → ethernal
+
+#### Breaking
+
+- **Binary:** `eth-deposit` → **`ethernal`** (`bins/ethernal`, `target/release/ethernal`).
+- **Crates / dirs:** packages `eth-deposit-{core,keystore,signer,tx}` and paths
+  `crates/{core,keystore,signer,tx}` → packages **`ethernal-*`** under
+  **`crates/ethernal-*`**.
+- **Env vars (keep `_TX_` middle segment):**
+
+  | Old | New |
+  |---|---|
+  | `ETH_DEPOSIT_TX_*` | `ETHERNAL_TX_*` |
+  | `ETH_DEPOSIT_TX_PRIVATE_KEY` | `ETHERNAL_TX_PRIVATE_KEY` |
+  | `ETH_DEPOSIT_VERSION` / `_COMMIT` / `_DATE` | `ETHERNAL_VERSION` / `_COMMIT` / `_DATE` |
+
+- **Writability probe file:** `.eth-deposit-probe-<pid>` → `.ethernal-probe-<pid>`.
+- **GitHub repository (R6):** `rootwarp/eth-utils` → **`rootwarp/ethernal`**.
+
+No dual-accept of old binary/env names (the Rust binary had not shipped a tagged
+release at the time of the rename).
+
+---
+
 ## eth-deposit (historical section titles)
 
 ### eth-deposit (unreleased) — keygen + withdrawal credentials
 
 #### Added
 
-- **`ethernal key new`** — generates a fresh 24-word BIP-39 mnemonic (OS CSPRNG),
-  runs a TTY-only display-once + full re-entry ceremony, then writes EIP-2335 v4
-  scrypt signing keystores (`m/12381/3600/i/0/0`) under `--output-dir`. Non-TTY
-  stdin/stdout → exit 2 before any entropy is drawn.
-- **`ethernal key recover`** — rebuilds keystores from an existing 12–24-word
-  mnemonic (interactive TTY prompt or piped stdin). Supports `--start-index` /
-  `--count` for partial ranges. No ceremony (mnemonic already exists).
+- **`key new`** (top-level at the time; later `validator new`) — generates a
+  fresh 24-word BIP-39 mnemonic (OS CSPRNG), runs a TTY-only display-once + full
+  re-entry ceremony, then writes EIP-2335 v4 scrypt signing keystores
+  (`m/12381/3600/i/0/0`) under `--output-dir`. Non-TTY stdin/stdout → exit 2
+  before any entropy is drawn.
+- **`key recover`** (top-level at the time; later `validator recover`) — rebuilds
+  keystores from an existing 12–24-word mnemonic (interactive TTY prompt or
+  piped stdin). Supports `--start-index` / `--count` for partial ranges. No
+  ceremony (mnemonic already exists).
 - **Three-form BIP-39 mnemonic passphrase** on both key subcommands: raw
   `--mnemonic-passphrase VALUE`, `--mnemonic-passphrase-env VAR`, bare
   `--mnemonic-passphrase` (prompt; double-entry confirm on `key new`), or omit
@@ -132,9 +213,9 @@ Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
 
 #### Breaking
 
-- **`gen` requires an explicit withdrawal choice.** Invoking `ethernal gen`
-  without `--withdrawal-address` exits 2 with a clear message (require-choice
-  gate). There is no default / placeholder credential path for operators. Update
+- **`gen` requires an explicit withdrawal choice.** Invoking `gen` without
+  `--withdrawal-address` exits 2 with a clear message (require-choice gate).
+  There is no default / placeholder credential path for operators. Update
   scripts and goldens that previously called `gen` without the flag.
 
 #### Changed (hardening)
@@ -231,7 +312,7 @@ to do it.
 - `go/Makefile`: single `build` target (`bin/eth-deposit`) replaces `build`
   (gen) + `build-tx` (tx).
 - `go/docs/USER-GUIDE.md`: updated throughout to the merged command shape
-  (`ethernal gen`, `ethernal build`, etc.).
+  (top-level `gen`, `build`, etc. at the time of the merge).
 
 ---
 

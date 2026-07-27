@@ -8,12 +8,11 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 
 use common::{
-    deposit_fixture, ethernal, phase3_signed_golden, phase3_unsigned, Reply, Stub, TempDir,
-    PHASE3_KEY,
+    deposit_fixture, ethernal, phase3_signed_golden, phase3_unsigned, secret_file, Reply, Stub,
+    TempDir, PHASE3_KEY,
 };
 
 const HOLESKY_CHAIN_ID: u64 = 17000;
-const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 const MOCK_TX_HASH: &str = "0xdeadbeef00000000000000000000000000000000000000000000000000000001";
 
 // Go: TestE2E_LocalSigner_FullPipeline_NoRPC — `run` (build + sign) with no RPC.
@@ -21,14 +20,15 @@ const MOCK_TX_HASH: &str = "0xdeadbeef000000000000000000000000000000000000000000
 fn local_signer_full_pipeline_no_rpc() {
     let dir = TempDir::new("e2e-pipeline");
     let out_file = dir.join("signed.json");
+    let key_file = secret_file(&dir, "key.hex", PHASE3_KEY.as_bytes());
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["run", "--network", "holesky", "--input-file"])
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
         .arg(deposit_fixture())
         .args(["--signer", "local", "--output"])
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -61,15 +61,16 @@ fn local_signer_full_pipeline_no_rpc() {
 fn local_signer_build_sign_send_mock() {
     let dir = TempDir::new("e2e-bss");
     let signed_file = dir.join("signed.json");
+    let key_file = secret_file(&dir, "key.hex", PHASE3_KEY.as_bytes());
 
     // Step 1: sign the phase-3 unsigned tx.
     let sign_out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(phase3_unsigned())
         .arg("--output")
         .arg(&signed_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("sign");
     assert!(
@@ -86,7 +87,7 @@ fn local_signer_build_sign_send_mock() {
     });
 
     let send_out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed_file)
         .args(["--rpc-url", &stub.url, "--yes"])
         .output()
@@ -152,7 +153,7 @@ fn send_mock_receipt_polling() {
     let rec_file = rec_dir.join("receipt.json");
 
     let out = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", &stub.url, "--yes", "--receipt-output"])
         .arg(&rec_file)

@@ -6,7 +6,16 @@
 //! dependency. The expected address is derived through the public
 //! `LocalSigner::address()` accessor instead of geth's `PubkeyToAddress`.
 
-use ethernal_signer::{new_local_signer_from_env, new_local_signer_from_hex, Signer, SignerError};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use ethernal_signer::SecretFileError;
+use ethernal_signer::{
+    new_local_signer_from_env, new_local_signer_from_file, new_local_signer_from_hex, Signer,
+    SignerError,
+};
 use ethernal_tx::UnsignedTx;
 
 /// A valid deterministic 32-byte secp256k1 scalar (Go: validHexKey).
@@ -331,4 +340,176 @@ fn local_signer_sign_various_chain_ids() {
         );
         let _ = s.close();
     }
+}
+
+// --- F2-2: new_local_signer_from_file (FR-7, FR-26) ---
+
+/// Unique temp directory cleaned up on drop (no tempfile dependency).
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ethernal-signer-local-{label}-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("create temp dir");
+        TempDir { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn write_file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let p = self.path.join(name);
+        fs::write(&p, bytes).expect("write temp file");
+        p
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn from_file(path: &Path) -> Result<ethernal_signer::LocalSigner, SignerError> {
+    let mut sink = Vec::new();
+    new_local_signer_from_file(path, &mut sink)
+}
+
+/// FR-7: valid key with no newline, `\n`, `\r\n`, and surrounding spaces/tabs
+/// all produce the same address.
+#[test]
+fn new_local_signer_from_file_whitespace_variants_same_address() {
+    let dir = TempDir::new("ws");
+    let bare = dir.write_file("bare", VALID_KEY_HEX.as_bytes());
+    let nl = dir.write_file("nl", format!("{VALID_KEY_HEX}\n").as_bytes());
+    let crlf = dir.write_file("crlf", format!("{VALID_KEY_HEX}\r\n").as_bytes());
+    let padded = dir.write_file("padded", format!(" \t{VALID_KEY_HEX} \t\n").as_bytes());
+
+    let want = {
+        let s = from_file(&bare).expect("bare key file");
+        let addr = s.address().expect("address");
+        let _ = s.close();
+        addr
+    };
+
+    for (name, path) in [("nl", &nl), ("crlf", &crlf), ("padded", &padded)] {
+        let s = from_file(path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let got = s.address().expect("address");
+        assert_eq!(got, want, "{name}: address must match bare key file");
+        let _ = s.close();
+    }
+}
+
+/// Empty file → hex-length InvalidKey, not a file-policy KeyFile error.
+#[test]
+fn new_local_signer_from_file_empty_is_hex_length_error() {
+    let dir = TempDir::new("empty");
+    let path = dir.write_file("empty", b"");
+    let err = from_file(&path).expect_err("empty file must fail");
+    assert!(
+        matches!(err.sentinel(), SignerError::InvalidKey),
+        "want InvalidKey (hex length), got {err:?}"
+    );
+    assert!(
+        !matches!(err, SignerError::KeyFile(_)),
+        "empty must not be KeyFile policy error, got {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("expected 32-byte") || msg.contains("64 hex"),
+        "want hex-length message, got: {msg}"
+    );
+}
+
+/// Not-found path → KeyFile(NotFound); rendered error names path, not content.
+#[test]
+fn new_local_signer_from_file_not_found_is_keyfile() {
+    let dir = TempDir::new("missing");
+    let path = dir.path().join("no-such-key-file");
+    let err = from_file(&path).expect_err("missing must fail");
+    match &err {
+        SignerError::KeyFile(SecretFileError::NotFound { path: p }) => {
+            assert!(
+                p.contains("no-such-key-file"),
+                "NotFound path field must name the path, got {p:?}"
+            );
+        }
+        other => panic!("want KeyFile(NotFound), got {other:?}"),
+    }
+    let msg = err.to_string();
+    assert!(
+        msg.contains(&path.display().to_string()),
+        "Display must name path, got: {msg}"
+    );
+}
+
+/// Permission-denied with distinctive file contents: error names path, never
+/// the sentinel bytes written into the unreadable file.
+#[cfg(unix)]
+#[test]
+fn new_local_signer_from_file_permission_denied_no_content_leak() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // SAFETY: getuid has no preconditions.
+    if unsafe { libc_getuid() } == 0 {
+        // Root bypasses mode 000; skip.
+        return;
+    }
+
+    let dir = TempDir::new("perm");
+    // Distinctive sentinel that must never appear in the rendered error.
+    const SENTINEL: &str = "SENTINEL_KEY_BYTES_f2_2_9f3a_never_in_error";
+    let path = dir.write_file("locked", SENTINEL.as_bytes());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let err = from_file(&path).expect_err("mode 0000 must fail");
+    match &err {
+        SignerError::KeyFile(SecretFileError::PermissionDenied { path: p }) => {
+            assert!(
+                p.contains("locked"),
+                "PermissionDenied path field must name the path, got {p:?}"
+            );
+        }
+        other => panic!("want KeyFile(PermissionDenied), got {other:?}"),
+    }
+    let msg = err.to_string();
+    assert!(
+        msg.contains(&path.display().to_string()),
+        "Display must name path, got: {msg}"
+    );
+    assert!(
+        !msg.contains(SENTINEL),
+        "Display must not leak file contents, got: {msg}"
+    );
+
+    // Restore so TempDir can clean up.
+    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+}
+
+/// `new_local_signer_from_env` remains present and functional (M-5 / FR-26).
+#[test]
+fn new_local_signer_from_env_still_present() {
+    std::env::set_var("TEST_LOCAL_SIGNER_KEY_F2_2", VALID_KEY_HEX);
+    let s = new_local_signer_from_env("TEST_LOCAL_SIGNER_KEY_F2_2").expect("from_env retained");
+    let _ = s.address().expect("address");
+    let _ = s.close();
+    std::env::remove_var("TEST_LOCAL_SIGNER_KEY_F2_2");
+}
+
+#[cfg(unix)]
+extern "C" {
+    #[link_name = "getuid"]
+    fn libc_getuid() -> u32;
 }

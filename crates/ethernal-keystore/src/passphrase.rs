@@ -1,5 +1,5 @@
-//! Passphrase sources: a named environment variable and an interactive
-//! terminal prompt.
+//! Passphrase sources: a named environment variable, a secret file, and an
+//! interactive terminal prompt.
 //!
 //! Ported from `go/internal/keystore/passphrase.go`. The trait abstracts where
 //! the passphrase comes from so the loader can be tested without a TTY or a
@@ -7,6 +7,8 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use zeroize::Zeroizing;
@@ -60,6 +62,75 @@ impl PassphraseSource for EnvSource {
                 var: self.var_name.clone(),
             }),
         }
+    }
+}
+
+/// A [`PassphraseSource`] that reads the passphrase from a file.
+///
+/// The whole secret-file policy comes from
+/// [`ethernal_secretfile::read_secret_line`]: symlinks followed, directories
+/// rejected, 4 KiB read cap, one trailing `\n` stripped and any residual `\r`
+/// or `\n` refused, UTF-8 validated. At most **one** loose-permission WARNING
+/// is emitted per source, however many times `read` is called (FR-17, FR-21).
+///
+/// An empty file is [`KeystoreError::PassphraseFileEmpty`], mirroring
+/// [`KeystoreError::EnvVarEmpty`] for the source this replaces (FR-18).
+pub struct FileSource {
+    path: PathBuf,
+    warn_out: Mutex<Box<dyn Write + Send>>,
+    warned: AtomicBool,
+}
+
+impl FileSource {
+    /// Returns a source that reads `path` via the secret-file policy.
+    ///
+    /// `warn_out` is typically `std::io::stderr()`; pass `std::io::sink()` for
+    /// none. The writer is injected (not stderr internally) so warning counts
+    /// are deterministic under test — same pattern as [`TermPromptSource`].
+    pub fn new<W: Write + Send + 'static>(path: impl Into<PathBuf>, warn_out: W) -> Self {
+        FileSource {
+            path: path.into(),
+            warn_out: Mutex::new(Box::new(warn_out)),
+            warned: AtomicBool::new(false),
+        }
+    }
+
+    /// The path, for messages. Never the contents.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+// F5's `&(dyn PassphraseSource + Sync)` bound depends on this (R-10).
+fn _assert_sync<T: Sync>() {}
+#[allow(dead_code)]
+fn _assert_file_source_is_sync() {
+    _assert_sync::<FileSource>();
+}
+
+impl PassphraseSource for FileSource {
+    fn read(&self) -> Result<Vec<u8>, KeystoreError> {
+        // Warning latch: after the first read, sink subsequent permission
+        // warnings so "exactly one WARNING" is a property of the type.
+        let already = self.warned.swap(true, Ordering::Relaxed);
+        let s = if already {
+            ethernal_secretfile::read_secret_line(&self.path, &mut io::sink())?
+        } else {
+            let mut writer = self.warn_out.lock().expect("warn_out lock poisoned");
+            ethernal_secretfile::read_secret_line(&self.path, &mut *writer)?
+        };
+
+        if s.is_empty() {
+            return Err(KeystoreError::PassphraseFileEmpty {
+                path: self.path.display().to_string(),
+            });
+        }
+
+        // FR-23b: boundary copy never reallocates; drop Zeroizing immediately.
+        let mut out = Vec::with_capacity(s.len());
+        out.extend_from_slice(s.as_bytes());
+        drop(s);
+        Ok(out)
     }
 }
 
@@ -164,7 +235,7 @@ pub const KEYSTORE_PASSPHRASE_MIN_LEN: usize = 8;
 /// ([`normalize_passphrase`]: NFKD + strip control codes), so control-character
 /// padding cannot satisfy F-7 while yielding a short effective KDF password.
 ///
-/// Applied by keygen to the `--passphrase-env` path after reading via
+/// Applied by keygen to the `--passphrase-file` path after reading via
 /// [`EnvSource`]. Never called from `gen`'s decrypt path — short decrypt
 /// passphrases remain valid there.
 ///
@@ -287,7 +358,7 @@ mod tests {
     // Go: TestTermPromptSource_NoTTY
     //
     // Forces the controlling-terminal open to fail and asserts the returned
-    // error is tagged NoTty and points the user at the --passphrase-env escape
+    // error is tagged NoTty and points the user at the --passphrase-file escape
     // hatch. The opener is injected so the test never touches the real
     // /dev/tty.
     #[test]
@@ -304,8 +375,8 @@ mod tests {
         );
         let msg = err.to_string();
         assert!(
-            msg.contains("--passphrase-env"),
-            "Read() error = {msg:?}, want message naming --passphrase-env",
+            msg.contains("--passphrase-file"),
+            "Read() error = {msg:?}, want message naming --passphrase-file",
         );
         // The underlying open error should be surfaced for diagnostics.
         assert!(
@@ -547,6 +618,135 @@ mod tests {
         assert!(
             !prompts.contains("Confirm"),
             "TermPromptSource must not confirm, got: {prompts:?}",
+        );
+    }
+
+    // --- FileSource (F2-1) ---
+
+    /// Unique temp directory cleaned up on drop (no tempfile dependency).
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            use std::sync::atomic::AtomicU64;
+            use std::time::{SystemTime, UNIX_EPOCH};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "ethernal-keystore-filesource-{label}-{}-{nanos}-{n}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            TempDir { path }
+        }
+
+        fn write_file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+            let p = self.path.join(name);
+            std::fs::write(&p, bytes).expect("write temp file");
+            p
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// Compile-time `FileSource: Sync` proof (F5's dyn bound depends on it).
+    #[test]
+    fn file_source_is_sync() {
+        _assert_sync::<FileSource>();
+    }
+
+    #[test]
+    fn file_source_reads_passphrase_strips_one_nl() {
+        let dir = TempDir::new("ok");
+        let path = dir.write_file("pw", b"password1\n");
+        let src = FileSource::new(path, io::sink());
+        let got = src.read().expect("read");
+        assert_eq!(got, b"password1");
+    }
+
+    #[test]
+    fn file_source_empty_and_lone_newline_are_passphrase_file_empty() {
+        let dir = TempDir::new("empty");
+        let empty = dir.write_file("empty", b"");
+        let lone = dir.write_file("lone", b"\n");
+
+        let err = FileSource::new(empty.clone(), io::sink())
+            .read()
+            .expect_err("0-byte file must be PassphraseFileEmpty");
+        match &err {
+            KeystoreError::PassphraseFileEmpty { path } => {
+                assert_eq!(path, &empty.display().to_string());
+            }
+            other => panic!("expected PassphraseFileEmpty, got {other:?}"),
+        }
+
+        let err = FileSource::new(lone.clone(), io::sink())
+            .read()
+            .expect_err("lone \\n must be PassphraseFileEmpty");
+        match &err {
+            KeystoreError::PassphraseFileEmpty { path } => {
+                assert_eq!(path, &lone.display().to_string());
+            }
+            other => panic!("expected PassphraseFileEmpty, got {other:?}"),
+        }
+    }
+
+    /// Five reads on one FileSource over a 0644 file → exactly one
+    /// "file permissions" line (warning latch).
+    #[cfg(unix)]
+    #[test]
+    fn file_source_warning_latch_five_reads() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new("warn-latch");
+        let path = dir.write_file("loose", b"password1\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let src = FileSource::new(path, SharedBuf(Arc::clone(&sink)));
+
+        for i in 0..5 {
+            let got = src.read().unwrap_or_else(|e| panic!("read {i}: {e}"));
+            assert_eq!(got, b"password1", "read {i}");
+        }
+
+        let text = String::from_utf8(sink.lock().unwrap().clone()).unwrap();
+        let perm_lines: Vec<_> = text
+            .lines()
+            .filter(|l| l.contains("file permissions"))
+            .collect();
+        assert_eq!(
+            perm_lines.len(),
+            1,
+            "exactly one file-permissions line across five reads, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn file_source_maps_not_found() {
+        let dir = TempDir::new("missing");
+        let path = dir.path.join("no-such-file");
+        let err = FileSource::new(path, io::sink())
+            .read()
+            .expect_err("missing must fail");
+        assert!(
+            matches!(
+                err,
+                KeystoreError::PassphraseFile(
+                    ethernal_secretfile::SecretFileError::NotFound { .. }
+                )
+            ),
+            "expected PassphraseFile(NotFound), got {err:?}"
         );
     }
 }

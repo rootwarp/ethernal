@@ -19,7 +19,7 @@ use common::anvil::Anvil;
 #[cfg(unix)]
 use common::{
     ethernal, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase, hoodi_pubkey,
-    write_temp_signed_tx, PHASE3_KEY,
+    secret_file, write_temp_signed_tx, TempDir, PHASE3_KEY,
 };
 
 /// Hoodi chain id (A-3 / verify skill).
@@ -37,11 +37,6 @@ const FUND_WEI_HEX: &str = "0x21e19e0c9bab2400000";
 /// 32 ETH in wei — one deposit's value transfer.
 #[cfg(unix)]
 const THIRTY_TWO_ETH_WEI: u128 = 32_000_000_000_000_000_000;
-
-#[cfg(unix)]
-const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
-#[cfg(unix)]
-const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 
 /// Smoke: spawn anvil on hoodi chain-id, round-trip `eth_chainId`, Drop reaps.
 #[cfg(unix)]
@@ -84,9 +79,10 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
     anvil.set_balance(PHASE3_SENDER, FUND_WEI_HEX);
 
     // --- gen --dry-run (hoodi fixtures) ---
+    let pw_dir = TempDir::new("e2e-live-pw");
+    let pw_path = secret_file(&pw_dir, "passphrase.txt", hoodi_passphrase().as_bytes());
     let gen = ethernal()
-        .env(PASS_ENV, hoodi_passphrase())
-        .args(["gen", "--keystore-dir"])
+        .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
             "--pubkeys",
@@ -94,11 +90,10 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
             "--network",
             "hoodi",
             "--dry-run",
-            "--passphrase-env",
-            PASS_ENV,
-            "--withdrawal-address",
-            PHASE3_SENDER,
+            "--passphrase-file",
         ])
+        .arg(&pw_path)
+        .args(["--withdrawal-address", PHASE3_SENDER])
         .output()
         .expect("spawn gen");
     assert!(
@@ -110,6 +105,7 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
     // --- build --input-file - (stdin from gen) ---
     let build = run_with_stdin(
         ethernal().args([
+            "deposit",
             "build",
             "--network",
             "hoodi",
@@ -134,16 +130,20 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
     let bal_before = eth_balance(&anvil, deposit_to);
 
     // --- sign --input - | send --yes --input - --rpc-url <anvil> --wait-for-receipt ---
+    let key_dir = TempDir::new("e2e-live-key");
+    let key_path = secret_file(&key_dir, "key.hex", PHASE3_KEY.as_bytes());
     let sign = run_with_stdin(
-        ethernal().env(KEY_ENV, PHASE3_KEY).args([
-            "sign",
-            "--signer",
-            "local",
-            "--input",
-            "-",
-            "--private-key-env",
-            KEY_ENV,
-        ]),
+        ethernal()
+            .args([
+                "tx",
+                "sign",
+                "--signer",
+                "local",
+                "--input",
+                "-",
+                "--private-key-file",
+            ])
+            .arg(&key_path),
         &build.stdout,
     );
     assert!(
@@ -154,6 +154,7 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
 
     let send = run_with_stdin(
         ethernal().args([
+            "tx",
             "send",
             "--yes",
             "--input",
@@ -211,7 +212,7 @@ fn e2e_live_build_resolves_nonce_from_anvil() {
     anvil.set_nonce(PHASE3_SENDER, want_nonce);
 
     let out = ethernal()
-        .args(["build", "--network", "hoodi", "--input-file"])
+        .args(["deposit", "build", "--network", "hoodi", "--input-file"])
         .arg(hoodi_expected_deposit_data())
         .args(["--rpc-url", anvil.url(), "--from", PHASE3_SENDER])
         .output()
@@ -251,7 +252,7 @@ fn e2e_live_send_wrong_network_name_exit4() {
     let (_dir, signed) = write_temp_signed_tx();
 
     let mut child = ethernal()
-        .args(["send", "--input"])
+        .args(["tx", "send", "--input"])
         .arg(&signed)
         .args(["--rpc-url", anvil.url()])
         // no --yes → interactive confirm

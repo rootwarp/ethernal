@@ -16,10 +16,11 @@ mod rlp;
 mod types;
 
 pub use errors::SignerError;
+pub use ethernal_secretfile::SecretFileError;
 pub use ledger::LedgerSigner;
 pub use local::{
-    eip55_checksum, new_local_signer_from_env, new_local_signer_from_hex, secret_to_address,
-    LocalSigner, Signer,
+    eip55_checksum, new_local_signer_from_env, new_local_signer_from_file,
+    new_local_signer_from_hex, secret_to_address, LocalSigner, Signer,
 };
 pub use types::SignedTx;
 

@@ -28,7 +28,7 @@ use ethernal_keystore::decrypt_v3;
 use ethernal_keystore::encrypt_v3::{v3_filename, ScryptParams};
 use ethernal_signer::{eip55_checksum, secret_to_address};
 
-use common::{crate_testdata, ethernal, TempDir};
+use common::{crate_testdata, ethernal, secret_file, TempDir};
 
 // --- chain anchor: BIP-39 abandon×11 about + empty passphrase = cast vector ---
 
@@ -79,7 +79,8 @@ fn load_fixture() -> CrossRecoveryFixture {
 /// Run `account recover` with the fixed mnemonic over stdin (empty mnemonic
 /// passphrase — no `--mnemonic-passphrase*` flag). Returns (stdout, stderr).
 fn run_account_recover(out_dir: &Path, count: u32) -> (String, String, bool) {
-    let ks_var = format!("ETHERNAL_A5_KS_{}", std::process::id());
+    let secrets = TempDir::new("a5-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
 
     let mut child = ethernal()
         .args(["account", "recover", "--output-dir"])
@@ -89,10 +90,9 @@ fn run_account_recover(out_dir: &Path, count: u32) -> (String, String, bool) {
             &count.to_string(),
             "--start-index",
             "0",
-            "--passphrase-env",
-            &ks_var,
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
         ])
-        .env(&ks_var, KEYSTORE_PW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -105,6 +105,7 @@ fn run_account_recover(out_dir: &Path, count: u32) -> (String, String, bool) {
     }
 
     let out = child.wait_with_output().expect("wait account recover");
+    drop(secrets);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     (stdout, stderr, out.status.success())
@@ -593,8 +594,8 @@ fn account_recover_help_has_no_entropy_or_time_flag() {
         "account recover must not expose a time/timestamp flag (S-4): {help}"
     );
     assert!(
-        help.contains("--mnemonic-passphrase"),
-        "expected mnemonic-passphrase in help: {help}"
+        help.contains("--mnemonic-passphrase-file"),
+        "expected mnemonic-passphrase-file in help: {help}"
     );
     assert!(
         help.contains("--start-index"),
@@ -655,4 +656,163 @@ fn account_recover_symlinked_output_dir_warns_and_writes() {
         1,
         "keystores must also be visible via symlink path"
     );
+}
+
+// ---------------------------------------------------------------------------
+// F4-3 / FR-12 — S-C byte-rule matrix (v3 keystore passphrase, raw bytes)
+// ---------------------------------------------------------------------------
+
+/// Distinctive S-C keystore passphrase (≥ KEYSTORE_PASSPHRASE_MIN_LEN after FR-8).
+/// Plan matrix writes "pw"; e2e needs ≥8 bytes for MinLenPassphrase.
+const SC_PASSPHRASE: &str = "F43_SC_pw";
+
+/// Run `account recover` with a custom keystore passphrase file (bytes written
+/// via `common::secret_file` — no terminator added). Returns (stderr, success, exit).
+fn run_account_recover_ks(
+    out_dir: &Path,
+    count: u32,
+    ks_bytes: &[u8],
+) -> (String, bool, Option<i32>) {
+    let secrets = TempDir::new("f4-3-sc-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", ks_bytes);
+
+    let mut child = ethernal()
+        .args(["account", "recover", "--output-dir"])
+        .arg(out_dir)
+        .args([
+            "--count",
+            &count.to_string(),
+            "--start-index",
+            "0",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn account recover");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+
+    let out = child.wait_with_output().expect("wait account recover");
+    drop(secrets);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (stderr, out.status.success(), out.status.code())
+}
+
+/// FR-12 S-C: `pw` vs `pw\n` → same effective passphrase after FR-8 → mutually
+/// decryptable v3 keystores (decrypt either keystore with the stripped bytes).
+/// Production scrypt; `--count 1`.
+#[test]
+fn account_recover_sc_trailing_nl_identical_decryptable_v3() {
+    let dir_plain = TempDir::new("f4-3-sc-plain");
+    let dir_nl = TempDir::new("f4-3-sc-nl");
+
+    let (stderr_plain, ok_plain, _) =
+        run_account_recover_ks(dir_plain.path(), 1, SC_PASSPHRASE.as_bytes());
+    assert!(
+        ok_plain,
+        "account recover (plain pw) failed: {stderr_plain}"
+    );
+    let nl_bytes = format!("{SC_PASSPHRASE}\n");
+    let (stderr_nl, ok_nl, _) = run_account_recover_ks(dir_nl.path(), 1, nl_bytes.as_bytes());
+    assert!(ok_nl, "account recover (pw\\n) failed: {stderr_nl}");
+
+    let files_plain = v3_files(dir_plain.path());
+    let files_nl = v3_files(dir_nl.path());
+    assert_eq!(files_plain.len(), 1, "plain: {files_plain:?}");
+    assert_eq!(files_nl.len(), 1, "nl: {files_nl:?}");
+
+    let raw_plain = std::fs::read(&files_plain[0]).expect("read plain keystore");
+    let raw_nl = std::fs::read(&files_nl[0]).expect("read nl keystore");
+    let pw = SC_PASSPHRASE.as_bytes();
+
+    // Mutual decrypt: each keystore opens with the FR-8-stripped passphrase.
+    let secret_from_plain = decrypt_v3(&raw_plain, pw).expect("decrypt plain keystore with pw");
+    let secret_from_nl = decrypt_v3(&raw_nl, pw).expect("decrypt nl keystore with pw");
+    assert_eq!(
+        secret_from_plain.as_slice(),
+        secret_from_nl.as_slice(),
+        "pw and pw\\n must yield the same EOA secret (identical derived key)"
+    );
+
+    // Cross-check via address fields (structural identity of the recovered account).
+    let v_plain: serde_json::Value = serde_json::from_slice(&raw_plain).unwrap();
+    let v_nl: serde_json::Value = serde_json::from_slice(&raw_nl).unwrap();
+    assert_eq!(
+        v_plain["address"].as_str(),
+        v_nl["address"].as_str(),
+        "addresses must match"
+    );
+    let derived = secret_to_address(&secret_from_plain).expect("address");
+    assert_eq!(hex::encode(derived), v_plain["address"].as_str().unwrap());
+}
+
+/// FR-12 / FR-9 S-C CR rows: `pw\r`, `pw\r\n`, `pw\r\r\n` each exit 2.
+///
+/// This row — not S-B — is the automated evidence that FR-9's widened residual
+/// clause (reject every residual `\r`) is live. S-B passes under
+/// `normalize_passphrase` whether or not FR-8/FR-9 exist.
+#[test]
+fn account_recover_sc_cr_shapes_exit2() {
+    // Distinctive sentinel so a content leak is unambiguous (M-3).
+    const SENTINEL: &str = "F43_SC_pw";
+    for (label, bytes) in [
+        ("cr", &b"F43_SC_pw\r"[..]),
+        ("crlf", &b"F43_SC_pw\r\n"[..]),
+        ("crcrlf", &b"F43_SC_pw\r\r\n"[..]),
+    ] {
+        // Comment required by F4-3 acceptance: this row, not S-B, is the evidence
+        // FR-9's widened clause is live — do not delete as "duplicate coverage".
+        let dir = TempDir::new(&format!("f4-3-sc-{label}"));
+        let secrets = TempDir::new(&format!("f4-3-sc-s-{label}"));
+        let ks_path = secret_file(&secrets, "ks.pw", bytes);
+        let path_str = ks_path.to_str().unwrap().to_owned();
+
+        let mut child = ethernal()
+            .args(["account", "recover", "--output-dir"])
+            .arg(dir.path())
+            .args([
+                "--count",
+                "1",
+                "--passphrase-file",
+                ks_path.to_str().unwrap(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        {
+            let mut stdin = child.stdin.take().expect("stdin");
+            writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+        }
+        let out = child.wait_with_output().expect("wait");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "S-C {label}: expected exit 2; stderr={stderr}"
+        );
+        assert!(
+            stderr.contains("carriage return"),
+            "S-C {label}: message must name shape 'carriage return', got: {stderr}"
+        );
+        assert!(
+            stderr.contains(&path_str),
+            "S-C {label}: message must name path {path_str}, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains(SENTINEL),
+            "S-C {label}: passphrase content leaked into error: {stderr}"
+        );
+        assert!(
+            v3_files(dir.path()).is_empty(),
+            "S-C {label}: must not write a keystore on CR reject"
+        );
+    }
 }

@@ -1,6 +1,6 @@
 //! Binary-driven port of `cmd/ethernal/sign_test.go`. Go swapped `app.Reader`
-//! for stdin and generated fresh keys; here the binary reads the key from an env
-//! var and stdin is piped. A fixed synthetic key (`PHASE3_KEY`) stands in for
+//! for stdin and generated fresh keys; here the binary reads the key from a
+//! file and stdin is piped. A fixed synthetic key (`PHASE3_KEY`) stands in for
 //! Go's `generateTestPrivKey` — the assertions only check field presence and
 //! exit codes, not the derived address.
 
@@ -8,15 +8,19 @@ mod common;
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::Stdio;
 
-use common::{ethernal, unsigned_tx_golden, TempDir, PHASE3_KEY};
+use common::{ethernal, secret_file, unsigned_tx_golden, TempDir, PHASE3_KEY};
 
-const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
-
-fn unsigned_input(dir: &TempDir) -> std::path::PathBuf {
+fn unsigned_input(dir: &TempDir) -> PathBuf {
     let bytes = std::fs::read(unsigned_tx_golden()).expect("read unsigned golden");
     dir.write("unsigned.json", &bytes)
+}
+
+/// Writes `PHASE3_KEY` at mode 0600 and returns the path (FR-17 hygiene).
+fn phase3_key_file(dir: &TempDir) -> PathBuf {
+    secret_file(dir, "key.hex", PHASE3_KEY.as_bytes())
 }
 
 // Go: TestSignCommand_LocalSigner_Success
@@ -25,14 +29,15 @@ fn local_signer_success() {
     let dir = TempDir::new("sign-ok");
     let in_file = unsigned_input(&dir);
     let out_file = dir.join("signed.json");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .arg("--output")
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -48,42 +53,85 @@ fn local_signer_success() {
     }
 }
 
-// Go: TestSignCommand_LocalSigner_MissingEnvKey → exit 3, error names the env var.
+// F6-2 / architecture §11 divergence 4 / FR-13: missing key file → exit 2
+// (not 3 — that was the missing-env-var class). Names the path; no secret
+// contents in the message (there are none on disk; still assert the path only).
 #[test]
-fn local_signer_missing_env_key() {
+fn local_signer_missing_key_file() {
     let dir = TempDir::new("sign-missingkey");
     let in_file = unsigned_input(&dir);
+    let missing = dir.join("no-such-key.hex");
 
     let out = ethernal()
-        // KEY_ENV intentionally not set.
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&missing)
         .output()
         .expect("run");
-    assert_eq!(
-        out.status.code(),
-        Some(3),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr: {stderr}");
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains(KEY_ENV),
-        "error should name the env var"
+        stderr.contains(missing.to_str().unwrap()),
+        "error should name the path: {stderr}"
     );
 }
 
-// Go: TestSignCommand_LocalSigner_BadKey → exit 3, no key material in output.
+// F6-2 / FR-13: permission-denied key file → exit 2; path named, no contents.
+#[cfg(unix)]
+#[test]
+fn local_signer_unreadable_key_file_exit2() {
+    // SAFETY: getuid has no preconditions.
+    if unsafe { libc::getuid() } == 0 {
+        // Root bypasses mode 000; skip like crate-level secretfile tests.
+        return;
+    }
+
+    let dir = TempDir::new("sign-unreadable");
+    let in_file = unsigned_input(&dir);
+    // Distinctive sentinel that must never appear in the rendered error.
+    const SENTINEL: &str = "SENTINEL_SIGN_KEY_f6_2_never_in_error";
+    let key_file = secret_file(&dir, "locked.hex", SENTINEL.as_bytes());
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(&key_file)
+        .output()
+        .expect("run");
+    // Restore so TempDir can clean up.
+    let _ = std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600));
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "permission-denied key file must exit 2 (not 3); stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(key_file.to_str().unwrap()),
+        "error should name the path: {stderr}"
+    );
+    assert!(
+        !stderr.contains(SENTINEL),
+        "error must not leak file contents: {stderr}"
+    );
+}
+
+// Bad key hex → exit 3, no key material in output.
 #[test]
 fn local_signer_bad_key() {
     let dir = TempDir::new("sign-badkey");
     let in_file = unsigned_input(&dir);
+    let key_file = secret_file(&dir, "key.hex", b"0xdeadbeefnotahexkey");
 
     let out = ethernal()
-        .env(KEY_ENV, "0xdeadbeefnotahexkey")
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(3));
@@ -100,7 +148,7 @@ fn invalid_signer() {
     let in_file = unsigned_input(&dir);
 
     let out = ethernal()
-        .args(["sign", "--signer", "foo", "--input"])
+        .args(["tx", "sign", "--signer", "foo", "--input"])
         .arg(&in_file)
         .output()
         .expect("run");
@@ -111,23 +159,64 @@ fn invalid_signer() {
 #[test]
 fn missing_input() {
     let out = ethernal()
-        .args(["sign", "--signer", "local"])
+        .args(["tx", "sign", "--signer", "local"])
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(2));
 }
 
+// FR-24: --signer local with no --private-key-file → exit 2 naming the flag.
+#[test]
+fn private_key_file_required_for_local() {
+    let dir = TempDir::new("sign-nokeyflag");
+    let in_file = unsigned_input(&dir);
+
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--private-key-file"),
+        "error should name --private-key-file: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// FR-6: --private-key-file - → exit 2.
+#[test]
+fn private_key_file_dash_exit2() {
+    let dir = TempDir::new("sign-dashkey");
+    let in_file = unsigned_input(&dir);
+
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .args(["--private-key-file", "-"])
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--private-key-file"),
+        "error should name the flag: {stderr}"
+    );
+}
+
 // Go: TestSignCommand_InvalidInputJSON → exit 2.
+// R-4: exit-code assertion and body intent must stay (bad JSON before key use).
 #[test]
 fn invalid_input_json() {
     let dir = TempDir::new("sign-badinput");
     let bad = dir.write("garbage.json", b"this is not json at all");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&bad)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert_eq!(out.status.code(), Some(2));
@@ -138,13 +227,16 @@ fn invalid_input_json() {
 fn local_signer_stdin_input() {
     let dir = TempDir::new("sign-stdin");
     let out_file = dir.join("signed.json");
+    let key_file = phase3_key_file(&dir);
     let raw = std::fs::read(unsigned_tx_golden()).expect("read golden");
 
     let mut child = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input", "-", "--output"])
+        .args([
+            "tx", "sign", "--signer", "local", "--input", "-", "--output",
+        ])
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -166,12 +258,13 @@ fn local_signer_stdin_input() {
 fn local_signer_stdout_output() {
     let dir = TempDir::new("sign-stdout");
     let in_file = unsigned_input(&dir);
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -190,7 +283,7 @@ fn ledger_not_supported_exit3() {
     let in_file = unsigned_input(&dir);
 
     let out = ethernal()
-        .args(["sign", "--signer", "ledger", "--input"])
+        .args(["tx", "sign", "--signer", "ledger", "--input"])
         .arg(&in_file)
         .output()
         .expect("run");
@@ -202,57 +295,24 @@ fn ledger_not_supported_exit3() {
     );
 }
 
-// Go: TestSignCommand_InvalidEnvVarName_Lowercase → exit 2.
-#[test]
-fn invalid_env_var_name_lowercase() {
-    let dir = TempDir::new("sign-lower");
-    let in_file = unsigned_input(&dir);
-
-    let out = ethernal()
-        .args(["sign", "--signer", "local", "--input"])
-        .arg(&in_file)
-        .args(["--private-key-env", "my_lowercase_var"])
-        .output()
-        .expect("run");
-    assert_eq!(out.status.code(), Some(2));
-}
-
-// Go: TestSignCommand_InvalidEnvVarName_KeyPassedDirectly → exit 2, mentions POSIX.
-#[test]
-fn invalid_env_var_name_key_passed_directly() {
-    let dir = TempDir::new("sign-keyname");
-    let in_file = unsigned_input(&dir);
-
-    let out = ethernal()
-        .args(["sign", "--signer", "local", "--input"])
-        .arg(&in_file)
-        .args(["--private-key-env", PHASE3_KEY]) // a hex key passed as the var NAME
-        .output()
-        .expect("run");
-    assert_eq!(out.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("POSIX"),
-        "error should mention POSIX"
-    );
-}
-
 // Go: TestSignCommand_OutputWriteError_Exit2 → an unwritable output dir → exit 2.
 #[test]
 fn output_write_error_exit2() {
     let dir = TempDir::new("sign-writeerr");
     let in_file = unsigned_input(&dir);
+    let key_file = phase3_key_file(&dir);
     let ro_dir = dir.join("readonly");
     std::fs::create_dir(&ro_dir).unwrap();
     std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
     let out_file = ro_dir.join("signed.json");
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .arg("--output")
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     // restore perms for cleanup
@@ -271,14 +331,15 @@ fn output_file_permissions() {
     let dir = TempDir::new("sign-perm");
     let in_file = unsigned_input(&dir);
     let out_file = dir.join("signed.json");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
         .arg("--output")
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(out.status.success());
@@ -291,12 +352,14 @@ fn output_file_permissions() {
 fn output_dash_is_stdout() {
     let dir = TempDir::new("sign-dash");
     let in_file = unsigned_input(&dir);
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(&in_file)
-        .args(["--output", "-", "--private-key-env", KEY_ENV])
+        .args(["--output", "-"])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(out.status.success());
@@ -310,14 +373,15 @@ fn output_dash_is_stdout() {
 fn phase3_local_signer_golden() {
     let dir = TempDir::new("sign-golden");
     let out_file = dir.join("signed_tx.json");
+    let key_file = phase3_key_file(&dir);
 
     let out = ethernal()
-        .env(KEY_ENV, PHASE3_KEY)
-        .args(["sign", "--signer", "local", "--input"])
+        .args(["tx", "sign", "--signer", "local", "--input"])
         .arg(common::phase3_unsigned())
         .arg("--output")
         .arg(&out_file)
-        .args(["--private-key-env", KEY_ENV])
+        .arg("--private-key-file")
+        .arg(&key_file)
         .output()
         .expect("run");
     assert!(
@@ -332,5 +396,139 @@ fn phase3_local_signer_golden() {
         String::from_utf8_lossy(&got),
         String::from_utf8_lossy(&want),
         "phase3 signed golden mismatch"
+    );
+}
+
+// FR-19 / FR-32: hex-shaped missing path → exit 2 without echoing the argument.
+// Distinctive sentinel so scanning stdout+stderr for absence is not vacuous.
+const HEX_GUARD_SENTINEL: &str =
+    "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+#[test]
+fn private_key_file_hex_shaped_not_found_exit2_no_echo() {
+    let dir = TempDir::new("sign-hexguard");
+    let in_file = unsigned_input(&dir);
+
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(HEX_GUARD_SENTINEL)
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        stderr.contains("looks like a key value, not a path"),
+        "FR-19 wording: {stderr}"
+    );
+    assert!(
+        !combined.contains(HEX_GUARD_SENTINEL) && !combined.contains("deadbeef"),
+        "FR-32: rejected argument must not appear in stdout/stderr: {combined}"
+    );
+}
+
+// FR-19: guard is NotFound-only — an existing file whose name is 64-hex is a path.
+#[test]
+fn private_key_file_hex_shaped_existing_name_ok() {
+    let dir = TempDir::new("sign-hex-existing");
+    // Written as unsigned.json under dir; opened via relative path after current_dir.
+    let _ = unsigned_input(&dir);
+    let name = "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe";
+    let key_file = secret_file(&dir, name, PHASE3_KEY.as_bytes());
+    assert_eq!(
+        key_file.file_name().and_then(|s| s.to_str()),
+        Some(name),
+        "fixture basename must be hex-shaped"
+    );
+
+    let out = ethernal()
+        .current_dir(dir.path())
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg("unsigned.json")
+        .arg("--private-key-file")
+        .arg(name)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "existing hex-named key file must work as a path; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// FR-19: 63- and 65-char hex-ish args fall through to ordinary NotFound.
+#[test]
+fn private_key_file_hex_ish_wrong_length_is_ordinary_not_found() {
+    let dir = TempDir::new("sign-hex-len");
+    let in_file = unsigned_input(&dir);
+
+    let short = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbee"; // 0x+63
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(short)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "63-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(short) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+
+    let long = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeeff"; // 0x+65
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(long)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "65-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(long) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+}
+
+// FR-30: long_about / --signer help describe a path, not an environment variable.
+#[test]
+fn sign_help_describes_path_argument() {
+    let out = ethernal()
+        .args(["tx", "sign", "--help"])
+        .output()
+        .expect("run");
+    assert!(out.status.success());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("private-key-file"),
+        "sign --help missing --private-key-file: {s}"
+    );
+    // Old wording (FR-30 deleted): must not present local as an env source.
+    assert!(
+        !s.contains("environment variable") && !s.to_ascii_lowercase().contains("env var"),
+        "sign --help must not describe an environment-variable key source: {s}"
+    );
+    assert!(
+        s.contains("file") || s.contains("PATH") || s.contains("path"),
+        "long_about / help must describe a path argument: {s}"
     );
 }

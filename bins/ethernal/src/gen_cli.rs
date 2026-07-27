@@ -4,7 +4,7 @@
 //! validations pass.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
@@ -14,6 +14,7 @@ use ethernal_core::network::{self, Network};
 use ethernal_signer::{eip55_checksum, validate_eip55_address};
 
 use crate::errors::AppError;
+use crate::fs_util;
 
 /// Holds the validated, parsed inputs from the CLI flags.
 /// Port of `cli.Config`.
@@ -27,9 +28,9 @@ pub struct GenConfig {
     pub network: Network,
     /// The validated, writable directory for deposit_data-<ts>.json.
     pub output_dir: String,
-    /// The name of the environment variable holding the keystore passphrase.
-    /// Empty means the tool falls back to a TTY prompt.
-    pub passphrase_env: String,
+    /// Path to a file holding the keystore passphrase. `None` means the tool
+    /// falls back to a TTY prompt.
+    pub passphrase_file: Option<PathBuf>,
     /// True when the operator passed --i-understand-this-is-mainnet.
     /// NOTE: may be true for non-mainnet networks if the flag was supplied;
     /// always evaluate together with `network == Mainnet`.
@@ -67,7 +68,7 @@ pub fn command() -> Command {
     Command::new("gen")
         .about("Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys")
         .override_usage(
-            "ethernal gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]",
+            "ethernal deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-file PATH]",
         )
         .long_about(
             "Produces deposit_data-<ts>.json for one or more BLS validator public keys by\n\
@@ -75,14 +76,14 @@ pub fn command() -> Command {
              Output is byte-for-byte compatible with the official ethereum/staking-deposit-cli.\n\n\
              Examples:\n\n\
              \x20 # Hoodi testnet, two pubkeys (keystores directory contains one .json per validator)\n\
-             \x20 ethernal gen \\\n\
+             \x20 ethernal deposit gen \\\n\
              \x20   --network hoodi \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\
              \x20   --pubkeys 0x93247f2209abcafd...,0xa1b2c3d4e5f6... \\\n\
              \x20   --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \\\n\
              \x20   --output-dir ./out\n\n\
              \x20 # Mainnet, single pubkey (requires explicit acknowledgement)\n\
-             \x20 ethernal gen \\\n\
+             \x20 ethernal deposit gen \\\n\
              \x20   --network mainnet \\\n\
              \x20   --i-understand-this-is-mainnet \\\n\
              \x20   --keystore-dir ./keystores/ \\\n\
@@ -118,10 +119,10 @@ pub fn command() -> Command {
                 .help("Existing, writable directory for the output deposit_data-<ts>.json file"),
         )
         .arg(
-            Arg::new("passphrase-env")
-                .long("passphrase-env")
-                .value_name("VAR")
-                .help("Name of the environment variable holding the keystore passphrase (omit for TTY prompt)"),
+            Arg::new("passphrase-file")
+                .long("passphrase-file")
+                .value_name("PATH")
+                .help("Path to a file holding the keystore passphrase (omit for TTY prompt)"),
         )
         .arg(
             Arg::new("i-understand-this-is-mainnet")
@@ -219,9 +220,9 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
         if output_dir.is_empty() {
             return Err(AppError::exit2("--output-dir: required flag not set"));
         }
-        validate_output_dir(&output_dir)
+        fs_util::validate_output_dir(&output_dir)
             .map_err(|e| AppError::exit2(format!("--output-dir: {e}")))?;
-        crate::fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
+        fs_util::warn_if_symlinked_output_dir(Path::new(&output_dir), banner_out);
     }
 
     // 5. Validate --parallel: must be in [1, NumCPU*4].
@@ -261,15 +262,17 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
     }
     let withdrawal_credentials = eth1_withdrawal_credentials(addr);
 
+    let passphrase_file = match m.get_one::<String>("passphrase-file") {
+        Some(v) => Some(fs_util::secret_file_arg("--passphrase-file", v)?),
+        None => None,
+    };
+
     let cfg = GenConfig {
         keystore_dir,
         pubkeys,
         network: net,
         output_dir,
-        passphrase_env: m
-            .get_one::<String>("passphrase-env")
-            .cloned()
-            .unwrap_or_default(),
+        passphrase_file,
         mainnet_ack,
         dry_run,
         verbose: m.get_flag("verbose"),
@@ -358,24 +361,6 @@ fn validate_keystore_dir(dir: &str) -> Result<(), String> {
         .map_err(|e| format!("cannot read keystore directory \"{dir}\": {e}"))
 }
 
-/// Checks that dir exists and the process can write to it via the shared
-/// exclusive create+remove probe ([`crate::fs_util::probe_dir_writable`]).
-fn validate_output_dir(dir: &str) -> Result<(), String> {
-    let meta = match std::fs::metadata(dir) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("directory \"{dir}\" does not exist"));
-        }
-        Err(e) => return Err(format!("cannot stat directory \"{dir}\": {e}")),
-    };
-    if !meta.is_dir() {
-        return Err(format!("\"{dir}\" is not a directory"));
-    }
-
-    crate::fs_util::probe_dir_writable(Path::new(dir))
-        .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
-}
-
 /// The network name for display in the banner. Mainnet is shown in uppercase
 /// ("MAINNET") as an additional visual safety cue.
 fn network_display(n: Network) -> String {
@@ -414,8 +399,8 @@ fn print_banner(w: &mut dyn Write, cfg: &GenConfig) {
 mod tests {
     use super::*;
     use crate::errors::exit_code_for;
+    use crate::test_support::Tmp;
     use ethernal_core::bls::{self, Signer};
-    use std::path::PathBuf;
 
     // Port of `internal/cli/cli_test.go` (validation + banner) and
     // `cli_fuzz_test.go`. Go drove the app with a NO-OP run callback, so these
@@ -452,26 +437,6 @@ mod tests {
         secret[0] = seed;
         let signer = bls::new_signer(&secret).expect("new_signer");
         hex::encode(signer.public_key().expect("public_key"))
-    }
-
-    /// A temp directory that removes itself on drop.
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn new() -> Tmp {
-            static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let p = std::env::temp_dir().join(format!("gen-cli-test-{}-{n}", std::process::id()));
-            std::fs::create_dir_all(&p).unwrap();
-            Tmp(p)
-        }
-        fn str(&self) -> &str {
-            self.0.to_str().unwrap()
-        }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
     }
 
     /// Runs parse + validate + banner, mirroring Go's no-op-callback app.
@@ -554,8 +519,8 @@ mod tests {
     // Go: TestSinglePubkeyHappyPath
     #[test]
     fn single_pubkey_happy_path() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let pk_hex = format!("0x{pk}");
         let (cfg, banner) = run(&with_wd(&[
@@ -582,8 +547,8 @@ mod tests {
     // Go: TestBannerFormat / TestMultiPubkeyHappyPath / TestUnprefixedPubkeys.
     #[test]
     fn banner_format_multi_pubkey() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let pk2 = valid_pubkey(2);
         let pks = format!("0x{pk},0x{pk2}");
@@ -623,8 +588,8 @@ mod tests {
     // (non-clap-required) --output-dir is rejected by load_config with exit 2.
     #[test]
     fn missing_required_flags() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         // Missing clap-required flags → parse error.
         assert!(run(&with_wd(&[
@@ -684,8 +649,8 @@ mod tests {
     // Go: TestInvalidNetwork / TestNetworkParsedBeforeOtherWork.
     #[test]
     fn invalid_network() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let base_ok = |net: &str| {
             run(&with_wd(&[
@@ -723,8 +688,8 @@ mod tests {
     // Go: TestErrorIsExitCoder — invalid pubkeys → exit 2.
     #[test]
     fn invalid_pubkeys_is_exit2() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let err = load_err(&with_wd(&[
             "--keystore-dir",
             ks.str(),
@@ -741,8 +706,8 @@ mod tests {
     // Go: TestMainnetWithoutAck — exit 2, "mainnet selected", banner NOT emitted.
     #[test]
     fn mainnet_without_ack() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         // The banner writer captures nothing because the gate fires before it.
         let mut argv = vec!["gen"];
@@ -771,8 +736,8 @@ mod tests {
     // Go: TestMainnetWithAck — MAINNET banner (uppercase), ack set.
     #[test]
     fn mainnet_with_ack() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
@@ -794,8 +759,8 @@ mod tests {
     // Go: TestHoodiWithAckFlag — a harmless ack flag on hoodi shows lowercase.
     #[test]
     fn hoodi_with_ack_flag() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let (cfg, banner) = run(&with_wd(&[
             "--keystore-dir",
@@ -814,12 +779,42 @@ mod tests {
         assert!(!banner.contains("MAINNET"));
     }
 
+    // FR-6: --passphrase-file - is rejected at config load (secret_file_arg).
+    #[test]
+    fn passphrase_file_dash_exit2() {
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
+        let pk = valid_pubkey(1);
+        let err = load_err(&with_wd(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+            "--passphrase-file",
+            "-",
+        ]));
+        assert_eq!(exit_code_for(&err), 2);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--passphrase-file"),
+            "message must name the flag: {msg}"
+        );
+        assert!(
+            msg.contains("<(") && msg.contains(")"),
+            "message must mention process substitution: {msg}"
+        );
+    }
+
     // Go: TestDryRunFlag / TestVerboseFlag / TestJSONLogsFlag /
-    // TestVerifyWithDepositCLIFlag / TestDepositCLIPathFlag / TestPassphraseEnvOptional.
+    // TestVerifyWithDepositCLIFlag / TestDepositCLIPathFlag / TestPassphraseFileOptional.
     #[test]
     fn boolean_and_string_flags_propagate() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let base = |extra: &[&str]| -> GenConfig {
             let mut a = with_wd(&[
@@ -848,10 +843,10 @@ mod tests {
             base(&["--deposit-cli-path", "/usr/local/bin/deposit"]).deposit_cli_path,
             "/usr/local/bin/deposit"
         );
-        assert_eq!(base(&[]).passphrase_env, "");
+        assert_eq!(base(&[]).passphrase_file, None);
         assert_eq!(
-            base(&["--passphrase-env", "MY_PASSPHRASE"]).passphrase_env,
-            "MY_PASSPHRASE"
+            base(&["--passphrase-file", "/tmp/pw.txt"]).passphrase_file,
+            Some(PathBuf::from("/tmp/pw.txt"))
         );
         assert_eq!(base(&[]).withdrawal_credentials, TEST_WITHDRAWAL_CREDS);
     }
@@ -859,8 +854,8 @@ mod tests {
     // Go: TestParallelFlag — default 1, valid N propagates, invalid rejected exit 2.
     #[test]
     fn parallel_flag() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let ok = |extra: &[&str]| -> Result<(GenConfig, String), String> {
             let mut a = with_wd(&[
@@ -904,8 +899,8 @@ mod tests {
     // Go: TestKeystoreDirValidation / TestNonexistentOutputDir / TestOutputDirIsFile.
     #[test]
     fn dir_validation() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
 
         // nonexistent keystore-dir → err.
@@ -969,7 +964,7 @@ mod tests {
     // outside --dry-run.
     #[test]
     fn output_dir_conditional_requiredness() {
-        let ks = Tmp::new();
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let invalid = std::env::temp_dir().join("gen-cli-does-not-exist-xyz");
 
@@ -1029,8 +1024,8 @@ mod tests {
     // K5-2: require-choice gate — absent --withdrawal-address → exit 2.
     #[test]
     fn withdrawal_address_required() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let err = load_err(&[
             "--keystore-dir",
@@ -1068,8 +1063,8 @@ mod tests {
     // K5-2: lowercase / checksum-mismatch / bad hex → exit 2 via validate_eip55_address.
     #[test]
     fn withdrawal_address_eip55_rejects() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let base = |addr: &str| -> AppError {
             load_err(&[
@@ -1121,8 +1116,8 @@ mod tests {
     // H2 / K5-L1: zero address self-checksums under EIP-55 but is refused by CLI policy.
     #[test]
     fn withdrawal_address_zero_rejected() {
-        let dir = Tmp::new();
-        let ks = Tmp::new();
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
         let pk = valid_pubkey(1);
         let err = load_err(&[
             "--keystore-dir",

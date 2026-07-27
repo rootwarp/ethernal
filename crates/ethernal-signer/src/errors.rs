@@ -13,8 +13,11 @@
 //! returned reference, e.g.
 //! `matches!(err.sentinel(), SignerError::InvalidKey)`.
 
+use ethernal_secretfile::SecretFileError;
+
 /// Errors produced by the `signer` crate. All map to exit code 3
-/// (signer/crypto) except [`SignerError::Cancelled`] (exit 4).
+/// (signer/crypto) except [`SignerError::Cancelled`] (exit 4) and
+/// [`SignerError::KeyFile`] (exit 2 — user/config, FR-13).
 #[derive(Debug, thiserror::Error)]
 pub enum SignerError {
     /// Go: `ErrUserRejected` — the user rejected the signing request on a
@@ -67,6 +70,12 @@ pub enum SignerError {
     /// `context.Canceled`; maps to the user-abort exit code (4).
     #[error("operation cancelled")]
     Cancelled,
+
+    /// Private-key file failed the secret-file policy (not found, permissions,
+    /// too large, not UTF-8, etc.). Only the path appears in the error; never
+    /// the file contents. Maps to exit code 2 (user/config error, FR-13).
+    #[error(transparent)]
+    KeyFile(#[from] SecretFileError),
 
     /// A plain error message with no sentinel underneath (Go `fmt.Errorf`
     /// without `%w`, or a wrapped foreign error rendered into the text).

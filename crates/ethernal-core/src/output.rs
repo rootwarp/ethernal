@@ -8,10 +8,16 @@
 //!     instead of disk. Intended for --dry-run mode.
 //!   - [`write_new_0600`]: generic atomic `0600` write with overwrite
 //!     refusal, for bin-composed keystore persistence.
+//!   - [`write_atomic`]: generic atomic write that **allows** overwrite,
+//!     with caller-chosen mode (e.g. `0600` / `0644`), for tx artifacts.
 //!
 //! [`FsWriter`] and [`DryRunWriter`] compute and return the sha256 hex digest
 //! of the JSON bytes so callers can verify integrity without re-reading the
 //! file.
+//!
+//! [`write_new_0600`] and [`write_atomic`] are deliberately separate entry
+//! points (not one flag-controlled writer) so callers cannot confuse
+//! refuse-overwrite keystore semantics with overwrite-allowed artifact writes.
 
 use std::fs;
 use std::io::{self, Write as IoWrite};
@@ -382,6 +388,55 @@ pub fn write_new_0600(final_path: &Path, bytes: &[u8]) -> Result<(), OutputError
 }
 
 // -----------------------------------------------------------------------------
+// write_atomic — generic atomic writer, overwrite-allowed (T2.1)
+// -----------------------------------------------------------------------------
+
+/// Atomic write that **allows** overwriting `final_path`.
+///
+/// Sequence:
+///  1. Unique `create_new` tmp (mode 0600 initially) → set permissions to
+///     `mode` → write → fsync.
+///  2. `rename(tmp, final_path)` (on Unix, replaces an existing final path).
+///  3. Fsync the parent directory (reported success ⇒ durable entry).
+///
+/// Unlike [`write_new_0600`], this never refuses an existing final path — it is
+/// for overwrite-safe artifacts (signed/unsigned tx JSON, receipts, raw RLP).
+/// Keystore persistence must continue to use [`write_new_0600`].
+///
+/// Removes the owned tmp on failure or panic; SIGKILL cannot guarantee cleanup.
+pub fn write_atomic(final_path: &Path, bytes: &[u8], mode: u32) -> Result<(), OutputError> {
+    let (tmp, mut f) = create_unique_tmp(final_path)?;
+
+    // Chmod after create so the mode is not masked by umask (matches the
+    // historical bin `atomic_write_file` / Go `tmp.Chmod(perm)` behavior).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(tmp.path(), fs::Permissions::from_mode(mode)) {
+            return Err(OutputError::OpenTmp(e));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+
+    if let Err(e) = f.write_all(bytes) {
+        return Err(OutputError::WriteTmp(e));
+    }
+    if let Err(e) = f.sync_all() {
+        return Err(OutputError::SyncTmp(e));
+    }
+    drop(f);
+
+    match fs::rename(tmp.path(), final_path) {
+        Ok(()) => {
+            tmp.disarm();
+            sync_parent_dir(final_path)
+        }
+        Err(e) => Err(OutputError::Rename(e)),
+    }
+}
+
+// -----------------------------------------------------------------------------
 // DryRunWriter
 // -----------------------------------------------------------------------------
 
@@ -659,5 +714,92 @@ mod tests {
             "eexist"
         )));
         assert!(!hard_link_unsupported(&io::Error::other("other")));
+    }
+
+    // -------------------------------------------------------------------------
+    // write_atomic (overwrite-allowed)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn write_atomic_writes_contents_and_mode() {
+        let dir = TempDir::new();
+        let path = dir.path().join("signed.json");
+        let bytes = b"{\"type\":\"0x2\"}\n";
+
+        write_atomic(&path, bytes, 0o600).expect("write");
+
+        assert_eq!(fs::read(&path).expect("read back"), bytes);
+        assert_no_owned_tmp(dir.path());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "written file must be mode 0600");
+        }
+    }
+
+    #[test]
+    fn write_atomic_mode_0644() {
+        let dir = TempDir::new();
+        let path = dir.path().join("unsigned.json");
+        let bytes = b"unsigned-payload\n";
+
+        write_atomic(&path, bytes, 0o644).expect("write");
+
+        assert_eq!(fs::read(&path).expect("read back"), bytes);
+        assert_no_owned_tmp(dir.path());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o644, "written file must be mode 0644");
+        }
+    }
+
+    #[test]
+    fn write_atomic_overwrites_existing() {
+        let dir = TempDir::new();
+        let path = dir.path().join("artifact.json");
+        let v1 = b"version-one";
+        let v2 = b"version-two-replacement";
+
+        write_atomic(&path, v1, 0o600).expect("first write");
+        write_atomic(&path, v2, 0o600).expect("second write must overwrite");
+
+        assert_eq!(fs::read(&path).expect("read back"), v2);
+        assert_no_owned_tmp(dir.path());
+    }
+
+    #[test]
+    fn write_atomic_no_tmp_on_rename_failure() {
+        let dir = TempDir::new();
+        // Final path is a directory so rename must fail.
+        let path = dir.path().join("is-a-dir");
+        fs::create_dir(&path).expect("mkdir");
+
+        let err = write_atomic(&path, b"data", 0o600).expect_err("write must fail");
+        assert!(
+            matches!(err, OutputError::Rename(_)),
+            "expected Rename, got {err:?}"
+        );
+        assert_no_owned_tmp(dir.path());
+        assert!(path.is_dir(), "directory target must be left intact");
+    }
+
+    /// write_new_0600 remains refuse-overwrite even after write_atomic lands.
+    #[test]
+    fn write_new_0600_still_refuses_after_write_atomic_path() {
+        let dir = TempDir::new();
+        let path = dir.path().join("ks.json");
+        write_atomic(&path, b"via-atomic", 0o600).expect("seed via overwrite API");
+        let err = write_new_0600(&path, b"clobber").expect_err("must refuse");
+        assert!(
+            matches!(err, OutputError::AlreadyExists),
+            "expected AlreadyExists, got {err:?}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"via-atomic");
+        assert_no_owned_tmp(dir.path());
     }
 }

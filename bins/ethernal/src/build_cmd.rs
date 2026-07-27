@@ -26,9 +26,9 @@ use crate::logging::{Format, Level, Logger};
 pub fn command() -> Command {
     Command::new("build")
         .about("Construct an unsigned deposit transaction from deposit data")
-        .override_usage("ethernal build --input-file FILE --network NET [options]")
+        .override_usage("ethernal deposit build --input-file FILE --network NET [options]")
         .long_about(
-            "Reads a deposit_data JSON file (produced by \"ethernal gen\" or the Ethereum Launchpad)\n\
+            "Reads a deposit_data JSON file (produced by \"ethernal deposit gen\" or the Ethereum Launchpad)\n\
              and produces an unsigned EIP-1559 transaction for the Beacon Chain deposit contract.\n\n\
              Supports offline/air-gapped mode (no --rpc-url required) when all gas and nonce\n\
              flags are supplied explicitly, and hybrid mode: with --rpc-url, any gas, fee, or\n\
