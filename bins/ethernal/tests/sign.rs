@@ -53,7 +53,9 @@ fn local_signer_success() {
     }
 }
 
-// Missing key file → exit 2 (FR-13: file-policy, not crypto). Names the path.
+// F6-2 / architecture §11 divergence 4 / FR-13: missing key file → exit 2
+// (not 3 — that was the missing-env-var class). Names the path; no secret
+// contents in the message (there are none on disk; still assert the path only).
 #[test]
 fn local_signer_missing_key_file() {
     let dir = TempDir::new("sign-missingkey");
@@ -67,15 +69,54 @@ fn local_signer_missing_key_file() {
         .arg(&missing)
         .output()
         .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr: {stderr}");
+    assert!(
+        stderr.contains(missing.to_str().unwrap()),
+        "error should name the path: {stderr}"
+    );
+}
+
+// F6-2 / FR-13: permission-denied key file → exit 2; path named, no contents.
+#[cfg(unix)]
+#[test]
+fn local_signer_unreadable_key_file_exit2() {
+    // SAFETY: getuid has no preconditions.
+    if unsafe { libc::getuid() } == 0 {
+        // Root bypasses mode 000; skip like crate-level secretfile tests.
+        return;
+    }
+
+    let dir = TempDir::new("sign-unreadable");
+    let in_file = unsigned_input(&dir);
+    // Distinctive sentinel that must never appear in the rendered error.
+    const SENTINEL: &str = "SENTINEL_SIGN_KEY_f6_2_never_in_error";
+    let key_file = secret_file(&dir, "locked.hex", SENTINEL.as_bytes());
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(&key_file)
+        .output()
+        .expect("run");
+    // Restore so TempDir can clean up.
+    let _ = std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600));
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
         Some(2),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
+        "permission-denied key file must exit 2 (not 3); stderr: {stderr}"
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains(missing.to_str().unwrap()),
-        "error should name the path"
+        stderr.contains(key_file.to_str().unwrap()),
+        "error should name the path: {stderr}"
+    );
+    assert!(
+        !stderr.contains(SENTINEL),
+        "error must not leak file contents: {stderr}"
     );
 }
 
