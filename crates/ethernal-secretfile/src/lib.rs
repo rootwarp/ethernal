@@ -1,10 +1,10 @@
 //! Secret-file read primitive shared by passphrase and private-key file flags.
 //!
 //! Architecture §2: one fixed-buffer, TOCTOU-free open+fstat path that every
-//! entry point shares. Public readers (`read_secret_line` / `read_secret_trimmed`)
-//! arrive in F1-2; this crate currently exports only the types and keeps the
-//! raw capped reader private so no consumer can bypass a byte rule.
+//! entry point shares. Public readers apply a byte rule on top of the private
+//! capped reader so no consumer can bypass FR-7 / FR-8 / FR-9.
 
+use std::fmt;
 use std::fs::File;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
@@ -22,6 +22,16 @@ pub enum Residual {
     CarriageReturn,
     /// Two or more lines.
     MultiLine { lines: usize },
+}
+
+impl fmt::Display for Residual {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // FR-9: name the shape ("carriage return") or a line count — never content.
+            Residual::CarriageReturn => f.write_str("carriage return"),
+            Residual::MultiLine { lines } => write!(f, "{lines} lines"),
+        }
+    }
 }
 
 /// Typed failures from the secret-file policy. Every variant names the path and
@@ -66,7 +76,8 @@ pub enum SecretFileError {
     },
 
     /// Residual line terminator after the passphrase byte rule (F1-2).
-    #[error("secret file has unexpected line terminator: {path}")]
+    /// FR-9: names the path and what was found (shape/count via `{found}`), never content.
+    #[error("secret file has unexpected line terminator ({found}): {path}")]
     LineTerminator {
         /// Path that was requested.
         path: String,
@@ -85,14 +96,10 @@ pub enum SecretFileError {
     },
 }
 
-// Private helpers are exercised by unit tests; public entry points (F1-2) will
-// call `read_capped`. Until then, silence dead_code on non-test lib builds.
-#[allow(dead_code)]
 fn path_string(path: &Path) -> String {
     path.display().to_string()
 }
 
-#[allow(dead_code)]
 fn classify_open(path: &Path, e: io::Error) -> SecretFileError {
     let p = path_string(path);
     match e.kind() {
@@ -107,7 +114,6 @@ fn classify_open(path: &Path, e: io::Error) -> SecretFileError {
 /// Private so no consumer can bypass a byte rule. Follows symlinks (FR-15);
 /// rejects directories (FR-14); warns on loose regular-file modes (FR-17);
 /// enforces the 4 KiB ceiling via a read cap (FR-16, FR-23).
-#[allow(dead_code)] // public readers in F1-2; unit tests call this directly today
 fn read_capped(
     path: &Path,
     warn_out: &mut dyn Write,
@@ -191,6 +197,86 @@ fn read_capped(
 
     buf.truncate(n); // safe: zeroize covers spare capacity (R2 §3.1)
     Ok(buf)
+}
+
+/// UTF-8 without residue (architecture §2.3).
+///
+/// Borrow-validate first, then move only on success. `String::from_utf8` on
+/// failure would own a plain `Vec<u8>` and drop it un-zeroized.
+fn into_utf8_string(
+    path: &Path,
+    mut buf: Zeroizing<Vec<u8>>,
+) -> Result<Zeroizing<String>, SecretFileError> {
+    std::str::from_utf8(&buf).map_err(|_| SecretFileError::NotUtf8 {
+        path: path_string(path),
+    })?;
+    let owned = std::mem::take(&mut *buf);
+    Ok(Zeroizing::new(
+        String::from_utf8(owned).expect("validated on the line above"),
+    ))
+}
+
+/// Reads a one-line secret under the full file policy (FR-13…FR-17, FR-23) and
+/// applies the **passphrase** byte rule: strip exactly one trailing `\n` (FR-8),
+/// then reject any residual `\r` or `\n` (FR-9). Validates UTF-8 (FR-12b, D-3).
+///
+/// An empty file yields an empty string. Whether empty is an error is the
+/// caller's policy (FR-18) and is deliberately not decided here.
+pub fn read_secret_line(
+    path: &Path,
+    warn_out: &mut dyn Write,
+) -> Result<Zeroizing<String>, SecretFileError> {
+    let buf = read_capped(path, warn_out)?;
+    let mut s = into_utf8_string(path, buf)?;
+
+    // FR-8: strip exactly one trailing `\n`, and nothing else. Re-slice in place.
+    if s.ends_with('\n') {
+        s.pop();
+    }
+
+    // FR-9: residual `\r` first, then residual `\n` (multi-line).
+    if s.contains('\r') {
+        return Err(SecretFileError::LineTerminator {
+            path: path_string(path),
+            found: Residual::CarriageReturn,
+        });
+    }
+    if s.contains('\n') {
+        return Err(SecretFileError::LineTerminator {
+            path: path_string(path),
+            found: Residual::MultiLine {
+                lines: s.matches('\n').count() + 1,
+            },
+        });
+    }
+
+    Ok(s)
+}
+
+/// Same file policy, but the **hex-key** byte rule (FR-7): all leading and
+/// trailing ASCII whitespace trimmed. A separate entry point rather than a flag,
+/// so the divergence from [`read_secret_line`] is visible at every call site and
+/// cannot be selected by accident.
+pub fn read_secret_trimmed(
+    path: &Path,
+    warn_out: &mut dyn Write,
+) -> Result<Zeroizing<String>, SecretFileError> {
+    let buf = read_capped(path, warn_out)?;
+    let mut s = into_utf8_string(path, buf)?;
+
+    // FR-7: re-slice in place — no intermediate allocation.
+    // Closure form: char::is_ascii_whitespace takes &self, not fn(char)->bool.
+    let start = s.len()
+        - s.trim_start_matches(|c: char| c.is_ascii_whitespace())
+            .len();
+    let end = s.trim_end_matches(|c: char| c.is_ascii_whitespace()).len();
+    s.truncate(end);
+    if start > 0 {
+        let drain_end = start.min(s.len());
+        drop(s.drain(..drain_end));
+    }
+
+    Ok(s)
 }
 
 #[cfg(test)]
@@ -467,6 +553,261 @@ mod tests {
         let mut sink = Vec::new();
         let got = read_capped(&path, &mut sink).expect("read small");
         assert_eq!(&got[..], b"hello\n");
+    }
+
+    // --- F1-2: byte rules, UTF-8 boundary, Display (M-3) ---
+
+    fn read_line(path: &Path) -> Result<Zeroizing<String>, SecretFileError> {
+        let mut sink = Vec::new();
+        read_secret_line(path, &mut sink)
+    }
+
+    fn read_trimmed(path: &Path) -> Result<Zeroizing<String>, SecretFileError> {
+        let mut sink = Vec::new();
+        read_secret_trimmed(path, &mut sink)
+    }
+
+    /// FR-8 then FR-9 matrix: strip one trailing `\n`, keep trailing space,
+    /// reject every CR shape and multi-line residual.
+    #[test]
+    fn read_secret_line_byte_rule_matrix() {
+        let dir = TempDir::new("line-rule");
+
+        let pw = dir.write_file("pw", b"pw");
+        let pw_nl = dir.write_file("pw_nl", b"pw\n");
+        assert_eq!(read_line(&pw).unwrap().as_str(), "pw");
+        assert_eq!(read_line(&pw_nl).unwrap().as_str(), "pw");
+        assert_eq!(
+            read_line(&pw).unwrap().as_str(),
+            read_line(&pw_nl).unwrap().as_str(),
+            "pw and pw\\n must yield identical secrets"
+        );
+
+        // Trailing space/tab is kept (FR-11 claim as a test, not a comment).
+        let pw_sp_nl = dir.write_file("pw_sp_nl", b"pw \n");
+        assert_eq!(
+            read_line(&pw_sp_nl).unwrap().as_str(),
+            "pw ",
+            "trailing space must be kept"
+        );
+        let pw_tab_nl = dir.write_file("pw_tab_nl", b"pw\t\n");
+        assert_eq!(
+            read_line(&pw_tab_nl).unwrap().as_str(),
+            "pw\t",
+            "trailing tab must be kept"
+        );
+
+        for (name, bytes) in [
+            ("cr", &b"pw\r"[..]),
+            ("crlf", &b"pw\r\n"[..]),
+            ("crcrlf", &b"pw\r\r\n"[..]),
+        ] {
+            let path = dir.write_file(name, bytes);
+            let err = read_line(&path).expect_err("CR shape must fail");
+            match &err {
+                SecretFileError::LineTerminator {
+                    found: Residual::CarriageReturn,
+                    ..
+                } => {
+                    let rendered = err.to_string();
+                    assert!(
+                        rendered.contains("carriage return"),
+                        "{name}: Display must name residual shape, got {rendered:?}"
+                    );
+                    assert!(
+                        rendered.contains(&path.display().to_string()),
+                        "{name}: Display must name path, got {rendered:?}"
+                    );
+                }
+                other => panic!("{name}: expected CarriageReturn, got {other:?}"),
+            }
+        }
+
+        let multi = dir.write_file("multi", b"a\nb");
+        let err = read_line(&multi).expect_err("multi-line must fail");
+        match &err {
+            SecretFileError::LineTerminator {
+                found: Residual::MultiLine { lines: 2 },
+                ..
+            } => {
+                let rendered = err.to_string();
+                assert!(
+                    rendered.contains("2 lines"),
+                    "Display must name line count, got {rendered:?}"
+                );
+                assert!(
+                    rendered.contains(&multi.display().to_string()),
+                    "Display must name path, got {rendered:?}"
+                );
+            }
+            other => panic!("expected MultiLine {{ lines: 2 }}, got {other:?}"),
+        }
+
+        let empty = dir.write_file("empty", b"");
+        assert_eq!(read_line(&empty).unwrap().as_str(), "");
+
+        let lone_nl = dir.write_file("lone_nl", b"\n");
+        assert_eq!(read_line(&lone_nl).unwrap().as_str(), "");
+    }
+
+    /// FR-7: leading/trailing ASCII whitespace removed; interior untouched.
+    #[test]
+    fn read_secret_trimmed_whitespace() {
+        let dir = TempDir::new("trim-rule");
+        let hex = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let padded = format!(" {hex} \n");
+        let bare_path = dir.write_file("bare", hex.as_bytes());
+        let pad_path = dir.write_file("padded", padded.as_bytes());
+
+        let bare = read_trimmed(&bare_path).unwrap();
+        let pad = read_trimmed(&pad_path).unwrap();
+        assert_eq!(bare.as_str(), hex);
+        assert_eq!(pad.as_str(), hex);
+        assert_eq!(
+            bare.as_str(),
+            pad.as_str(),
+            "\" 0x… \\n\" and \"0x…\" must yield the same string"
+        );
+
+        // Interior whitespace is not touched.
+        let interior = dir.write_file("interior", b"ab cd\n");
+        assert_eq!(read_trimmed(&interior).unwrap().as_str(), "ab cd");
+    }
+
+    /// Non-UTF-8 bytes → NotUtf8 from both entry points (FR-12b / D-3).
+    #[test]
+    fn non_utf8_is_not_utf8_from_both() {
+        let dir = TempDir::new("not-utf8");
+        // Distinctive invalid sequence; must not appear in error Display (M-3).
+        let path = dir.write_file("bad", b"secret\xffpayload");
+
+        let err_line = read_line(&path).expect_err("line: non-utf8");
+        assert!(
+            matches!(err_line, SecretFileError::NotUtf8 { .. }),
+            "expected NotUtf8 from read_secret_line, got {err_line:?}"
+        );
+
+        let err_trim = read_trimmed(&path).expect_err("trim: non-utf8");
+        assert!(
+            matches!(err_trim, SecretFileError::NotUtf8 { .. }),
+            "expected NotUtf8 from read_secret_trimmed, got {err_trim:?}"
+        );
+    }
+
+    /// All seven SecretFileError variants Display the path and no content (M-3).
+    /// FR-9 residual phrases must appear for LineTerminator shapes.
+    #[test]
+    fn all_error_variants_display_path_not_content() {
+        let sentinel = "SENTINEL_SECRET_BYTES_9f3a";
+        let path_label = "/tmp/ethernal-secretfile-display-check";
+        // Io source is an OS message, not file content — keep it distinct so the
+        // file-byte sentinel assertion below is meaningful for every variant.
+        let io_source_msg = "disk full";
+
+        let variants: [SecretFileError; 7] = [
+            SecretFileError::NotFound {
+                path: path_label.into(),
+            },
+            SecretFileError::PermissionDenied {
+                path: path_label.into(),
+            },
+            SecretFileError::IsDirectory {
+                path: path_label.into(),
+            },
+            SecretFileError::TooLarge {
+                path: path_label.into(),
+                max: MAX_SECRET_FILE_BYTES,
+            },
+            SecretFileError::NotUtf8 {
+                path: path_label.into(),
+            },
+            SecretFileError::LineTerminator {
+                path: path_label.into(),
+                found: Residual::CarriageReturn,
+            },
+            SecretFileError::Io {
+                path: path_label.into(),
+                source: io::Error::other(io_source_msg),
+            },
+        ];
+
+        for err in &variants {
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(path_label),
+                "Display must name the path, got: {rendered:?}"
+            );
+            // Constructed variants never hold file content; sentinel must not
+            // appear (would only show up if a template interpolated secret bytes).
+            assert!(
+                !rendered.contains(sentinel),
+                "Display must not contain file-byte sentinel, got: {rendered:?}"
+            );
+        }
+
+        // FR-9 residual shape on the constructed CR variant.
+        let cr_display = variants[5].to_string();
+        assert!(
+            cr_display.contains("carriage return"),
+            "LineTerminator Display must name carriage return, got: {cr_display:?}"
+        );
+
+        // MultiLine residual: line count in Display, path present, no content.
+        let multi = SecretFileError::LineTerminator {
+            path: path_label.into(),
+            found: Residual::MultiLine { lines: 2 },
+        };
+        let multi_display = multi.to_string();
+        assert!(
+            multi_display.contains(path_label) && multi_display.contains("2 lines"),
+            "MultiLine Display must name path and line count, got: {multi_display:?}"
+        );
+        assert!(
+            !multi_display.contains(sentinel),
+            "MultiLine Display must not leak content, got: {multi_display:?}"
+        );
+
+        // Live paths: real file with distinctive bytes → Display names path +
+        // residual shape, never the file-byte sentinel.
+        let dir = TempDir::new("display-live");
+
+        let cr_path = dir.write_file("cr", format!("{sentinel}\r").as_bytes());
+        let err = read_line(&cr_path).expect_err("CR");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(&cr_path.display().to_string())
+                && rendered.contains("carriage return"),
+            "live CR must name path and residual, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(sentinel),
+            "live CR must not leak content, got: {rendered:?}"
+        );
+
+        let multi_path = dir.write_file("multi", format!("{sentinel}\nmore").as_bytes());
+        let err = read_line(&multi_path).expect_err("multi-line");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(&multi_path.display().to_string()) && rendered.contains("2 lines"),
+            "live MultiLine must name path and line count, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(sentinel),
+            "live MultiLine must not leak content, got: {rendered:?}"
+        );
+
+        // Distinctive ASCII prefix + invalid UTF-8 byte; Display must not echo the prefix.
+        let bad_path = dir.write_file("bad", b"SENTINEL_SECRET_BYTES_9f3a\xff");
+        let err = read_line(&bad_path).expect_err("not utf8");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(&bad_path.display().to_string()),
+            "live NotUtf8 must name path, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(sentinel),
+            "live NotUtf8 must not leak content, got: {rendered:?}"
+        );
     }
 
     // Minimal getuid shim so the mode-0000 test can skip under root without
