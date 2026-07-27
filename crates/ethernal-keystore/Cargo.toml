@@ -8,6 +8,7 @@ description = "EIP-2335 v4 keystore encryption/decryption, directory scanning, a
 name = "ethernal_keystore"
 
 [dependencies]
+ethernal-secretfile = { workspace = true }
 scrypt = { workspace = true }
 pbkdf2 = { workspace = true }
 hmac = { workspace = true }

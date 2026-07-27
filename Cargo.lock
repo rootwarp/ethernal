@@ -331,6 +331,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "ctr",
+ "ethernal-secretfile",
  "hex",
  "hmac",
  "pbkdf2",

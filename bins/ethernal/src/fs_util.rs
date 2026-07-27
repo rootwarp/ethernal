@@ -12,6 +12,8 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::errors::AppError;
+
 // ---------------------------------------------------------------------------
 // TTY helpers (single home — T1.2)
 // ---------------------------------------------------------------------------
@@ -121,6 +123,28 @@ pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
 
     probe_dir_writable(Path::new(dir))
         .map_err(|e| format!("directory \"{dir}\" is not writable: {e}"))
+}
+
+/// Validates a secret-file flag argument. `-` is rejected (exit 2): stdin is
+/// already claimed by `tx sign --input -` and by `validator recover`'s
+/// piped-mnemonic path, and `require_tty_for_new` reasons about stdin being a
+/// TTY. The message points at process substitution — `<(gpg -d pw.gpg)` — as
+/// the no-disk-file pattern, and mentions `/dev/fd/N` only as the general
+/// escape hatch: naming `/dev/stdin` alone would send an operator straight
+/// into the collision the rejection exists to avoid.
+///
+/// Call sites arrive in F4–F6; until then this is a library seam only (F2-1).
+#[allow(dead_code)] // F4/F5/F6 wire every secret-file flag through this guard.
+pub(crate) fn secret_file_arg(flag: &str, value: &str) -> Result<PathBuf, AppError> {
+    if value == "-" {
+        return Err(AppError::exit2(format!(
+            "{flag}: path cannot be '-'; stdin is already claimed by other flags \
+             and interactive prompts. For a no-disk-file secret, use process \
+             substitution: {flag} <(gpg -d pw.gpg). As a general escape hatch, \
+             a path under /dev/fd/N may also work."
+        )));
+    }
+    Ok(PathBuf::from(value))
 }
 
 #[cfg(test)]
@@ -281,5 +305,33 @@ mod tests {
             warning_lines[0].contains(resolved.to_str().unwrap()),
             "warning must name resolved path: {text}"
         );
+    }
+
+    #[test]
+    fn secret_file_arg_rejects_dash() {
+        use crate::errors::exit_code_for;
+
+        let err = secret_file_arg("--passphrase-file", "-").expect_err("'-' must fail");
+        assert_eq!(exit_code_for(&err), 2, "secret_file_arg('-') must exit 2");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("<(") && msg.contains(")"),
+            "message must mention process substitution <(...), got: {msg:?}"
+        );
+        assert!(
+            msg.contains("/dev/fd/"),
+            "message may mention /dev/fd/N as escape hatch, got: {msg:?}"
+        );
+        // Must not recommend /dev/stdin alone (collides with stdin consumers).
+        assert!(
+            !msg.contains("/dev/stdin"),
+            "message must not recommend /dev/stdin alone, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn secret_file_arg_round_trips_path() {
+        let p = secret_file_arg("--passphrase-file", "/tmp/secret.txt").expect("path ok");
+        assert_eq!(p, PathBuf::from("/tmp/secret.txt"));
     }
 }

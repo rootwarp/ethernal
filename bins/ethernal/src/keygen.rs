@@ -391,3 +391,50 @@ impl MnemonicSource for RecoverMnemonicSource {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use ethernal_keystore::FileSource;
+
+    /// FR-19b worked example: `MinLenPassphrase` over `FileSource` with
+    /// `1234567\n` (8 raw bytes → FR-8 → 7 → EIP-2335 normalize → 7).
+    #[test]
+    fn min_len_over_file_source_short_after_strip() {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ethernal-keygen-minlen-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pw");
+        std::fs::write(&path, b"1234567\n").unwrap();
+
+        let file_source = FileSource::new(PathBuf::from(&path), io::sink());
+        let checked = MinLenPassphrase {
+            inner: &file_source,
+            min: 8,
+        };
+        let err = checked
+            .read()
+            .expect_err("7-byte passphrase after FR-8 must fail min=8");
+        match err {
+            KeystoreError::PassphraseTooShort { min, got } => {
+                assert_eq!(min, 8);
+                assert_eq!(got, 7);
+            }
+            other => panic!("expected PassphraseTooShort {{ min: 8, got: 7 }}, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

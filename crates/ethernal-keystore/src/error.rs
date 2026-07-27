@@ -10,6 +10,8 @@
 
 use std::io;
 
+use ethernal_secretfile::SecretFileError;
+
 /// Errors returned by keystore loading, decryption, scanning, and passphrase
 /// sourcing. Not `PartialEq`/`Clone`: the [`KeystoreError::ReadFile`] and
 /// [`KeystoreError::ReadPassphrase`] variants wrap an [`io::Error`], which is
@@ -58,6 +60,20 @@ pub enum KeystoreError {
     EnvVarEmpty {
         /// The environment variable name that was consulted.
         var: String,
+    },
+
+    /// The passphrase file could not be read, or violates the file policy:
+    /// not found, permission denied, a directory, over-size, a residual `\r`
+    /// or `\n`, or not UTF-8. Never carries file contents. Exit code 2.
+    #[error("passphrase file: {0}")]
+    PassphraseFile(#[from] SecretFileError),
+
+    /// `--passphrase-file` named an empty file (0 bytes, or a lone newline).
+    /// Mirrors [`KeystoreError::EnvVarEmpty`], the source it replaces. Exit 2.
+    #[error("passphrase file is empty: {path}")]
+    PassphraseFileEmpty {
+        /// The path that was requested.
+        path: String,
     },
 
     /// An interactive passphrase prompt was needed but no controlling terminal

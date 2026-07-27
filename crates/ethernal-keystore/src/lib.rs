@@ -23,7 +23,7 @@ pub use decrypt_v3::decrypt_v3;
 pub use error::KeystoreError;
 pub use keystore::{Key, KeyLoader, Loader};
 pub use passphrase::{
-    require_min_len, EnvSource, NewKeystorePassphrase, PassphraseSource, TermPromptSource,
-    KEYSTORE_PASSPHRASE_MIN_LEN,
+    require_min_len, EnvSource, FileSource, NewKeystorePassphrase, PassphraseSource,
+    TermPromptSource, KEYSTORE_PASSPHRASE_MIN_LEN,
 };
 pub use scandir::{scan_dir, DirectoryIndex};
