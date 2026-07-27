@@ -45,6 +45,31 @@ its release notes remain on GitHub).
 > env vars now use the `ethernal` product name. Sections below that still say
 > `eth-deposit` are historical (pre-rename) unless noted.
 
+### ethernal (unreleased) — secret source flags: env → file
+
+**Breaking change** (no deprecation window; no `#[deprecated]`). The three CLI flags
+that took an environment **variable name** as the secret source are removed in favor
+of flags that take a **file path**. Library items `EnvSource` and
+`new_local_signer_from_env` are **retained** — only the CLI flags are removed
+(semver-major library removal is not implied).
+
+### Removed
+
+- **`--passphrase-env VAR`** → migrate to **`--passphrase-file PATH`**
+  (`deposit gen`, `validator new`/`recover`, `account new`/`recover`).
+- **`--mnemonic-passphrase-env VAR`** → migrate to **`--mnemonic-passphrase-file PATH`**
+  (`validator`/`account` `new`/`recover`).
+- **`--private-key-env VAR`** (previously defaulted to `ETHERNAL_TX_PRIVATE_KEY`) →
+  migrate to **`--private-key-file PATH`** (`tx sign` / `tx run` with `--signer local`).
+
+**FR-24 zero-flag regression:** `ethernal tx sign --signer local` no longer works
+with no key flag. `--private-key-env` had `default_value(DEFAULT_PRIV_KEY_ENV)`, so
+a set `ETHERNAL_TX_PRIVATE_KEY` was enough; there is no defensible default *path*,
+so `--private-key-file` is now **required** when `--signer local` on both `tx sign`
+and `tx run`.
+
+---
+
 ### ethernal (unreleased) — validator keygen progress + BLS verification
 
 Purely **additive** for operators who keep the default path; one optional flag
