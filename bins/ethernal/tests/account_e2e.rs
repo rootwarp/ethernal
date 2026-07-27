@@ -594,8 +594,8 @@ fn account_recover_help_has_no_entropy_or_time_flag() {
         "account recover must not expose a time/timestamp flag (S-4): {help}"
     );
     assert!(
-        help.contains("--mnemonic-passphrase"),
-        "expected mnemonic-passphrase in help: {help}"
+        help.contains("--mnemonic-passphrase-file"),
+        "expected mnemonic-passphrase-file in help: {help}"
     );
     assert!(
         help.contains("--start-index"),

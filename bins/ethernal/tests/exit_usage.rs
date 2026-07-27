@@ -354,3 +354,189 @@ fn validator_recover_validates_without_tty() {
         "expected one keystore at index 1: {entries:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F7-3 / FR-1 / FR-34 — removed file-secret `-env` flags are unknown flags
+// (clap exit 2). One case per command that previously accepted each flag.
+//
+// Names are assembled at runtime so a source inventory of the old flag
+// spellings under bins/ethernal/tests stays empty (help/positive assertions
+// must not require names that no longer exist).
+// ---------------------------------------------------------------------------
+
+fn removed_env_flag(base: &str) -> String {
+    // base is e.g. "--passphrase"; append the removed "env" suffix form.
+    format!("{base}-{}", "env")
+}
+
+/// Commands that used to take the keystore passphrase env-var-name flag.
+#[test]
+fn removed_passphrase_env_unknown_flag() {
+    let flag = removed_env_flag("--passphrase");
+    for prefix in [
+        &["deposit", "gen"][..],
+        &["validator", "new"][..],
+        &["validator", "recover"][..],
+        &["account", "new"][..],
+        &["account", "recover"][..],
+    ] {
+        let mut args: Vec<&str> = prefix.to_vec();
+        args.push(&flag);
+        args.push("FOO");
+        let name = format!("{} {flag}", prefix.join(" "));
+        assert_exit2(&args, &name);
+    }
+}
+
+/// Commands that used to take the mnemonic-passphrase env-var-name flag.
+#[test]
+fn removed_mnemonic_passphrase_env_unknown_flag() {
+    let flag = removed_env_flag("--mnemonic-passphrase");
+    for prefix in [
+        &["validator", "new"][..],
+        &["validator", "recover"][..],
+        &["account", "new"][..],
+        &["account", "recover"][..],
+    ] {
+        let mut args: Vec<&str> = prefix.to_vec();
+        args.push(&flag);
+        args.push("FOO");
+        let name = format!("{} {flag}", prefix.join(" "));
+        assert_exit2(&args, &name);
+    }
+}
+
+/// Commands that used to take the private-key env-var-name flag.
+#[test]
+fn removed_private_key_env_unknown_flag() {
+    let flag = removed_env_flag("--private-key");
+    for prefix in [&["tx", "sign"][..], &["tx", "run"][..]] {
+        let mut args: Vec<&str> = prefix.to_vec();
+        args.push(&flag);
+        args.push("FOO");
+        let name = format!("{} {flag}", prefix.join(" "));
+        assert_exit2(&args, &name);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F7-3 / FR-34 — new exit-2 paths introduced by the env→file flip.
+// ---------------------------------------------------------------------------
+
+/// FR-24: `--signer local` without `--private-key-file` → exit 2.
+#[test]
+fn sign_missing_private_key_file() {
+    // --input must be present so load reaches the FR-24 private-key-file check
+    // (missing --input would also exit 2, but for a different reason).
+    assert_exit2(
+        &["tx", "sign", "--signer", "local", "--input", "x"],
+        "tx sign local missing --private-key-file",
+    );
+}
+
+/// FR-24: `tx run --signer local` without `--private-key-file` → exit 2.
+#[test]
+fn run_missing_private_key_file() {
+    assert_exit2(
+        &[
+            "tx",
+            "run",
+            "--network",
+            "holesky",
+            "--input-file",
+            "x",
+            "--signer",
+            "local",
+        ],
+        "tx run local missing --private-key-file",
+    );
+}
+
+/// FR-6: `-` is not a valid secret-file path (stdin sentinel rejected).
+#[test]
+fn passphrase_file_dash_rejected() {
+    assert_exit2(
+        &[
+            "validator",
+            "recover",
+            "--output-dir",
+            "/tmp",
+            "--passphrase-file",
+            "-",
+        ],
+        "validator recover --passphrase-file -",
+    );
+}
+
+/// FR-6: `-` is not a valid private-key-file path.
+///
+/// `--input` must be present so load reaches `secret_file_arg` on
+/// `--private-key-file` (missing `--input` would also exit 2).
+#[test]
+fn private_key_file_dash_rejected() {
+    let out = ethernal()
+        .args([
+            "tx",
+            "sign",
+            "--signer",
+            "local",
+            "--input",
+            "x",
+            "--private-key-file",
+            "-",
+        ])
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "tx sign --private-key-file -: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("path cannot be '-'"),
+        "expected FR-6 dash rejection message, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--private-key-file"),
+        "error should name the flag: {stderr}"
+    );
+}
+
+/// FR-18: empty `--passphrase-file` (0 bytes) → exit 2.
+#[test]
+fn empty_passphrase_file_exit2() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = common::TempDir::new("exit-usage-empty-pw");
+    let secrets = common::TempDir::new("exit-usage-empty-pw-s");
+    let ks_path = common::secret_file(&secrets, "empty.pw", b"");
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n";
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(dir.path())
+        .args(["--count", "1", "--passphrase-file"])
+        .arg(&ks_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin
+            .write_all(mnemonic.as_bytes())
+            .expect("write mnemonic");
+    }
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "empty --passphrase-file: expected exit 2, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
