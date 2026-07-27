@@ -4,9 +4,12 @@
 //! (the Go code delegated these to go-ethereum's `crypto` package).
 
 use std::fmt::Write as _;
+use std::io::Write;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use ethernal_secretfile::read_secret_trimmed;
 use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
 use sha3::{Digest, Keccak256};
 use zeroize::{Zeroize, Zeroizing};
@@ -22,8 +25,8 @@ const LOCAL_SIGNER_NAME: &str = "local";
 
 /// Abstracts the act of producing an EIP-1559 signature for an
 /// `UnsignedTx`. Concrete implementations include [`LocalSigner`] (raw
-/// private key from env var) and [`crate::LedgerSigner`] (hardware wallet,
-/// behind the `ledger` cargo feature).
+/// private key from a file or env var) and [`crate::LedgerSigner`]
+/// (hardware wallet, behind the `ledger` cargo feature).
 ///
 /// SECURITY CONTRACT: implementations MUST NOT log, persist, or otherwise
 /// expose private key material. Errors returned to callers must not include
@@ -68,9 +71,10 @@ pub trait Signer {
 /// on drop).
 ///
 /// SECURITY: For development and CI only. Real-fund usage MUST use Ledger.
-/// The key MUST come from a secure source (environment variable; see
-/// [`new_local_signer_from_env`]). It MUST NEVER appear in argv or shell
-/// history.
+/// The private key MUST NEVER appear in argv or shell history. Prefer
+/// [`new_local_signer_from_file`] in CLI code so only a path (not the secret)
+/// is visible to the process and its children; a child inherits a path, not a
+/// key. See also [`new_local_signer_from_env`] for programmatic/env use.
 pub struct LocalSigner {
     /// 32-byte secp256k1 scalar; zeroized on close. Behind a `Mutex`
     /// because `close` takes `&self` (Go zeroized a slice in place).
@@ -82,8 +86,8 @@ pub struct LocalSigner {
 /// (with or without 0x prefix). Returns the `InvalidKey` sentinel for any
 /// length/format/curve failure — no key material appears in the error.
 ///
-/// Prefer [`new_local_signer_from_env`] in CLI code so the key never
-/// appears in argv.
+/// Prefer [`new_local_signer_from_file`] in CLI code so the key itself never
+/// appears in argv (only the file path does).
 pub fn new_local_signer_from_hex(hex_key: &str) -> Result<LocalSigner, SignerError> {
     let stripped = hex_key.strip_prefix("0x").unwrap_or(hex_key);
     if stripped.len() != 64 {
@@ -116,6 +120,9 @@ pub fn new_local_signer_from_hex(hex_key: &str) -> Result<LocalSigner, SignerErr
 /// constructor — callers should remove it after construction.
 ///
 /// Only the variable NAME appears in errors; the value is never included.
+///
+/// For CLI code, prefer [`new_local_signer_from_file`] so the secret is not
+/// inherited by child processes via the environment.
 pub fn new_local_signer_from_env(env_var: &str) -> Result<LocalSigner, SignerError> {
     let value = Zeroizing::new(std::env::var(env_var).unwrap_or_default());
     if value.is_empty() {
@@ -129,6 +136,37 @@ pub fn new_local_signer_from_env(env_var: &str) -> Result<LocalSigner, SignerErr
             format!("environment variable {env_var:?}"),
             SignerError::InvalidKey,
         )
+    })
+}
+
+/// Reads a hex-encoded private key from `path` and constructs a [`LocalSigner`].
+///
+/// Same file policy as the keystore passphrase — one implementation, in
+/// `ethernal-secretfile` — with the **hex** byte rule (FR-7): all leading and
+/// trailing ASCII whitespace is trimmed before parsing. Only the PATH ever
+/// appears in an error; the contents never do.
+///
+/// An empty file is not a special case: after trim it fails the hex length
+/// check (`expected 32-byte (64 hex char) private key`), not a file-policy
+/// empty rule.
+///
+/// `warn_out` receives at most one loose-permission WARNING (FR-17); pass
+/// `std::io::sink()` for none.
+pub fn new_local_signer_from_file(
+    path: &Path,
+    warn_out: &mut dyn Write,
+) -> Result<LocalSigner, SignerError> {
+    let s = read_secret_trimmed(path, warn_out).map_err(SignerError::KeyFile)?;
+    // Hex-constructor errors never embed key material. Mirror from_env by
+    // replacing the inner error with path-only context so a future change to
+    // the hex path cannot leak the file contents. Preserve the constructor's
+    // fixed safe message (length / format / curve) for operator diagnosis.
+    new_local_signer_from_hex(&s).map_err(|e| match e {
+        SignerError::Context { msg, source } => SignerError::Context {
+            msg: format!("{msg} (key file {})", path.display()),
+            source,
+        },
+        other => SignerError::context(format!("key file {}", path.display()), other),
     })
 }
 
