@@ -5,7 +5,8 @@
 //!       missing/malformed file, invalid hex, out-of-bounds --index, negative
 //!       fees, build-side RPC chain-ID mismatch)
 //!   3 — signer / crypto errors (bad key, no Ledger device, Ethereum app not
-//!       open, signer-side chain ID mismatch, signer closed)
+//!       open, signer-side chain ID mismatch, signer closed; exception:
+//!       SignerError::KeyFile is exit 2 — key *file* config failure, FR-13)
 //!   4 — user abort (SIGINT / cancellation / Ledger device rejection)
 //!   5 — broadcast / RPC errors (dial failure, gas/nonce estimation failure,
 //!       eth_sendRawTransaction error, broadcast-side chain ID mismatch)
@@ -311,13 +312,18 @@ pub fn exit_code_for(err: &AppError) -> i32 {
 
         // Signer/crypto errors (build/sign/run). The order mirrors Go's
         // exit.go: user-rejected (a device decision) and cancellation classify
-        // as user abort (4); every other signer sentinel is a crypto/signer
-        // failure (3). Walk the Context chain via `.sentinel()` — the analogue
-        // of Go's `errors.Is`. Cancelled is handled here rather than the exit-4
-        // block above because a signer error never also wraps an RPC-estimation
-        // tag, so there is no cancel-before-RPC ordering hazard.
+        // as user abort (4); a key *file* configuration failure is user/config
+        // (2, FR-13); every other signer sentinel is a crypto/signer failure
+        // (3). Walk the Context chain via `.sentinel()` — the analogue of Go's
+        // `errors.Is`. Cancelled is handled here rather than the exit-4 block
+        // above because a signer error never also wraps an RPC-estimation tag,
+        // so there is no cancel-before-RPC ordering hazard.
         AppError::Signer(e) => match e.sentinel() {
             SignerError::UserRejected | SignerError::Cancelled => 4,
+            // A key *file* configuration failure is a user error (FR-13), not a
+            // crypto failure — unlike every other SignerError. Explicit, above
+            // the exit-3 list (architecture §7 / D-7).
+            SignerError::KeyFile(_) => 2,
             SignerError::SignerClosed
             | SignerError::NoDevice
             | SignerError::AppNotOpen
@@ -346,6 +352,7 @@ pub fn exit_code_for(err: &AppError) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ethernal_signer::SecretFileError;
 
     /// Shorthand for `exit_code_for` over a constructed error.
     fn code(e: AppError) -> i32 {
@@ -458,6 +465,30 @@ mod tests {
         );
     }
 
+    // F2-3 / FR-13 / D-7: key *file* config is exit 2; a sibling pin keeps
+    // InvalidKey at 3 so run::bad_key stays green when F6 flips call sites.
+    #[test]
+    fn signer_key_file_is_exit2_invalid_key_stays_exit3() {
+        assert_eq!(
+            code(AppError::Signer(SignerError::KeyFile(
+                SecretFileError::NotFound {
+                    path: "/key.hex".into()
+                }
+            ))),
+            2
+        );
+        assert_eq!(
+            code(AppError::context(
+                "wrap",
+                AppError::Signer(SignerError::KeyFile(SecretFileError::PermissionDenied {
+                    path: "/key.hex".into()
+                }))
+            )),
+            2
+        );
+        assert_eq!(code(AppError::Signer(SignerError::InvalidKey)), 3);
+    }
+
     // --- exit 5: broadcast / RPC ---
     #[test]
     fn tx_broadcast_and_rpc_are_exit5() {
@@ -533,6 +564,22 @@ mod tests {
         assert_eq!(
             code(AppError::Keystore(KeystoreError::EnvVarEmpty {
                 var: "V".into()
+            })),
+            2
+        );
+        // F2-3 / FR-27: passphrase-file policy failures must be exit 2 explicitly
+        // (not only via the `_ => 2` catch-all).
+        assert_eq!(
+            code(AppError::Keystore(KeystoreError::PassphraseFile(
+                SecretFileError::NotFound {
+                    path: "/pw.txt".into()
+                }
+            ))),
+            2
+        );
+        assert_eq!(
+            code(AppError::Keystore(KeystoreError::PassphraseFileEmpty {
+                path: "/pw.txt".into()
             })),
             2
         );
