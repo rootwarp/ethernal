@@ -45,7 +45,7 @@ its release notes remain on GitHub).
 > env vars now use the `ethernal` product name. Sections below that still say
 > `eth-deposit` are historical (pre-rename) unless noted.
 
-### ethernal (unreleased) — secret source flags: env → file
+### [ethernal 3.0.0] - 2026-07-28 — secret source flags: env → file
 
 **Breaking change** (no deprecation window; no `#[deprecated]`). The three CLI flags
 that took an environment **variable name** as the secret source are removed in favor
@@ -53,7 +53,7 @@ of flags that take a **file path**. Library items `EnvSource` and
 `new_local_signer_from_env` are **retained** — only the CLI flags are removed
 (semver-major library removal is not implied).
 
-### Removed
+#### Removed
 
 - **`--passphrase-env VAR`** → migrate to **`--passphrase-file PATH`**
   (`deposit gen`, `validator new`/`recover`, `account new`/`recover`).
@@ -70,7 +70,7 @@ and `tx run`.
 
 ---
 
-### ethernal (unreleased) — validator keygen progress + BLS verification
+### [ethernal 3.0.0] - 2026-07-28 — validator keygen progress + BLS verification
 
 Purely **additive** for operators who keep the default path; one optional flag
 trades the strongest check for ~2× speed.
@@ -100,7 +100,7 @@ trades the strongest check for ~2× speed.
 
 ---
 
-### ethernal (unreleased) — CLI namespace restructure
+### [ethernal 3.0.0] - 2026-07-28 — CLI namespace restructure
 
 #### Breaking Changes
 
@@ -123,30 +123,7 @@ the old top-level paths (D5) — scripts must use the nested commands.
 
 ---
 
-### ethernal (unreleased) — rename eth-deposit → ethernal
-
-#### Breaking
-
-- **Binary:** `eth-deposit` → **`ethernal`** (`bins/ethernal`, `target/release/ethernal`).
-- **Crates / dirs:** packages `eth-deposit-{core,keystore,signer,tx}` and paths
-  `crates/{core,keystore,signer,tx}` → packages **`ethernal-*`** under
-  **`crates/ethernal-*`**.
-- **Env vars (keep `_TX_` middle segment):**
-
-  | Old | New |
-  |---|---|
-  | `ETH_DEPOSIT_TX_*` | `ETHERNAL_TX_*` |
-  | `ETH_DEPOSIT_TX_PRIVATE_KEY` | `ETHERNAL_TX_PRIVATE_KEY` |
-  | `ETH_DEPOSIT_VERSION` / `_COMMIT` / `_DATE` | `ETHERNAL_VERSION` / `_COMMIT` / `_DATE` |
-
-- **Writability probe file:** `.eth-deposit-probe-<pid>` → `.ethernal-probe-<pid>`.
-- **GitHub repository (R6):** `rootwarp/eth-utils` → **`rootwarp/ethernal`**.
-
-No dual-accept of old binary/env names (tool still unreleased).
-
----
-
-### ethernal (unreleased) — `account` namespace (Web3 v3 EOA keystores)
+### [ethernal 2.0.0] - 2026-07-19 — `account` namespace (Web3 v3 EOA keystores)
 
 Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
 
@@ -180,6 +157,30 @@ Purely **additive** — the `key` / `gen` deposit surface is unchanged (U-3).
   `ps`/history note, and the v3 no-NFKD interop rule.
 - `README.md`: `account new` / `account recover` in the command list; v3 vs
   EIP-2335 note; layout/notable-details rows.
+
+---
+
+### [ethernal 1.1.0] - 2026-07-18 — rename eth-deposit → ethernal
+
+#### Breaking
+
+- **Binary:** `eth-deposit` → **`ethernal`** (`bins/ethernal`, `target/release/ethernal`).
+- **Crates / dirs:** packages `eth-deposit-{core,keystore,signer,tx}` and paths
+  `crates/{core,keystore,signer,tx}` → packages **`ethernal-*`** under
+  **`crates/ethernal-*`**.
+- **Env vars (keep `_TX_` middle segment):**
+
+  | Old | New |
+  |---|---|
+  | `ETH_DEPOSIT_TX_*` | `ETHERNAL_TX_*` |
+  | `ETH_DEPOSIT_TX_PRIVATE_KEY` | `ETHERNAL_TX_PRIVATE_KEY` |
+  | `ETH_DEPOSIT_VERSION` / `_COMMIT` / `_DATE` | `ETHERNAL_VERSION` / `_COMMIT` / `_DATE` |
+
+- **Writability probe file:** `.eth-deposit-probe-<pid>` → `.ethernal-probe-<pid>`.
+- **GitHub repository (R6):** `rootwarp/eth-utils` → **`rootwarp/ethernal`**.
+
+No dual-accept of old binary/env names (the Rust binary had not shipped a tagged
+release at the time of the rename).
 
 ---
 
