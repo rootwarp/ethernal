@@ -42,6 +42,8 @@ pub const PHASE3_TX_HASH: &str =
 
 /// Every env var that a build/send flag falls back to. Scrubbed from every test
 /// Command so a set variable in the runner cannot mask a missing-flag error.
+// FR-35: ETHERNAL_TX_PRIVATE_KEY is gone — no secret in the environment to scrub.
+// ETHERNAL_TX_RPC_URL / _FROM / _GAS_LIMIT stay (OD-1, A-1): values, not secrets.
 const ETHERNAL_ENV_VARS: &[&str] = &[
     "ETHERNAL_TX_INPUT_FILE",
     "ETHERNAL_TX_NETWORK",
@@ -53,7 +55,6 @@ const ETHERNAL_ENV_VARS: &[&str] = &[
     "ETHERNAL_TX_MAX_PRIORITY_FEE_PER_GAS",
     "ETHERNAL_TX_NONCE",
     "ETHERNAL_TX_FROM",
-    "ETHERNAL_TX_PRIVATE_KEY",
 ];
 
 /// Returns a `Command` for the built `ethernal` binary, with all

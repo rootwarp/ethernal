@@ -399,6 +399,116 @@ fn phase3_local_signer_golden() {
     );
 }
 
+// FR-19 / FR-32: hex-shaped missing path → exit 2 without echoing the argument.
+// Distinctive sentinel so scanning stdout+stderr for absence is not vacuous.
+const HEX_GUARD_SENTINEL: &str =
+    "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+#[test]
+fn private_key_file_hex_shaped_not_found_exit2_no_echo() {
+    let dir = TempDir::new("sign-hexguard");
+    let in_file = unsigned_input(&dir);
+
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(HEX_GUARD_SENTINEL)
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        stderr.contains("looks like a key value, not a path"),
+        "FR-19 wording: {stderr}"
+    );
+    assert!(
+        !combined.contains(HEX_GUARD_SENTINEL) && !combined.contains("deadbeef"),
+        "FR-32: rejected argument must not appear in stdout/stderr: {combined}"
+    );
+}
+
+// FR-19: guard is NotFound-only — an existing file whose name is 64-hex is a path.
+#[test]
+fn private_key_file_hex_shaped_existing_name_ok() {
+    let dir = TempDir::new("sign-hex-existing");
+    // Written as unsigned.json under dir; opened via relative path after current_dir.
+    let _ = unsigned_input(&dir);
+    let name = "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe";
+    let key_file = secret_file(&dir, name, PHASE3_KEY.as_bytes());
+    assert_eq!(
+        key_file.file_name().and_then(|s| s.to_str()),
+        Some(name),
+        "fixture basename must be hex-shaped"
+    );
+
+    let out = ethernal()
+        .current_dir(dir.path())
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg("unsigned.json")
+        .arg("--private-key-file")
+        .arg(name)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "existing hex-named key file must work as a path; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// FR-19: 63- and 65-char hex-ish args fall through to ordinary NotFound.
+#[test]
+fn private_key_file_hex_ish_wrong_length_is_ordinary_not_found() {
+    let dir = TempDir::new("sign-hex-len");
+    let in_file = unsigned_input(&dir);
+
+    let short = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbee"; // 0x+63
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(short)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "63-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(short) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+
+    let long = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeeff"; // 0x+65
+    let out = ethernal()
+        .args(["tx", "sign", "--signer", "local", "--input"])
+        .arg(&in_file)
+        .arg("--private-key-file")
+        .arg(long)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "65-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(long) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+}
+
 // FR-30: long_about / --signer help describe a path, not an environment variable.
 #[test]
 fn sign_help_describes_path_argument() {

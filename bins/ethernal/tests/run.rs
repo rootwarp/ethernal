@@ -414,6 +414,106 @@ fn output_dash_is_stdout() {
     );
 }
 
+// FR-19 / FR-32: hex-shaped missing path → exit 2 without echoing the argument.
+const HEX_GUARD_SENTINEL: &str =
+    "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+#[test]
+fn private_key_file_hex_shaped_not_found_exit2_no_echo() {
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(HEX_GUARD_SENTINEL)
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        stderr.contains("looks like a key value, not a path"),
+        "FR-19 wording: {stderr}"
+    );
+    assert!(
+        !combined.contains(HEX_GUARD_SENTINEL) && !combined.contains("deadbeef"),
+        "FR-32: rejected argument must not appear in stdout/stderr: {combined}"
+    );
+}
+
+// FR-19: guard is NotFound-only — existing hex-named file is a path.
+#[test]
+fn private_key_file_hex_shaped_existing_name_ok() {
+    let dir = TempDir::new("run-hex-existing");
+    let name = "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe";
+    let _key_file = secret_file(&dir, name, PHASE3_KEY.as_bytes());
+
+    let out = ethernal()
+        .current_dir(dir.path())
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(name)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "existing hex-named key file must work as a path; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// FR-19: 63- and 65-char hex-ish args fall through to ordinary NotFound.
+#[test]
+fn private_key_file_hex_ish_wrong_length_is_ordinary_not_found() {
+    let short = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbee";
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(short)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "63-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(short) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+
+    let long = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeeff";
+    let out = ethernal()
+        .args(["tx", "run", "--network", "holesky", "--input-file"])
+        .arg(deposit_fixture())
+        .args(["--signer", "local"])
+        .arg("--private-key-file")
+        .arg(long)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("looks like a key value"),
+        "65-char must not hit FR-19: {stderr}"
+    );
+    assert!(
+        stderr.contains(long) || stderr.contains("not found"),
+        "ordinary NotFound should name the path: {stderr}"
+    );
+}
+
 // Go: TestRunSubcommand_Help
 #[test]
 fn run_subcommand_help() {

@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use clap::{Arg, ArgMatches, Command};
 
 use ethernal_core::cancel::CancelToken;
-use ethernal_signer::{new_local_signer_from_file, LedgerSigner, LocalSigner, SignedTx, Signer};
+use ethernal_signer::{
+    new_local_signer_from_file, LedgerSigner, LocalSigner, SecretFileError, SignedTx, Signer,
+    SignerError,
+};
 use ethernal_tx::UnsignedTx;
 
 use crate::build_cmd::{read_input, write_file_mode};
@@ -185,12 +188,36 @@ pub fn run(m: &ArgMatches, cancel: &CancelToken) -> Result<(), AppError> {
 /// path (architecture §6.1 / D-4). Callers that need the signer again (e.g.
 /// `run_action` for `from` derivation) must pass the constructed value forward
 /// — never re-open the path.
+///
+/// On `SecretFileError::NotFound` only (D-8 / FR-19): if the argument matches
+/// `^(0x)?[0-9a-fA-F]{64}$`, the error is replaced with exit 2 naming the flag
+/// and the mistake **without echoing the argument** (FR-32). Never a pre-flight
+/// `stat` — still exactly one `open` per invocation.
 pub(crate) fn local_signer_from_file(
     path: &Path,
     warn_out: &mut dyn Write,
 ) -> Result<LocalSigner, AppError> {
-    new_local_signer_from_file(path, warn_out)
-        .map_err(|e| AppError::context("local signer", AppError::Signer(e)))
+    new_local_signer_from_file(path, warn_out).map_err(|e| {
+        let hex_shaped_not_found = matches!(
+            e.sentinel(),
+            SignerError::KeyFile(SecretFileError::NotFound { .. })
+        ) && looks_like_hex_private_key_arg(path);
+        if hex_shaped_not_found {
+            // Do not interpolate `path` — the argument is the secret.
+            return AppError::exit2("--private-key-file: looks like a key value, not a path");
+        }
+        AppError::context("local signer", AppError::Signer(e))
+    })
+}
+
+/// FR-19: exact-length hex private-key shape (`^(0x)?[0-9a-fA-F]{64}$`).
+/// Optional lowercase `0x` only; 63/65-char hex-ish strings do not match.
+fn looks_like_hex_private_key_arg(path: &Path) -> bool {
+    let Some(s) = path.to_str() else {
+        return false;
+    };
+    let hex = s.strip_prefix("0x").unwrap_or(s);
+    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Constructs a signer and produces a [`SignedTx`] for the given unsigned tx.
@@ -337,6 +364,111 @@ mod tests {
             sink.is_empty(),
             "0600 fixture must not emit FR-17 warning: {}",
             String::from_utf8_lossy(&sink)
+        );
+    }
+
+    // Distinctive FR-19 sentinel (not PHASE3_KEY) so FR-32 scans are meaningful.
+    const HEX_GUARD_SENTINEL: &str =
+        "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+    #[test]
+    fn looks_like_hex_private_key_arg_matrix() {
+        assert!(looks_like_hex_private_key_arg(Path::new(
+            HEX_GUARD_SENTINEL
+        )));
+        assert!(looks_like_hex_private_key_arg(Path::new(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        )));
+        assert!(looks_like_hex_private_key_arg(Path::new(
+            "0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+        )));
+        // 63 hex digits after optional 0x — exact-length guard.
+        assert!(!looks_like_hex_private_key_arg(Path::new(
+            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbee"
+        )));
+        // 65 hex digits.
+        assert!(!looks_like_hex_private_key_arg(Path::new(
+            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeeff"
+        )));
+        // Uppercase 0X prefix is not in `^(0x)?…`.
+        assert!(!looks_like_hex_private_key_arg(Path::new(
+            "0Xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        )));
+        assert!(!looks_like_hex_private_key_arg(Path::new("/tmp/key.hex")));
+        assert!(!looks_like_hex_private_key_arg(Path::new("not-a-key")));
+    }
+
+    #[test]
+    fn hex_shaped_not_found_is_exit2_without_echo() {
+        let mut sink = Vec::new();
+        let err = local_signer_from_file(Path::new(HEX_GUARD_SENTINEL), &mut sink)
+            .expect_err("hex-shaped missing path must fail");
+        assert_eq!(exit_code_for(&err), 2);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("looks like a key value, not a path"),
+            "FR-19 wording: {msg}"
+        );
+        assert!(
+            msg.contains("--private-key-file"),
+            "must name the flag: {msg}"
+        );
+        assert!(
+            !msg.contains(HEX_GUARD_SENTINEL) && !msg.contains("deadbeef"),
+            "FR-32: must not echo the argument: {msg}"
+        );
+    }
+
+    #[test]
+    fn hex_shaped_existing_file_is_read_as_path() {
+        let dir = Tmp::new("sign-hex-named-file");
+        // Bare 64-hex filename: the *basename* matches FR-19; the absolute path
+        // does not. Opening the absolute path still succeeds — the guard is
+        // NotFound-only (binary e2e covers the bare-name-as-arg case via
+        // Command::current_dir, which is not process-global).
+        let name = "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe";
+        let key = b"0x0101010101010101010101010101010101010101010101010101010101010101";
+        let path = dir.secret_file(name, key);
+        assert!(
+            looks_like_hex_private_key_arg(Path::new(name)),
+            "fixture basename must be hex-shaped"
+        );
+        assert!(
+            !looks_like_hex_private_key_arg(&path),
+            "absolute path must not match FR-19 shape"
+        );
+        let mut sink = Vec::new();
+        let s = local_signer_from_file(&path, &mut sink).expect("existing hex-named file");
+        assert!(s.address().is_ok());
+        let _ = s.close();
+    }
+
+    #[test]
+    fn hex_ish_wrong_length_falls_through_to_not_found() {
+        // 63-char hex-ish: ordinary NotFound (path is echoed — not a secret shape).
+        let short = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbee";
+        assert_eq!(short.len(), 65); // 0x + 63
+        let mut sink = Vec::new();
+        let err = local_signer_from_file(Path::new(short), &mut sink).expect_err("missing");
+        assert_eq!(exit_code_for(&err), 2);
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("looks like a key value"),
+            "63-char must not hit FR-19: {msg}"
+        );
+        assert!(
+            msg.contains(short) || msg.contains("not found"),
+            "ordinary NotFound: {msg}"
+        );
+
+        let long = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeeff";
+        assert_eq!(long.len(), 67); // 0x + 65
+        let err = local_signer_from_file(Path::new(long), &mut sink).expect_err("missing");
+        assert_eq!(exit_code_for(&err), 2);
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("looks like a key value"),
+            "65-char must not hit FR-19: {msg}"
         );
     }
 }
