@@ -133,8 +133,7 @@ pub(crate) fn validate_output_dir(dir: &str) -> Result<(), String> {
 /// escape hatch: naming `/dev/stdin` alone would send an operator straight
 /// into the collision the rejection exists to avoid.
 ///
-/// Call sites arrive in F4–F6; until then this is a library seam only (F2-1).
-#[allow(dead_code)] // F4/F5/F6 wire every secret-file flag through this guard.
+/// Call sites: F4–F6 secret-file flags (`--passphrase-file`, etc.).
 pub(crate) fn secret_file_arg(flag: &str, value: &str) -> Result<PathBuf, AppError> {
     if value == "-" {
         return Err(AppError::exit2(format!(

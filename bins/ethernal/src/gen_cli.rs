@@ -4,7 +4,7 @@
 //! validations pass.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
@@ -28,9 +28,9 @@ pub struct GenConfig {
     pub network: Network,
     /// The validated, writable directory for deposit_data-<ts>.json.
     pub output_dir: String,
-    /// The name of the environment variable holding the keystore passphrase.
-    /// Empty means the tool falls back to a TTY prompt.
-    pub passphrase_env: String,
+    /// Path to a file holding the keystore passphrase. `None` means the tool
+    /// falls back to a TTY prompt.
+    pub passphrase_file: Option<PathBuf>,
     /// True when the operator passed --i-understand-this-is-mainnet.
     /// NOTE: may be true for non-mainnet networks if the flag was supplied;
     /// always evaluate together with `network == Mainnet`.
@@ -68,7 +68,7 @@ pub fn command() -> Command {
     Command::new("gen")
         .about("Generate Launchpad-compatible deposit_data JSON for existing BLS validator keys")
         .override_usage(
-            "ethernal deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-env VAR]",
+            "ethernal deposit gen --keystore-dir DIR --pubkeys HEX[,...] --network NET --output-dir DIR --withdrawal-address ADDR [--passphrase-file PATH]",
         )
         .long_about(
             "Produces deposit_data-<ts>.json for one or more BLS validator public keys by\n\
@@ -119,10 +119,10 @@ pub fn command() -> Command {
                 .help("Existing, writable directory for the output deposit_data-<ts>.json file"),
         )
         .arg(
-            Arg::new("passphrase-env")
-                .long("passphrase-env")
-                .value_name("VAR")
-                .help("Name of the environment variable holding the keystore passphrase (omit for TTY prompt)"),
+            Arg::new("passphrase-file")
+                .long("passphrase-file")
+                .value_name("PATH")
+                .help("Path to a file holding the keystore passphrase (omit for TTY prompt)"),
         )
         .arg(
             Arg::new("i-understand-this-is-mainnet")
@@ -262,15 +262,17 @@ pub fn load_config(m: &ArgMatches, banner_out: &mut dyn Write) -> Result<GenConf
     }
     let withdrawal_credentials = eth1_withdrawal_credentials(addr);
 
+    let passphrase_file = match m.get_one::<String>("passphrase-file") {
+        Some(v) => Some(fs_util::secret_file_arg("--passphrase-file", v)?),
+        None => None,
+    };
+
     let cfg = GenConfig {
         keystore_dir,
         pubkeys,
         network: net,
         output_dir,
-        passphrase_env: m
-            .get_one::<String>("passphrase-env")
-            .cloned()
-            .unwrap_or_default(),
+        passphrase_file,
         mainnet_ack,
         dry_run,
         verbose: m.get_flag("verbose"),
@@ -777,8 +779,38 @@ mod tests {
         assert!(!banner.contains("MAINNET"));
     }
 
+    // FR-6: --passphrase-file - is rejected at config load (secret_file_arg).
+    #[test]
+    fn passphrase_file_dash_exit2() {
+        let dir = Tmp::new("gen-cli-test");
+        let ks = Tmp::new("gen-cli-test");
+        let pk = valid_pubkey(1);
+        let err = load_err(&with_wd(&[
+            "--keystore-dir",
+            ks.str(),
+            "--pubkeys",
+            &pk,
+            "--network",
+            "hoodi",
+            "--output-dir",
+            dir.str(),
+            "--passphrase-file",
+            "-",
+        ]));
+        assert_eq!(exit_code_for(&err), 2);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--passphrase-file"),
+            "message must name the flag: {msg}"
+        );
+        assert!(
+            msg.contains("<(") && msg.contains(")"),
+            "message must mention process substitution: {msg}"
+        );
+    }
+
     // Go: TestDryRunFlag / TestVerboseFlag / TestJSONLogsFlag /
-    // TestVerifyWithDepositCLIFlag / TestDepositCLIPathFlag / TestPassphraseEnvOptional.
+    // TestVerifyWithDepositCLIFlag / TestDepositCLIPathFlag / TestPassphraseFileOptional.
     #[test]
     fn boolean_and_string_flags_propagate() {
         let dir = Tmp::new("gen-cli-test");
@@ -811,10 +843,10 @@ mod tests {
             base(&["--deposit-cli-path", "/usr/local/bin/deposit"]).deposit_cli_path,
             "/usr/local/bin/deposit"
         );
-        assert_eq!(base(&[]).passphrase_env, "");
+        assert_eq!(base(&[]).passphrase_file, None);
         assert_eq!(
-            base(&["--passphrase-env", "MY_PASSPHRASE"]).passphrase_env,
-            "MY_PASSPHRASE"
+            base(&["--passphrase-file", "/tmp/pw.txt"]).passphrase_file,
+            Some(PathBuf::from("/tmp/pw.txt"))
         );
         assert_eq!(base(&[]).withdrawal_credentials, TEST_WITHDRAWAL_CREDS);
     }

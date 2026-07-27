@@ -15,7 +15,8 @@ Build: `make build` (repo root) → `target/release/ethernal`. Ledger hardware s
 
 ## Golden checks
 
-- deposit gen: `KEYSTORE_PASSPHRASE=$(cat testdata/hoodi/passphrase.txt) target/release/ethernal deposit gen --network hoodi --keystore-dir testdata/hoodi/keystores --pubkeys $(cat testdata/hoodi/pubkeys.txt) --output-dir <tmp> --passphrase-env KEYSTORE_PASSPHRASE` → diff vs `deposit_data-expected.json`
+- deposit gen: `target/release/ethernal deposit gen --network hoodi --keystore-dir testdata/hoodi/keystores --pubkeys $(cat testdata/hoodi/pubkeys.txt) --output-dir <tmp> --passphrase-file testdata/hoodi/passphrase.txt --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1` → diff vs `deposit_data-expected.json`
+  - **Note:** the tracked fixture is `100644` (git cannot store `0600`), so an FR-17 `file permissions` WARNING on stderr is **expected and correct** for that run.
 - deposit build: `target/release/ethernal deposit build --network holesky --input-file testdata/phase2/holesky/deposit_data_single.json` → diff vs `unsigned_tx_golden.json`
 - tx sign: `ETHERNAL_TX_PRIVATE_KEY=$(cat testdata/phase3/holesky/private_key.txt) target/release/ethernal tx sign --signer local --input testdata/phase3/holesky/unsigned_tx.json` → diff vs `signed_tx_golden.json`
 
@@ -30,11 +31,15 @@ Full pipe chain (all four stages, stdin/stdout):
 
 ```sh
 target/release/ethernal deposit gen --network hoodi --keystore-dir testdata/hoodi/keystores \
-  --pubkeys $(cat testdata/hoodi/pubkeys.txt) --output-dir <tmp> --dry-run --passphrase-env KEYSTORE_PASSPHRASE \
+  --pubkeys $(cat testdata/hoodi/pubkeys.txt) --output-dir <tmp> --dry-run \
+  --passphrase-file testdata/hoodi/passphrase.txt \
+  --withdrawal-address 0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1 \
  | target/release/ethernal deposit build --network hoodi --input-file - --nonce <N> \
  | target/release/ethernal tx sign --signer local --input - \
  | target/release/ethernal tx send --yes --input - --rpc-url http://127.0.0.1:8599 --wait-for-receipt
 ```
+
+(The same FR-17 `file permissions` WARNING is expected on the tracked `100644` fixture.)
 
 Verify on-chain: `cast tx --rpc-url http://127.0.0.1:8599 <hash>`; deposit contract balance grows 32 ETH per send.
 
@@ -51,7 +56,7 @@ Interactive send confirmation: pipe the network name (`echo hoodi | … tx send 
 
 ## Gotchas
 
-- `deposit gen` needs `--passphrase-env` in pipes — without it it prompts on /dev/tty and dies when no TTY (exit 2, message names the flag).
+- `deposit gen` needs `--passphrase-file` in pipes — without it it prompts on /dev/tty and dies when no TTY (exit 2, message names the flag). Tracked fixtures at `100644` emit an FR-17 WARNING (expected).
 - `deposit gen --dry-run` does NOT require `--output-dir` (writes JSON to stdout).
 - Missing required flags exit 2 on all subcommands.
 - Exit codes: 0 ok, 2 user/config error (incl. build-side chain-ID mismatch), 3 signer/crypto (signer-side chain-ID mismatch), 4 abort (incl. SIGINT during RPC estimation), 5 broadcast/RPC (incl. broadcast-side chain-ID mismatch).

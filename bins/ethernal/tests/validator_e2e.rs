@@ -18,7 +18,7 @@ use ethernal_core::bip39;
 use ethernal_core::hd::{self, KeyPath};
 use ethernal_keystore::{KeyLoader, Loader, PassphraseSource};
 
-use common::{crate_testdata, ethernal, TempDir};
+use common::{crate_testdata, ethernal, secret_file, TempDir};
 
 // --- chain anchor: BIP-39 abandon×11 about + "TREZOR" = EIP-2333 case-0 seed ---
 
@@ -283,9 +283,10 @@ fn validator_recover_then_gen_deposit_data_byte_stable() {
         .collect::<Vec<_>>()
         .join(",");
 
-    let ks_var = format!("ETHERNAL_K4_GEN_KS_{}", std::process::id());
+    // deposit gen passphrase (F5-1): file flag via common::secret_file.
+    let pw_dir = TempDir::new("k4-e2e-gen-pw");
+    let pw_path = secret_file(&pw_dir, "passphrase.txt", KEYSTORE_PW.as_bytes());
     let out = ethernal()
-        .env(&ks_var, KEYSTORE_PW)
         .args(["deposit", "gen", "--keystore-dir"])
         .arg(dir.path())
         .args([
@@ -294,11 +295,10 @@ fn validator_recover_then_gen_deposit_data_byte_stable() {
             "--network",
             "hoodi",
             "--dry-run",
-            "--passphrase-env",
-            &ks_var,
-            "--withdrawal-address",
-            WITHDRAWAL_ADDR,
+            "--passphrase-file",
         ])
+        .arg(&pw_path)
+        .args(["--withdrawal-address", WITHDRAWAL_ADDR])
         .output()
         .expect("run gen");
     assert!(

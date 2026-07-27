@@ -19,7 +19,7 @@ use common::anvil::Anvil;
 #[cfg(unix)]
 use common::{
     ethernal, hoodi_expected_deposit_data, hoodi_keystores, hoodi_passphrase, hoodi_pubkey,
-    write_temp_signed_tx, PHASE3_KEY,
+    secret_file, write_temp_signed_tx, TempDir, PHASE3_KEY,
 };
 
 /// Hoodi chain id (A-3 / verify skill).
@@ -38,8 +38,6 @@ const FUND_WEI_HEX: &str = "0x21e19e0c9bab2400000";
 #[cfg(unix)]
 const THIRTY_TWO_ETH_WEI: u128 = 32_000_000_000_000_000_000;
 
-#[cfg(unix)]
-const PASS_ENV: &str = "TEST_HOODI_PASSPHRASE";
 #[cfg(unix)]
 const KEY_ENV: &str = "TEST_ETHERNAL_KEY";
 
@@ -84,8 +82,9 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
     anvil.set_balance(PHASE3_SENDER, FUND_WEI_HEX);
 
     // --- gen --dry-run (hoodi fixtures) ---
+    let pw_dir = TempDir::new("e2e-live-pw");
+    let pw_path = secret_file(&pw_dir, "passphrase.txt", hoodi_passphrase().as_bytes());
     let gen = ethernal()
-        .env(PASS_ENV, hoodi_passphrase())
         .args(["deposit", "gen", "--keystore-dir"])
         .arg(hoodi_keystores())
         .args([
@@ -94,11 +93,10 @@ fn e2e_live_full_pipe_chain_moves_32_eth() {
             "--network",
             "hoodi",
             "--dry-run",
-            "--passphrase-env",
-            PASS_ENV,
-            "--withdrawal-address",
-            PHASE3_SENDER,
+            "--passphrase-file",
         ])
+        .arg(&pw_path)
+        .args(["--withdrawal-address", PHASE3_SENDER])
         .output()
         .expect("spawn gen");
     assert!(

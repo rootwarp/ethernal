@@ -14,12 +14,13 @@ use ethernal_core::deposit::{self, Entry, Generator, Request};
 use ethernal_core::network::{self, Network};
 use ethernal_core::output::{DryRunWriter, FsWriter, Writer as OutputWriter};
 use ethernal_keystore::{
-    scan_dir, DirectoryIndex, EnvSource, KeyLoader, Loader, PassphraseSource, TermPromptSource,
+    scan_dir, DirectoryIndex, FileSource, KeyLoader, Loader, PassphraseSource, TermPromptSource,
 };
 
 use crate::errors::AppError;
 use crate::fs_util::stderr_is_tty;
 use crate::gen_cli::GenConfig;
+use crate::keystore_cli::InMemoryPassphrase;
 use crate::logging::{Format, Level, Logger};
 
 /// Mirrors the staking-deposit-cli release used to derive the golden test
@@ -138,11 +139,18 @@ pub fn run_gen_with_deps(
         &[("count", index.len().to_string())],
     );
 
-    let env_source;
+    // D-5 / FR-22: read the passphrase file once before the worker pool.
+    // KeyLoader::load calls pw.read() per pubkey across --parallel threads;
+    // a process-sub or FIFO cannot survive N concurrent opens. InMemoryPassphrase
+    // is the established in-process source (keystore_cli.rs, C4's D-6) and is Sync.
+    // TermPromptSource stays per-pubkey (pre-existing UX; hoisting would change
+    // interactive behavior beyond this change's scope — architecture §6.2).
+    let file_pw;
     let tty_source;
-    let pw_src: &(dyn PassphraseSource + Sync) = if !cfg.passphrase_env.is_empty() {
-        env_source = EnvSource::new(&cfg.passphrase_env);
-        &env_source
+    let pw_src: &(dyn PassphraseSource + Sync) = if let Some(p) = &cfg.passphrase_file {
+        let src = FileSource::new(p.clone(), std::io::stderr());
+        file_pw = InMemoryPassphrase::new(src.read().map_err(AppError::Keystore)?);
+        &file_pw
     } else {
         tty_source = TermPromptSource::new(std::io::stderr());
         &tty_source
@@ -668,7 +676,7 @@ mod tests {
             pubkeys: pks,
             network: Network::Hoodi,
             output_dir: "/tmp".to_string(),
-            passphrase_env: String::new(),
+            passphrase_file: None,
             mainnet_ack: false,
             dry_run: false,
             verbose: false,

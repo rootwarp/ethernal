@@ -143,7 +143,7 @@ fn secret_file_mode_0600_no_trailing_newline_inside_tempdir() {
 /// an interactive `cargo test` / `make test` the prompt blocks forever waiting
 /// for a passphrase on the real terminal. `setsid(2)` drops that inheritance so
 /// `open("/dev/tty")` fails with ENXIO → `NoTty` → exit 2 naming
-/// `--passphrase-env`.
+/// `--passphrase-file`.
 #[cfg(unix)]
 pub fn ethernal_no_tty() -> Command {
     use std::os::unix::process::CommandExt;
