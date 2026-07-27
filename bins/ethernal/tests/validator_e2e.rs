@@ -853,3 +853,184 @@ fn validator_recover_mnemonic_passphrase_forms_conflict() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+// ---------------------------------------------------------------------------
+// F4-3 / FR-12 — S-D byte-rule matrix (mnemonic passphrase → BIP-39 seed)
+// ---------------------------------------------------------------------------
+
+/// S-D matrix value: plan's `pw` — no min-length on mnemonic passphrase.
+const SD_MNEMONIC_PW: &str = "pw";
+
+/// Collect signing pubkeys from keystore-*.json under `dir` (sorted by path).
+fn signing_pubkeys(dir: &Path) -> Vec<String> {
+    keystore_files(dir)
+        .iter()
+        .map(|f| {
+            let v: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(f).expect("read ks")).expect("json");
+            v["pubkey"].as_str().expect("pubkey").to_owned()
+        })
+        .collect()
+}
+
+/// Run `validator recover` with fixed mnemonic, custom mnemonic-passphrase
+/// source, and a valid keystore passphrase file. Returns (stderr, success, code).
+fn run_validator_recover_mp(
+    out_dir: &Path,
+    count: u32,
+    mp_args: &[&str],
+) -> (String, bool, Option<i32>) {
+    let secrets = TempDir::new("f4-3-sd-secrets");
+    let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+
+    let mut child = ethernal()
+        .args(["validator", "recover", "--output-dir"])
+        .arg(out_dir)
+        .args([
+            "--count",
+            &count.to_string(),
+            "--start-index",
+            "0",
+            "--passphrase-file",
+            ks_path.to_str().unwrap(),
+        ])
+        .args(mp_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn validator recover");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+    }
+
+    let out = child.wait_with_output().expect("wait");
+    drop(secrets);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    (stderr, out.status.success(), out.status.code())
+}
+
+/// FR-12 S-D: `pw` vs `pw\n` mnemonic-passphrase files → identical pubkey set,
+/// and both equal `--mnemonic-passphrase pw`. Production scrypt; `--count 1`.
+#[test]
+fn validator_recover_sd_trailing_nl_pubkeys_match_cli() {
+    let secrets = TempDir::new("f4-3-sd-pw-files");
+    let mp_plain = secret_file(&secrets, "mp.pw", SD_MNEMONIC_PW.as_bytes());
+    let mp_nl = secret_file(&secrets, "mp_nl.pw", b"pw\n");
+
+    let dir_plain = TempDir::new("f4-3-sd-plain");
+    let (stderr_plain, ok_plain, _) = run_validator_recover_mp(
+        dir_plain.path(),
+        1,
+        &["--mnemonic-passphrase-file", mp_plain.to_str().unwrap()],
+    );
+    assert!(
+        ok_plain,
+        "validator recover (mp file pw) failed: {stderr_plain}"
+    );
+
+    let dir_nl = TempDir::new("f4-3-sd-nl");
+    let (stderr_nl, ok_nl, _) = run_validator_recover_mp(
+        dir_nl.path(),
+        1,
+        &["--mnemonic-passphrase-file", mp_nl.to_str().unwrap()],
+    );
+    assert!(
+        ok_nl,
+        "validator recover (mp file pw\\n) failed: {stderr_nl}"
+    );
+
+    let dir_cli = TempDir::new("f4-3-sd-cli");
+    let (stderr_cli, ok_cli, _) = run_validator_recover_mp(
+        dir_cli.path(),
+        1,
+        &["--mnemonic-passphrase", SD_MNEMONIC_PW],
+    );
+    assert!(
+        ok_cli,
+        "validator recover (--mnemonic-passphrase pw) failed: {stderr_cli}"
+    );
+
+    let pubkeys_plain = signing_pubkeys(dir_plain.path());
+    let pubkeys_nl = signing_pubkeys(dir_nl.path());
+    let pubkeys_cli = signing_pubkeys(dir_cli.path());
+    assert_eq!(pubkeys_plain.len(), 1);
+    assert_eq!(
+        pubkeys_plain, pubkeys_nl,
+        "pw and pw\\n mnemonic-passphrase files must yield identical pubkey sets"
+    );
+    assert_eq!(
+        pubkeys_plain, pubkeys_cli,
+        "file path must match --mnemonic-passphrase pw"
+    );
+}
+
+/// FR-12 / FR-9 S-D CR rows: `pw\r`, `pw\r\n`, `pw\r\r\n` each exit 2.
+///
+/// This row — not S-B — is the automated evidence that FR-9's widened residual
+/// clause (reject every residual `\r`) is live. S-B passes under
+/// `normalize_passphrase` whether or not FR-8/FR-9 exist.
+#[test]
+fn validator_recover_sd_cr_shapes_exit2() {
+    // Distinctive sentinel so a content leak is unambiguous (M-3).
+    const SENTINEL: &str = "F43_SD_pw";
+    for (label, bytes) in [
+        ("cr", &b"F43_SD_pw\r"[..]),
+        ("crlf", &b"F43_SD_pw\r\n"[..]),
+        ("crcrlf", &b"F43_SD_pw\r\r\n"[..]),
+    ] {
+        // Comment required by F4-3 acceptance: this row, not S-B, is the evidence
+        // FR-9's widened clause is live — do not delete as "duplicate coverage".
+        let dir = TempDir::new(&format!("f4-3-sd-{label}"));
+        let secrets = TempDir::new(&format!("f4-3-sd-s-{label}"));
+        let ks_path = secret_file(&secrets, "ks.pw", KEYSTORE_PW.as_bytes());
+        let mp_path = secret_file(&secrets, "mp.pw", bytes);
+        let path_str = mp_path.to_str().unwrap().to_owned();
+
+        let mut child = ethernal()
+            .args(["validator", "recover", "--output-dir"])
+            .arg(dir.path())
+            .args([
+                "--count",
+                "1",
+                "--passphrase-file",
+                ks_path.to_str().unwrap(),
+                "--mnemonic-passphrase-file",
+                mp_path.to_str().unwrap(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        {
+            let mut stdin = child.stdin.take().expect("stdin");
+            writeln!(stdin, "{ABANDON_12}").expect("write mnemonic");
+        }
+        let out = child.wait_with_output().expect("wait");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "S-D {label}: expected exit 2; stderr={stderr}"
+        );
+        assert!(
+            stderr.contains("carriage return"),
+            "S-D {label}: message must name shape 'carriage return', got: {stderr}"
+        );
+        assert!(
+            stderr.contains(&path_str),
+            "S-D {label}: message must name path {path_str}, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains(SENTINEL),
+            "S-D {label}: passphrase content leaked into error: {stderr}"
+        );
+        assert!(
+            keystore_files(dir.path()).is_empty(),
+            "S-D {label}: must not write a keystore on CR reject"
+        );
+    }
+}
