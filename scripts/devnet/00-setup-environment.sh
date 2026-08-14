@@ -33,6 +33,12 @@ if ! check_command openssl; then
     MISSING_TOOLS+=("openssl")
 fi
 
+# bc does the arbitrary-precision maths in the query-*.sh helpers; wei values
+# overflow bash's 64-bit integers.
+if ! check_command bc; then
+    MISSING_TOOLS+=("bc")
+fi
+
 if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
     log_error "Missing required tools: ${MISSING_TOOLS[*]}"
     echo
@@ -50,6 +56,9 @@ if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
                 ;;
             openssl)
                 echo "  - openssl: brew install openssl (macOS) or apt-get install openssl (Linux)"
+                ;;
+            bc)
+                echo "  - bc: brew install bc (macOS) or apt-get install bc (Linux)"
                 ;;
         esac
     done

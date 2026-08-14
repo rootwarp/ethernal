@@ -150,3 +150,92 @@ validate_data_exists() {
         exit 1
     fi
 }
+
+# ---------------------------------------------------------------------------
+# Execution Layer JSON-RPC helpers
+# ---------------------------------------------------------------------------
+
+EL_RPC_URL="http://localhost:${EL_HTTP_PORT}"
+
+# Call an EL JSON-RPC method and print its `result`.
+# Usage: el_rpc <method> [params_json]   (params default: [])
+# Returns non-zero (after logging why) if the node is unreachable, the response
+# carries an `error`, or the payload is not the expected shape. Call it as
+# `if ! out=$(el_rpc ...); then ...; fi` so `set -e` does not mask the reason.
+el_rpc() {
+    local method=$1
+    local params=${2:-[]}
+    local response
+
+    response=$(curl -s --max-time 10 -X POST "${EL_RPC_URL}" \
+        -H "Content-Type: application/json" \
+        --data "{\"jsonrpc\":\"2.0\",\"method\":\"${method}\",\"params\":${params},\"id\":1}" \
+        2>/dev/null) || true
+
+    if [[ -z "$response" ]]; then
+        log_error "No response from the execution layer at ${EL_RPC_URL}"
+        log_error "Is the devnet running? Try ./06-check-health.sh"
+        return 1
+    fi
+
+    if echo "$response" | jq -e 'has("error")' > /dev/null 2>&1; then
+        log_error "RPC error from ${method}: $(echo "$response" | jq -c '.error')"
+        return 1
+    fi
+
+    if ! echo "$response" | jq -e 'has("result")' > /dev/null 2>&1; then
+        log_error "Malformed RPC response from ${method}: ${response}"
+        return 1
+    fi
+
+    echo "$response" | jq -r '.result'
+}
+
+# Convert a 0x-prefixed hex quantity to a decimal string.
+# Uses bc: wei values routinely exceed the 64-bit range of bash arithmetic.
+hex_to_dec() {
+    local hex=${1#0x}
+    hex=${hex#0X}
+    if [[ -z "$hex" || ! "$hex" =~ ^[0-9a-fA-F]+$ ]]; then
+        echo "0"
+        return 0
+    fi
+    BC_LINE_LENGTH=0 bc <<< "ibase=16; $(echo "$hex" | tr '[:lower:]' '[:upper:]')"
+}
+
+# Tidy bc output: bc renders values below 1 as ".5", so restore the leading
+# zero, then trim trailing fractional zeros.
+format_decimal() {
+    local out=$1
+    [[ "$out" == .* ]] && out="0${out}"
+    [[ "$out" == -.* ]] && out="-0${out#-.}"
+    printf '%s' "$out" | sed -e 's/\.\([0-9]*[1-9]\)0*$/.\1/' -e 's/\.0*$//'
+}
+
+# Format a decimal wei string as ETH.
+wei_to_eth() {
+    format_decimal "$(BC_LINE_LENGTH=0 bc <<< "scale=18; ${1} / 1000000000000000000")"
+}
+
+# Format a decimal wei string as gwei.
+wei_to_gwei() {
+    format_decimal "$(BC_LINE_LENGTH=0 bc <<< "scale=9; ${1} / 1000000000")"
+}
+
+# Normalise a user-supplied block tag into a JSON-RPC block parameter.
+# Accepts the named tags, a 0x quantity, or a plain decimal block number.
+normalize_block_tag() {
+    local tag=$1
+    case "$tag" in
+        latest|earliest|pending|safe|finalized)
+            printf '%s' "$tag" ;;
+        0x*|0X*)
+            printf '%s' "$tag" ;;
+        ''|*[!0-9]*)
+            log_error "Invalid block tag: ${tag}"
+            log_error "Expected latest/earliest/pending/safe/finalized, a decimal number, or 0x hex"
+            return 1 ;;
+        *)
+            printf '0x%x' "$tag" ;;
+    esac
+}
