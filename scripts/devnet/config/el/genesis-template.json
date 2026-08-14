@@ -16,19 +16,32 @@
     "mergeNetsplitBlock": 0,
     "shanghaiTime": 0,
     "cancunTime": 0,
+    "pragueTime": 0,
+    "osakaTime": 0,
     "blobSchedule": {
       "cancun": {
         "target": 3,
-        "max": 6
+        "max": 6,
+        "baseFeeUpdateFraction": 3338477
+      },
+      "prague": {
+        "target": 6,
+        "max": 9,
+        "baseFeeUpdateFraction": 5007716
+      },
+      "osaka": {
+        "target": 14,
+        "max": 21,
+        "baseFeeUpdateFraction": 5007716
       }
     },
     "terminalTotalDifficulty": 0,
-    "terminalTotalDifficultyPassed": true
+    "depositContractAddress": "${DEPOSIT_CONTRACT_ADDRESS}"
   },
   "nonce": "0x0",
   "timestamp": "0x${GENESIS_TIME_HEX}",
   "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000",
-  "gasLimit": "0x1c9c380",
+  "gasLimit": "0x${GENESIS_GASLIMIT_HEX}",
   "difficulty": "0x0",
   "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "coinbase": "0x0000000000000000000000000000000000000000",

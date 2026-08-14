@@ -18,7 +18,7 @@ ALL_HEALTHY=true
 echo "Container Status:"
 echo "-----------------"
 
-for container in "$GETH_CONTAINER" "$BEACON_CONTAINER" "$VALIDATOR_CONTAINER"; do
+for container in "$RETH_CONTAINER" "$BEACON_CONTAINER" "$VALIDATOR_CONTAINER"; do
     if is_container_running "$container"; then
         echo -e "  ${GREEN}[RUNNING]${NC} $container"
     else
@@ -28,16 +28,16 @@ for container in "$GETH_CONTAINER" "$BEACON_CONTAINER" "$VALIDATOR_CONTAINER"; d
 done
 echo
 
-# Check Geth JSON-RPC
-echo "Execution Layer (Geth):"
+# Check Reth JSON-RPC
+echo "Execution Layer (Reth):"
 echo "-----------------------"
 
-GETH_RESPONSE=$(curl -s -X POST http://localhost:${EL_HTTP_PORT} \
+RETH_RESPONSE=$(curl -s -X POST http://localhost:${EL_HTTP_PORT} \
     -H "Content-Type: application/json" \
     --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null || echo "")
 
-if [[ -n "$GETH_RESPONSE" ]] && echo "$GETH_RESPONSE" | jq -e '.result' > /dev/null 2>&1; then
-    BLOCK_HEX=$(echo "$GETH_RESPONSE" | jq -r '.result')
+if [[ -n "$RETH_RESPONSE" ]] && echo "$RETH_RESPONSE" | jq -e '.result' > /dev/null 2>&1; then
+    BLOCK_HEX=$(echo "$RETH_RESPONSE" | jq -r '.result')
     BLOCK_NUM=$((BLOCK_HEX))
     echo -e "  ${GREEN}[OK]${NC} JSON-RPC responding"
     echo "       Block number: ${BLOCK_NUM}"
@@ -175,6 +175,6 @@ echo "  curl http://localhost:${EL_HTTP_PORT} -X POST -H 'Content-Type: applicat
 echo "  curl http://localhost:${CL_HTTP_PORT}/eth/v1/node/health"
 echo
 echo "View Logs:"
-echo "  docker logs -f ${GETH_CONTAINER}"
+echo "  docker logs -f ${RETH_CONTAINER}"
 echo "  docker logs -f ${BEACON_CONTAINER}"
 echo "  docker logs -f ${VALIDATOR_CONTAINER}"

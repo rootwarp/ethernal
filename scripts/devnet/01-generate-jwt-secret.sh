@@ -58,6 +58,6 @@ echo "JWT secret file: ${JWT_FILE}"
 echo "Secret (first 8 chars): ${JWT_CONTENT:0:8}..."
 echo
 echo "This secret will be used for authenticated communication"
-echo "between the Execution Layer (Geth) and Consensus Layer (Lighthouse)"
+echo "between the Execution Layer (Reth) and Consensus Layer (Lighthouse)"
 echo
 echo "Next step: Run ./02-generate-genesis.sh"

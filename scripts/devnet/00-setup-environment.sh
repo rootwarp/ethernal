@@ -82,8 +82,8 @@ log_success "Directory structure created"
 # Pull required Docker images
 log_info "Pulling required Docker images..."
 
-echo "Pulling Geth image: ${GETH_IMAGE}"
-docker pull "${GETH_IMAGE}" || log_warn "Failed to pull Geth image (may already exist)"
+echo "Pulling Reth image: ${RETH_IMAGE}"
+docker pull "${RETH_IMAGE}" || log_warn "Failed to pull Reth image (may already exist)"
 
 echo "Pulling Lighthouse image: ${LIGHTHOUSE_IMAGE}"
 docker pull "${LIGHTHOUSE_IMAGE}" || log_warn "Failed to pull Lighthouse image (may already exist)"

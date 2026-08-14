@@ -17,9 +17,9 @@ validate_data_exists "JWT secret" "${JWT_DIR}/jwt.hex"
 validate_data_exists "CL config" "${GENESIS_DIR}/config.yaml"
 validate_data_exists "CL genesis" "${GENESIS_DIR}/genesis.ssz"
 
-# Check if Geth is running
-if ! is_container_running "$GETH_CONTAINER"; then
-    log_error "Geth container is not running"
+# Check if Reth is running
+if ! is_container_running "$RETH_CONTAINER"; then
+    log_error "Reth container is not running"
     log_error "Please run ./04-start-execution-layer.sh first"
     exit 1
 fi
@@ -64,7 +64,7 @@ docker run -d \
     beacon_node \
     --datadir=/data \
     --testnet-dir=/genesis \
-    --execution-endpoint=http://${GETH_CONTAINER}:8551 \
+    --execution-endpoint=http://${RETH_CONTAINER}:8551 \
     --execution-jwt=/jwt/jwt.hex \
     --http \
     --http-address=0.0.0.0 \

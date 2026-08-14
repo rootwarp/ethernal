@@ -32,7 +32,14 @@ GENESIS_TIME_HEX=$(printf '%x' "$GENESIS_TIME")
 
 log_info "Genesis time: ${GENESIS_TIME} ($(date -r ${GENESIS_TIME} 2>/dev/null || date -d @${GENESIS_TIME}))"
 
+# SECONDS_PER_SLOT is derived; SLOT_DURATION_MS in network.env is the one knob.
+SECONDS_PER_SLOT=$((SLOT_DURATION_MS / 1000))
+GENESIS_GASLIMIT_HEX=$(printf '%x' "${GENESIS_GASLIMIT}")
+
 # Generate EL genesis.json
+# NOTE: this and the config.yaml below are scaffolding only - the genesis
+# generator overwrites both further down. They are kept accurate so that the
+# checked-in templates document the real chain rather than drifting from it.
 log_info "Generating Execution Layer genesis.json..."
 
 EL_TEMPLATE="${SCRIPT_DIR}/config/el/genesis-template.json"
@@ -41,6 +48,8 @@ EL_GENESIS="${GENESIS_DIR}/genesis.json"
 # Substitute variables in template
 sed -e "s/\${CHAIN_ID}/${CHAIN_ID}/g" \
     -e "s/\${GENESIS_TIME_HEX}/${GENESIS_TIME_HEX}/g" \
+    -e "s/\${GENESIS_GASLIMIT_HEX}/${GENESIS_GASLIMIT_HEX}/g" \
+    -e "s/\${DEPOSIT_CONTRACT_ADDRESS}/${DEPOSIT_CONTRACT_ADDRESS}/g" \
     -e "s/\${DEV_ACCOUNT}/${DEV_ACCOUNT}/g" \
     "${EL_TEMPLATE}" > "${EL_GENESIS}"
 
@@ -64,7 +73,8 @@ sed -e "s/\${CHAIN_ID}/${CHAIN_ID}/g" \
     -e "s/\${GENESIS_TIME}/${GENESIS_TIME}/g" \
     -e "s/\${GENESIS_DELAY}/${GENESIS_DELAY}/g" \
     -e "s/\${SECONDS_PER_SLOT}/${SECONDS_PER_SLOT}/g" \
-    -e "s/\${SLOTS_PER_EPOCH}/${SLOTS_PER_EPOCH}/g" \
+    -e "s/\${SLOT_DURATION_MS}/${SLOT_DURATION_MS}/g" \
+    -e "s/\${DEPOSIT_CONTRACT_ADDRESS}/${DEPOSIT_CONTRACT_ADDRESS}/g" \
     "${CL_TEMPLATE}" > "${CL_CONFIG}"
 
 log_success "CL config.yaml generated"
@@ -77,43 +87,52 @@ TEMP_DIR=$(mktemp -d)
 trap "rm -rf ${TEMP_DIR}" EXIT
 
 # Create generator config
+#
+# Only keys present in the generator's defaults/defaults.env take effect;
+# anything else is silently ignored. Unset keys fall back to that file's
+# defaults, which are mainnet values - so forks/limits we do not name here
+# (Fulu blob schedule, Electra churn limits, MAX_PAYLOAD_SIZE, ...) already
+# match mainnet. Fork versions must differ from mainnet's 0x01-0x06.
 cat > "${TEMP_DIR}/values.env" <<EOF
 PRESET_BASE=mainnet
 CHAIN_ID=${CHAIN_ID}
-DEPOSIT_CONTRACT_ADDRESS=0x4242424242424242424242424242424242424242
+DEPOSIT_CONTRACT_ADDRESS=${DEPOSIT_CONTRACT_ADDRESS}
 EL_AND_CL_MNEMONIC="${VALIDATOR_MNEMONIC}"
 CL_EXEC_BLOCK=0
-SLOT_DURATION_IN_SECONDS=${SECONDS_PER_SLOT}
-SLOTS_PER_EPOCH=${SLOTS_PER_EPOCH}
+SLOT_DURATION_MS=${SLOT_DURATION_MS}
+SECONDS_PER_ETH1_BLOCK=14
+ETH1_FOLLOW_DISTANCE=2048
 GENESIS_TIMESTAMP=${GENESIS_TIME}
 GENESIS_DELAY=${GENESIS_DELAY}
+GENESIS_GASLIMIT=${GENESIS_GASLIMIT}
 NUMBER_OF_VALIDATORS=${NUM_VALIDATORS}
+VALIDATOR_BALANCE=32000000000
 GENESIS_FORK_VERSION=0x10000000
 ALTAIR_FORK_VERSION=0x20000000
 BELLATRIX_FORK_VERSION=0x30000000
 CAPELLA_FORK_VERSION=0x40000000
 DENEB_FORK_VERSION=0x50000000
 ELECTRA_FORK_VERSION=0x60000000
+FULU_FORK_VERSION=0x70000000
 ALTAIR_FORK_EPOCH=0
 BELLATRIX_FORK_EPOCH=0
 CAPELLA_FORK_EPOCH=0
 DENEB_FORK_EPOCH=0
 ELECTRA_FORK_EPOCH=0
+FULU_FORK_EPOCH=0
+GLOAS_FORK_EPOCH=18446744073709551615
+HEZE_FORK_EPOCH=18446744073709551615
+BPO_1_EPOCH=0
+BPO_1_MAX_BLOBS=15
+BPO_1_TARGET_BLOBS=10
+BPO_2_EPOCH=0
+BPO_2_MAX_BLOBS=21
+BPO_2_TARGET_BLOBS=14
 WITHDRAWAL_TYPE=0x01
 WITHDRAWAL_ADDRESS=${DEV_ACCOUNT}
+EL_PREMINE_ADDRS='{"${DEV_ACCOUNT}": {"balance": "10000000000ETH"}}'
 SHADOW_FORK_RPC=
 SHADOW_FORK_FILE=
-EOF
-
-# Create el_prestate.json for genesis generator
-cat > "${TEMP_DIR}/el_prestate.json" <<EOF
-{
-  "alloc": {
-    "${DEV_ACCOUNT}": {
-      "balance": "0x200000000000000000000000000000000000000000000000000000000000000"
-    }
-  }
-}
 EOF
 
 # Run the genesis generator
@@ -123,23 +142,29 @@ docker run --rm \
     "${GENESIS_GENERATOR_IMAGE}" \
     all
 
-# The generator outputs to /data/metadata/, copy needed files to expected locations
-if [[ -f "${GENESIS_DIR}/metadata/genesis.ssz" ]]; then
-    cp "${GENESIS_DIR}/metadata/genesis.ssz" "${GENESIS_DIR}/genesis.ssz"
-    cp "${GENESIS_DIR}/metadata/config.yaml" "${GENESIS_DIR}/config.yaml"
-    cp "${GENESIS_DIR}/metadata/genesis.json" "${GENESIS_DIR}/genesis.json"
-    # Copy deposit contract files (required by Lighthouse)
-    cp "${GENESIS_DIR}/metadata/deposit_contract"*.txt "${GENESIS_DIR}/"
-    # Copy JWT secret if generated
-    if [[ -f "${GENESIS_DIR}/jwt/jwtsecret" ]]; then
-        cp "${GENESIS_DIR}/jwt/jwtsecret" "${GENESIS_DIR}/jwtsecret"
-    fi
+# The generator outputs to /data/metadata/ and is the source of truth: its
+# output replaces the templates rendered above. Fail loudly rather than falling
+# through to the stale scaffolding, which would silently produce a chain whose
+# fork schedule disagrees with the one this script just declared.
+if [[ ! -f "${GENESIS_DIR}/metadata/genesis.ssz" ]]; then
+    log_error "Genesis generator did not produce metadata/genesis.ssz"
+    log_error "Inspect ${GENESIS_DIR}/metadata/ and the generator output above"
+    exit 1
 fi
 
-# Verify required files were created
-if [[ ! -f "${GENESIS_DIR}/genesis.ssz" ]]; then
-    log_error "genesis.ssz was not generated"
-    exit 1
+cp "${GENESIS_DIR}/metadata/genesis.ssz" "${GENESIS_DIR}/genesis.ssz"
+cp "${GENESIS_DIR}/metadata/config.yaml" "${GENESIS_DIR}/config.yaml"
+cp "${GENESIS_DIR}/metadata/genesis.json" "${GENESIS_DIR}/genesis.json"
+
+# Copy deposit contract files (required by Lighthouse). Guarded: an unmatched
+# glob would otherwise abort the script via `set -e`.
+shopt -s nullglob
+DEPOSIT_CONTRACT_FILES=("${GENESIS_DIR}/metadata/deposit_contract"*.txt)
+shopt -u nullglob
+if [[ ${#DEPOSIT_CONTRACT_FILES[@]} -gt 0 ]]; then
+    cp "${DEPOSIT_CONTRACT_FILES[@]}" "${GENESIS_DIR}/"
+else
+    log_warn "No deposit_contract*.txt emitted by the generator"
 fi
 
 # Create deploy_block.txt (genesis at block 0)
@@ -162,6 +187,12 @@ echo "  - Chain ID:        ${CHAIN_ID}"
 echo "  - Genesis time:    ${GENESIS_TIME}"
 echo "  - Validators:      ${NUM_VALIDATORS}"
 echo "  - Slot duration:   ${SECONDS_PER_SLOT}s"
-echo "  - Slots per epoch: ${SLOTS_PER_EPOCH}"
+echo "  - Slots per epoch: 32 (mainnet preset; not configurable)"
+echo "  - Epoch duration:  $((32 * SECONDS_PER_SLOT))s"
+echo "  - Gas limit:       ${GENESIS_GASLIMIT}"
+echo "  - Latest fork:     Fulu (Fusaka) at epoch 0"
+echo
+echo "The generated config.yaml above is authoritative - it came from the"
+echo "genesis generator, not from config/cl/config-template.yaml."
 echo
 echo "Next step: Run ./03-generate-validator-keys.sh"

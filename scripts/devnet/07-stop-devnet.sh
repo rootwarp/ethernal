@@ -12,8 +12,8 @@ echo "  Ethereum Devnet - Stopping Services"
 echo "=============================================="
 echo
 
-# Stop containers in reverse order (validator -> beacon -> geth)
-CONTAINERS=("$VALIDATOR_CONTAINER" "$BEACON_CONTAINER" "$GETH_CONTAINER")
+# Stop containers in reverse order (validator -> beacon -> reth)
+CONTAINERS=("$VALIDATOR_CONTAINER" "$BEACON_CONTAINER" "$RETH_CONTAINER")
 
 for container in "${CONTAINERS[@]}"; do
     if is_container_running "$container"; then

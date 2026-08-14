@@ -33,6 +33,9 @@ mkdir -p "${KEYS_DIR}/secrets"
 
 log_info "Generating ${NUM_VALIDATORS} validator keys..."
 log_info "Using mnemonic for reproducible keys (development only)"
+if [[ ${NUM_VALIDATORS} -gt 512 ]]; then
+    log_warn "${NUM_VALIDATORS} keystores use a scrypt KDF - this can take several minutes"
+fi
 
 # Create a temporary directory for key generation
 TEMP_DIR=$(mktemp -d)

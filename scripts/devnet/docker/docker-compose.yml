@@ -1,7 +1,7 @@
 services:
-  geth:
-    image: ${GETH_IMAGE:-ethereum/client-go:stable}
-    container_name: eth-devnet-geth
+  reth:
+    image: ${RETH_IMAGE:-ghcr.io/paradigmxyz/reth:latest}
+    container_name: eth-devnet-reth
     restart: unless-stopped
     networks:
       - eth-devnet
@@ -16,34 +16,33 @@ services:
       - ../data/genesis:/genesis:ro
       - ../data/jwt:/jwt:ro
     command:
+      - node
       - --datadir=/data
+      - --chain=/genesis/genesis.json
       - --http
       - --http.addr=0.0.0.0
       - --http.port=8545
-      - --http.api=eth,net,web3,engine,admin,debug,txpool
+      - --http.api=eth,net,web3,admin,debug,txpool,trace
       - --http.corsdomain=*
-      - --http.vhosts=*
       - --ws
       - --ws.addr=0.0.0.0
       - --ws.port=8546
-      - --ws.api=eth,net,web3,engine,admin,debug,txpool
+      - --ws.api=eth,net,web3,admin,debug,txpool,trace
       - --ws.origins=*
       - --authrpc.addr=0.0.0.0
       - --authrpc.port=8551
-      - --authrpc.vhosts=*
       - --authrpc.jwtsecret=/jwt/jwt.hex
-      - --networkid=${NETWORK_ID:-1337}
-      - --nodiscover
-      - --syncmode=full
-      - --gcmode=archive
-      - --allow-insecure-unlock
+      - --port=30303
+      - --discovery.port=30303
+      - --network-id=${NETWORK_ID:-1337}
+      - --disable-discovery
 
   beacon:
     image: ${LIGHTHOUSE_IMAGE:-sigp/lighthouse:latest}
     container_name: eth-devnet-beacon
     restart: unless-stopped
     depends_on:
-      - geth
+      - reth
     networks:
       - eth-devnet
     ports:
@@ -60,7 +59,7 @@ services:
       - beacon_node
       - --datadir=/data
       - --testnet-dir=/genesis
-      - --execution-endpoint=http://geth:8551
+      - --execution-endpoint=http://reth:8551
       - --execution-jwt=/jwt/jwt.hex
       - --http
       - --http-address=0.0.0.0

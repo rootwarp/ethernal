@@ -62,7 +62,7 @@ fi
 # Stop and remove containers
 log_info "Removing containers..."
 
-CONTAINERS=("$VALIDATOR_CONTAINER" "$BEACON_CONTAINER" "$GETH_CONTAINER")
+CONTAINERS=("$VALIDATOR_CONTAINER" "$BEACON_CONTAINER" "$RETH_CONTAINER")
 
 for container in "${CONTAINERS[@]}"; do
     if container_exists "$container"; then
